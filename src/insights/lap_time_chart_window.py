@@ -26,13 +26,14 @@ matplotlib.use("QtAgg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backend_bases import MouseEvent
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QCheckBox
 )
-from PySide6.QtGui import QFont, QFontMetrics
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtGui import QFont, QFontMetrics, QCursor
+from PySide6.QtCore import Qt, QEvent, QTimer
 from src.gui.pit_wall_window import PitWallWindow
 from src.lib.tyres import get_tyre_compound_int, get_tyre_compound_str
 
@@ -252,8 +253,8 @@ class LapTimeChartWindow(PitWallWindow):
         self._plot_line_by_code = {}
         self._plot_line_style_by_code = {}
         self._hover_legend_code = None
-        self._shift_held = False
         self._use_native_pinch_zoom = False
+        self._cached_hover_screen_points = []
 
         # Crosshair annotation
         self._annot = None
@@ -278,10 +279,17 @@ class LapTimeChartWindow(PitWallWindow):
         self._redo_stack = []
         self._last_zoom_ts = 0.0
         self._last_pan_draw_ts = 0.0
+        self._last_interaction_ts = 0.0
+        self._pending_live_redraw = False
         # Crosshair debounce
         self._last_crosshair_state = None
+        self._hover_point_key = None
 
         super().__init__()
+
+        self._deferred_redraw_timer = QTimer(self)
+        self._deferred_redraw_timer.setSingleShot(True)
+        self._deferred_redraw_timer.timeout.connect(self._flush_deferred_redraw)
 
         self.setWindowTitle("F1 Race Replay - Lap Time & Gap Evolution")
         self.setGeometry(120, 120, 1000, 600)
@@ -563,8 +571,7 @@ class LapTimeChartWindow(PitWallWindow):
             "</ul>"
             "<h4>Controls</h4>"
             "<ul>"
-            "<li><b>Scroll / Pinch:</b> Zoom the x-axis at the cursor</li>"
-            "<li><b>Shift + Scroll / Pinch:</b> Zoom the y-axis at the cursor</li>"
+            "<li><b>Scroll / Pinch:</b> Zoom at the cursor</li>"
             "<li><b>Left-Click & Drag:</b> Pan the chart</li>"
             "<li><b>Arrow Keys:</b> Pan the view after clicking the chart</li>"
             "<li><b>Undo / Redo:</b> Step backward or forward through chart views</li>"
@@ -667,8 +674,14 @@ class LapTimeChartWindow(PitWallWindow):
         # Redraw when leader crosses a new lap or first data arrival
         if self._leader_lap > self._last_drawn_lap or self._needs_full_redraw:
             self._last_drawn_lap = self._leader_lap
+            force_redraw = self._needs_full_redraw
             self._needs_full_redraw = False
-            self._redraw()
+            if not force_redraw and self._is_interaction_hot():
+                self._pending_live_redraw = True
+                self._schedule_deferred_redraw()
+            else:
+                self._pending_live_redraw = False
+                self._redraw()
 
     def _refresh_driver_list(self, drivers):
         incoming = sorted(drivers.keys())
@@ -764,6 +777,8 @@ class LapTimeChartWindow(PitWallWindow):
         self._ax.set_xlim(snapshot["xlim"])
         self._ax.set_ylim(snapshot["ylim"])
         self._set_user_view(snapshot["xlim"], snapshot["ylim"])
+        self._rebuild_hover_screen_cache()
+        self._refresh_hover_from_cursor()
         self._update_history_buttons()
         self._canvas.draw_idle()
 
@@ -809,6 +824,9 @@ class LapTimeChartWindow(PitWallWindow):
 
     def _redraw(self):
         ax = self._ax
+        self._pending_live_redraw = False
+        previous_hover_legend_code = self._hover_legend_code
+        previous_hover_point_key = self._hover_point_key
         ax.clear()
         self._setup_axes(ax)
         self._annot = None
@@ -1224,6 +1242,7 @@ class LapTimeChartWindow(PitWallWindow):
                         "val": val,
                         "tyre": e.get("tyre", -1),
                         "tyre_life": e.get("tyre_life", 0),
+                        "is_pit_entry": is_pit_entry,
                         "is_approx": self._is_approx_time_entry(e) if self._is_time_mode() else gap_is_approx,
                         "is_terminal_lap": bool(e.get("is_terminal_lap")),
                         "status": e.get("result_status"),
@@ -1316,16 +1335,17 @@ class LapTimeChartWindow(PitWallWindow):
             # Only show when a driver is focused (in All Drivers view,
             # dozens of pit-lap outlier points create noise)
             if pit_laps and focus and is_focused and not pure_pace:
+                pit_marker_y_frac = 0.87 if len(focus) > 1 else 0.95
                 for pl in pit_laps:
                     ax.axvline(
-                        pl, color=colour, alpha=0.3,
-                        linewidth=0.8, linestyle=":",
+                        pl, color=colour, alpha=0.55,
+                        linewidth=1.2, linestyle=":",
                         zorder=zorder - 2,
                     )
                     ax.scatter(
-                        pl, 0.95, marker="x",
-                        color=colour, alpha=0.6, s=35,
-                        zorder=zorder, linewidths=1.5,
+                        pl, pit_marker_y_frac, marker="x",
+                        color=colour, alpha=0.9, s=46,
+                        zorder=zorder, linewidths=1.8,
                         transform=ax.get_xaxis_transform()
                     )
 
@@ -1417,6 +1437,7 @@ class LapTimeChartWindow(PitWallWindow):
                     "val": marker_y,
                     "tyre": -1,
                     "tyre_life": 0,
+                    "is_pit_entry": False,
                     "is_approx": False,
                     "is_terminal_no_time": True,
                     "status": point.get("status", "Retired"),
@@ -1459,6 +1480,9 @@ class LapTimeChartWindow(PitWallWindow):
                     "alpha": 1.0 if leg_text.get_alpha() is None else float(leg_text.get_alpha()),
                 }
             ax.add_artist(leg)
+            if previous_hover_legend_code in self._legend_line_by_code or previous_hover_legend_code in self._legend_text_by_code:
+                self._hover_legend_code = previous_hover_legend_code
+                self._apply_legend_hover_style(previous_hover_legend_code, active=True)
 
         # ── 7. HUD Statistics Legend ──
         if hud_handles:
@@ -1523,7 +1547,11 @@ class LapTimeChartWindow(PitWallWindow):
         if self._user_ylim is not None:
             ax.set_ylim(self._user_ylim)
 
+        self._rebuild_hover_screen_cache()
         self._has_ever_drawn = True
+        self._last_crosshair_state = None
+        if not self._restore_hover_point(previous_hover_point_key):
+            self._refresh_hover_from_cursor()
         self._canvas.draw_idle()
 
     def _draw_stint_bands(self, ax, laps, vals, tyres, zorder, pit_laps=None):
@@ -1624,6 +1652,8 @@ class LapTimeChartWindow(PitWallWindow):
         self._ax.set_xlim(new_x_lo, new_x_hi)
         self._ax.set_ylim(new_y_lo, new_y_hi)
         self._set_user_view((new_x_lo, new_x_hi), (new_y_lo, new_y_hi))
+        self._mark_interaction_activity()
+        self._rebuild_hover_screen_cache()
         self._canvas.draw_idle()
 
     def _reset_view(self):
@@ -1697,6 +1727,8 @@ class LapTimeChartWindow(PitWallWindow):
                 self._ax.set_xlim(new_x_lo, new_x_hi)
                 self._ax.set_ylim(new_y_lo, new_y_hi)
                 self._set_user_view((new_x_lo, new_x_hi), (new_y_lo, new_y_hi))
+                self._mark_interaction_activity()
+                self._rebuild_hover_screen_cache()
                 self._last_pan_draw_ts = now
                 self._canvas.draw_idle()
                 return
@@ -1712,17 +1744,15 @@ class LapTimeChartWindow(PitWallWindow):
                 self._canvas.draw_idle()
             return
 
+        hover_points = getattr(self, "_cached_hover_screen_points", None)
+        if not hover_points:
+            return
+
         # Find nearest data point
         best_dist_px2 = float("inf")
         best_info = None
-
-        hover_candidates = getattr(self, "_cached_hover_candidates", None)
-        if not hover_candidates:
-            return
-
         leader_refs = getattr(self, '_cached_leader_refs', {})
-        for info in hover_candidates:
-            px, py = self._ax.transData.transform((info["lap"], info["val"]))
+        for px, py, info in hover_points:
             dx_px = px - event.x
             dy_px = py - event.y
             dist_px2 = dx_px * dx_px + dy_px * dy_px
@@ -1732,119 +1762,7 @@ class LapTimeChartWindow(PitWallWindow):
 
         hover_radius_px = 16
         if best_info and best_dist_px2 <= (hover_radius_px * hover_radius_px):
-            info = best_info
-            colour = self._driver_colors.get(info["code"], _DEFAULT_COLOUR)
-            tyre_name = get_tyre_compound_str(info["tyre"])
-
-            leader_ref = leader_refs.get(info["lap"])
-            if self._is_gap_mode():
-                val_str = _format_delta(info['val'])
-            else:
-                val_str = _format_laptime(info["time_s"])
-            if info.get("is_approx"):
-                val_str += " (approx)"
-                
-            tyre_life_str = f", {int(info['tyre_life'])} Laps Old" if info.get('tyre_life') else ""
-
-            # Check if this is a session best or personal best lap
-            session_best = getattr(self, '_cached_session_best', float('inf'))
-            is_session_best = (info['time_s'] == session_best)
-            
-            personal_best = getattr(
-                self, '_cached_driver_personal_bests', {}
-            ).get(info['code'], float('inf'))
-            is_personal_best = (info['time_s'] == personal_best and not is_session_best)
-            
-            badge = ""
-            if is_session_best:
-                badge = "  (Session Best Lap Time)"
-            elif is_personal_best:
-                badge = "  (Personal Best Lap Time)"
-
-            extra_lines = []
-            if (
-                self._is_time_mode()
-                and is_personal_best
-                and personal_best < float('inf')
-                and session_best < float('inf')
-            ):
-                pb_gap = personal_best - session_best
-                extra_lines.append(f"Gap to SB: {_format_delta(pb_gap)}")
-
-            if self._is_gap_mode() and leader_ref is not None:
-                extra_lines.append(
-                    f"Race leader: {leader_ref['code']}"
-                )
-            if info.get("is_terminal_lap") and info.get("status"):
-                extra_lines.append(info["status"])
-
-            if info.get("is_terminal_no_time"):
-                text = (
-                    f"{info['code']}  Lap {info['lap']}\n"
-                    f"Lap time not available\n"
-                    f"({info.get('status', 'Retired')})"
-                )
-            elif self._is_gap_mode():
-                text = (
-                    f"{info['code']}  Lap {info['lap']}{badge}\n"
-                    f"Gap: {val_str}\n"
-                    f"({tyre_name}{tyre_life_str})"
-                )
-            else:
-                text = (
-                    f"{info['code']}  Lap {info['lap']}{badge}\n"
-                    f"{val_str}  ({tyre_name}{tyre_life_str})"
-                )
-            if extra_lines:
-                text += "\n" + "\n".join(extra_lines)
-
-            # Only redraw if crosshair state actually changed (debounce)
-            new_state = (info["code"], info["lap"])
-            if new_state == self._last_crosshair_state:
-                return
-            self._last_crosshair_state = new_state
-
-            self._annot.xy = (info["lap"], info["val"])
-            self._annot.set_text(text)
-            self._annot.get_bbox_patch().set_edgecolor(colour)
-
-            # Smart offset: place the tooltip, then clamp it back inside the axes
-            x_lo, x_hi = self._ax.get_xlim()
-            y_lo, y_hi = self._ax.get_ylim()
-            x_frac = (info["lap"] - x_lo) / max(x_hi - x_lo, 1)
-            y_frac = (info["val"] - y_lo) / max(y_hi - y_lo, 1)
-            self._annot.set_visible(True)
-            off_x = -140 if x_frac > 0.72 else 15
-            off_y = -35 if y_frac > 0.85 else 15
-            self._annot.xyann = (off_x, off_y)
-
-            try:
-                renderer = self._canvas.renderer
-                axes_bbox = self._ax.get_window_extent(renderer)
-                annot_bbox = self._annot.get_window_extent(renderer)
-                pad = 8
-
-                if annot_bbox.x1 > axes_bbox.x1 - pad:
-                    off_x -= (annot_bbox.x1 - (axes_bbox.x1 - pad))
-                if annot_bbox.x0 < axes_bbox.x0 + pad:
-                    off_x += ((axes_bbox.x0 + pad) - annot_bbox.x0)
-                if annot_bbox.y1 > axes_bbox.y1 - pad:
-                    off_y -= (annot_bbox.y1 - (axes_bbox.y1 - pad))
-                if annot_bbox.y0 < axes_bbox.y0 + pad:
-                    off_y += ((axes_bbox.y0 + pad) - annot_bbox.y0)
-
-                self._annot.xyann = (off_x, off_y)
-            except Exception:
-                pass
-
-            if self._crosshair_v:
-                self._crosshair_v.set_xdata([info["lap"]])
-                self._crosshair_v.set_visible(True)
-            if self._crosshair_h:
-                self._crosshair_h.set_ydata([info["val"]])
-                self._crosshair_h.set_visible(True)
-
-            self._canvas.draw_idle()
+            self._show_hover_info(best_info, leader_refs)
         else:
             if self._annot.get_visible():
                 self._hide_hover()
@@ -1923,6 +1841,138 @@ class LapTimeChartWindow(PitWallWindow):
                 legend_text.set_alpha(legend_text_style["alpha"])
                 legend_text.set_fontweight(legend_text_style["fontweight"])
 
+    def _find_hover_info_by_key(self, hover_key):
+        if not hover_key:
+            return None
+        hover_candidates = getattr(self, "_cached_hover_candidates", None) or []
+        code, lap = hover_key
+        for info in hover_candidates:
+            if info.get("code") == code and info.get("lap") == lap:
+                return info
+        return None
+
+    def _restore_hover_point(self, hover_key):
+        info = self._find_hover_info_by_key(hover_key)
+        if info is None:
+            return False
+        self._show_hover_info(info, getattr(self, "_cached_leader_refs", {}))
+        return True
+
+    def _show_hover_info(self, info, leader_refs):
+        if info is None or self._annot is None:
+            return
+
+        colour = self._driver_colors.get(info["code"], _DEFAULT_COLOUR)
+        tyre_name = get_tyre_compound_str(info["tyre"])
+
+        leader_ref = leader_refs.get(info["lap"])
+        if self._is_gap_mode():
+            val_str = _format_delta(info['val'])
+        else:
+            val_str = _format_laptime(info["time_s"])
+        if info.get("is_approx"):
+            val_str += " (approx)"
+
+        tyre_life_str = f", {int(info['tyre_life'])} Laps Old" if info.get('tyre_life') else ""
+
+        session_best = getattr(self, '_cached_session_best', float('inf'))
+        is_session_best = (info['time_s'] == session_best)
+
+        personal_best = getattr(
+            self, '_cached_driver_personal_bests', {}
+        ).get(info['code'], float('inf'))
+        is_personal_best = (info['time_s'] == personal_best and not is_session_best)
+
+        badge = ""
+        if is_session_best:
+            badge = "  (Session Best Lap Time)"
+        elif is_personal_best:
+            badge = "  (Personal Best Lap Time)"
+
+        extra_lines = []
+        if (
+            self._is_time_mode()
+            and is_personal_best
+            and personal_best < float('inf')
+            and session_best < float('inf')
+        ):
+            pb_gap = personal_best - session_best
+            extra_lines.append(f"Gap to SB: {_format_delta(pb_gap)}")
+
+        if self._is_gap_mode() and leader_ref is not None:
+            extra_lines.append(f"Race leader: {leader_ref['code']}")
+        if info.get("is_pit_entry"):
+            extra_lines.append("Pit stop")
+        if info.get("is_terminal_lap") and info.get("status"):
+            extra_lines.append(info["status"])
+
+        if info.get("is_terminal_no_time"):
+            text = (
+                f"{info['code']}  Lap {info['lap']}\n"
+                f"Lap time not available\n"
+                f"({info.get('status', 'Retired')})"
+            )
+        elif self._is_gap_mode():
+            text = (
+                f"{info['code']}  Lap {info['lap']}{badge}\n"
+                f"Gap: {val_str}\n"
+                f"({tyre_name}{tyre_life_str})"
+            )
+        else:
+            text = (
+                f"{info['code']}  Lap {info['lap']}{badge}\n"
+                f"{val_str}  ({tyre_name}{tyre_life_str})"
+            )
+        if extra_lines:
+            text += "\n" + "\n".join(extra_lines)
+
+        new_state = (info["code"], info["lap"])
+        if new_state == self._last_crosshair_state and self._annot.get_visible():
+            return
+        self._last_crosshair_state = new_state
+        self._hover_point_key = new_state
+
+        self._annot.xy = (info["lap"], info["val"])
+        self._annot.set_text(text)
+        self._annot.get_bbox_patch().set_edgecolor(colour)
+
+        x_lo, x_hi = self._ax.get_xlim()
+        y_lo, y_hi = self._ax.get_ylim()
+        x_frac = (info["lap"] - x_lo) / max(x_hi - x_lo, 1)
+        y_frac = (info["val"] - y_lo) / max(y_hi - y_lo, 1)
+        self._annot.set_visible(True)
+        off_x = -140 if x_frac > 0.72 else 15
+        off_y = -35 if y_frac > 0.85 else 15
+        self._annot.xyann = (off_x, off_y)
+
+        try:
+            renderer = self._canvas.renderer
+            axes_bbox = self._ax.get_window_extent(renderer)
+            annot_bbox = self._annot.get_window_extent(renderer)
+            pad = 8
+
+            if annot_bbox.x1 > axes_bbox.x1 - pad:
+                off_x -= (annot_bbox.x1 - (axes_bbox.x1 - pad))
+            if annot_bbox.x0 < axes_bbox.x0 + pad:
+                off_x += ((axes_bbox.x0 + pad) - annot_bbox.x0)
+            if annot_bbox.y1 > axes_bbox.y1 - pad:
+                off_y -= (annot_bbox.y1 - (axes_bbox.y1 - pad))
+            if annot_bbox.y0 < axes_bbox.y0 + pad:
+                off_y += ((axes_bbox.y0 + pad) - annot_bbox.y0)
+
+            self._annot.xyann = (off_x, off_y)
+        except Exception:
+            pass
+
+        if self._crosshair_v:
+            self._crosshair_v.set_xdata([info["lap"]])
+            self._crosshair_v.set_visible(True)
+        if self._crosshair_h:
+            self._crosshair_h.set_ydata([info["val"]])
+            self._crosshair_h.set_visible(True)
+
+        self._canvas.draw_idle()
+
     def _hide_hover(self):
         if self._annot:
             self._annot.set_visible(False)
@@ -1931,30 +1981,59 @@ class LapTimeChartWindow(PitWallWindow):
         if self._crosshair_h:
             self._crosshair_h.set_visible(False)
         self._last_crosshair_state = None
+        self._hover_point_key = None
         self._canvas.draw_idle()
 
-    def _update_modifier_latch(self, event, pressed):
-        if event.key() == Qt.Key.Key_Shift:
-            self._shift_held = pressed
-
-    def _zoom_axes_for_input(self, event_key=None, modifiers=None):
-        shift_active = self._shift_held
-        current_modifiers = Qt.KeyboardModifier.NoModifier
-        try:
-            current_modifiers = QApplication.queryKeyboardModifiers()
-        except Exception:
+    def _rebuild_hover_screen_cache(self):
+        hover_candidates = getattr(self, "_cached_hover_candidates", None)
+        if not hover_candidates or not hasattr(self, "_ax"):
+            self._cached_hover_screen_points = []
+            return
+        transform = self._ax.transData.transform
+        screen_points = []
+        for info in hover_candidates:
             try:
-                current_modifiers = QApplication.keyboardModifiers()
+                px, py = transform((info["lap"], info["val"]))
             except Exception:
-                current_modifiers = Qt.KeyboardModifier.NoModifier
-        combined_modifiers = current_modifiers
-        if modifiers is not None:
-            combined_modifiers = combined_modifiers | modifiers
-        if combined_modifiers & Qt.KeyboardModifier.ShiftModifier:
-            shift_active = True
-        if isinstance(event_key, str) and "shift" in event_key.lower():
-            shift_active = True
-        return (not shift_active, shift_active)
+                continue
+            screen_points.append((float(px), float(py), info))
+        self._cached_hover_screen_points = screen_points
+
+    def _refresh_hover_from_cursor(self):
+        if not hasattr(self, "_canvas") or not getattr(self, "_has_ever_drawn", False):
+            return
+        local_pos = self._canvas.mapFromGlobal(QCursor.pos())
+        if not self._canvas.rect().contains(local_pos):
+            return
+        ratio = self._canvas.devicePixelRatio()
+        px_x = float(local_pos.x()) * ratio
+        px_y = (self._canvas.height() - float(local_pos.y())) * ratio
+        event = MouseEvent("motion_notify_event", self._canvas, px_x, px_y)
+        self._on_mouse_move(event)
+
+    def _mark_interaction_activity(self):
+        self._last_interaction_ts = time.monotonic()
+
+    def _is_interaction_hot(self):
+        now = time.monotonic()
+        latest = max(self._last_interaction_ts, self._last_zoom_ts)
+        return (
+            self._pan_press_px is not None
+            or self._pan_active
+            or (latest > 0.0 and (now - latest) < 0.18)
+        )
+
+    def _schedule_deferred_redraw(self):
+        self._deferred_redraw_timer.start(140)
+
+    def _flush_deferred_redraw(self):
+        if not self._pending_live_redraw:
+            return
+        if self._is_interaction_hot():
+            self._schedule_deferred_redraw()
+            return
+        self._pending_live_redraw = False
+        self._redraw()
 
     def _widget_pos_to_data(self, pointf):
         if pointf is None:
@@ -1974,14 +2053,11 @@ class LapTimeChartWindow(PitWallWindow):
             self._push_undo_state()
         self._last_zoom_ts = now
 
-    def _apply_zoom_from_input(self, scale_factor, cx, cy, modifiers=None, event_key=None):
+    def _apply_zoom_from_input(self, scale_factor, cx, cy):
         if cx is None or cy is None or scale_factor is None or scale_factor <= 0:
             return
-        zoom_x, zoom_y = self._zoom_axes_for_input(event_key=event_key, modifiers=modifiers)
-        self._apply_zoom(
-            scale_factor, cx, cy,
-            zoom_x=zoom_x, zoom_y=zoom_y,
-        )
+        self._mark_interaction_activity()
+        self._apply_zoom(scale_factor, cx, cy)
         self._last_zoom_ts = time.monotonic()
 
     def _smooth_zoom_factor(self, scale_factor, *, deadband=0.006, clamp=0.12):
@@ -2014,34 +2090,27 @@ class LapTimeChartWindow(PitWallWindow):
             raw = (1.0 / base_zoom) ** steps
         return self._smooth_zoom_factor(raw, deadband=0.004, clamp=0.16)
 
-    def _apply_zoom(self, scale_factor, cx, cy, zoom_x=True, zoom_y=True):
+    def _apply_zoom(self, scale_factor, cx, cy):
         """Apply zoom centered on (cx, cy) with strict clamping."""
         ax = self._ax
         x_lo, x_hi = ax.get_xlim()
         y_lo, y_hi = ax.get_ylim()
 
-        if zoom_x:
-            new_x_lo = cx - (cx - x_lo) * scale_factor
-            new_x_hi = cx + (x_hi - cx) * scale_factor
-        else:
-            new_x_lo, new_x_hi = x_lo, x_hi
-
-        if zoom_y:
-            new_y_lo = cy - (cy - y_lo) * scale_factor
-            new_y_hi = cy + (y_hi - cy) * scale_factor
-        else:
-            new_y_lo, new_y_hi = y_lo, y_hi
+        new_x_lo = cx - (cx - x_lo) * scale_factor
+        new_x_hi = cx + (x_hi - cx) * scale_factor
+        new_y_lo = cy - (cy - y_lo) * scale_factor
+        new_y_hi = cy + (y_hi - cy) * scale_factor
 
         # Minimum zoom: 3 laps wide, 1.5 seconds tall
-        if zoom_x and (new_x_hi - new_x_lo) < 3:
+        if (new_x_hi - new_x_lo) < 3:
             return
-        if zoom_y and self._is_time_mode() and (new_y_hi - new_y_lo) < 1.5:
+        if self._is_time_mode() and (new_y_hi - new_y_lo) < 1.5:
             return
-        if zoom_y and self._is_gap_mode() and (new_y_hi - new_y_lo) < 0.5:
+        if self._is_gap_mode() and (new_y_hi - new_y_lo) < 0.5:
             return
 
         # Maximum zoom out: strictly clamp to home, no overshoot
-        if zoom_x and self._home_xlim:
+        if self._home_xlim:
             hx_lo, hx_hi = self._home_xlim
             home_xspan = hx_hi - hx_lo
             if (new_x_hi - new_x_lo) >= home_xspan:
@@ -2052,7 +2121,7 @@ class LapTimeChartWindow(PitWallWindow):
                     new_x_lo, new_x_hi = hx_lo, hx_lo + (new_x_hi - new_x_lo)
                 if new_x_hi > hx_hi:
                     new_x_lo, new_x_hi = hx_hi - (new_x_hi - new_x_lo), hx_hi
-        if zoom_y and hasattr(self, '_max_ylim'):
+        if hasattr(self, '_max_ylim'):
             hy_lo, hy_hi = self._max_ylim
             home_yspan = hy_hi - hy_lo
             if (new_y_hi - new_y_lo) >= home_yspan:
@@ -2066,6 +2135,7 @@ class LapTimeChartWindow(PitWallWindow):
         ax.set_xlim(new_x_lo, new_x_hi)
         ax.set_ylim(new_y_lo, new_y_hi)
         self._set_user_view((new_x_lo, new_x_hi), (new_y_lo, new_y_hi))
+        self._rebuild_hover_screen_cache()
         self._canvas.draw_idle()
 
     def _on_button_press(self, event):
@@ -2078,6 +2148,7 @@ class LapTimeChartWindow(PitWallWindow):
                 self._push_undo_state()
                 self._reset_view()
             else:
+                self._mark_interaction_activity()
                 self._pan_press_px = (event.x, event.y)
                 self._pan_origin_xlim = self._ax.get_xlim()
                 self._pan_origin_ylim = self._ax.get_ylim()
@@ -2102,22 +2173,27 @@ class LapTimeChartWindow(PitWallWindow):
         # We only allow picking on the legend now to avoid accidental line clicks
         if artist in getattr(self, '_legend_map', {}):
             code = self._legend_map[artist]
+            self._hover_legend_code = code
             
             # Toggle isolation
             if code in self._focused_drivers:
                 self._focused_drivers.remove(code)
                 if not self._focused_drivers:
-                    self._driver_combo.setCurrentText("All Drivers")
+                    combo_text = "All Drivers"
                 elif len(self._focused_drivers) == 1:
-                    self._driver_combo.setCurrentText(list(self._focused_drivers)[0])
+                    combo_text = next(iter(self._focused_drivers))
                 else:
-                    self._driver_combo.setCurrentText("Multiple Drivers")
+                    combo_text = "Multiple Drivers"
             else:
                 self._focused_drivers.add(code)
                 if len(self._focused_drivers) == 1:
-                    self._driver_combo.setCurrentText(code)
+                    combo_text = code
                 else:
-                    self._driver_combo.setCurrentText("Multiple Drivers")
+                    combo_text = "Multiple Drivers"
+
+            self._driver_combo.blockSignals(True)
+            self._driver_combo.setCurrentText(combo_text)
+            self._driver_combo.blockSignals(False)
             
             self._needs_full_redraw = True
             self._redraw()
@@ -2125,18 +2201,15 @@ class LapTimeChartWindow(PitWallWindow):
     def eventFilter(self, obj, event):
         """Handle Qt wheel and gesture zoom directly for consistent UX."""
         if event.type() == QEvent.Type.KeyPress:
-            self._update_modifier_latch(event, True)
             if self._handle_ui_key_event(event):
                 return True
-        if event.type() == QEvent.Type.KeyRelease:
-            self._update_modifier_latch(event, False)
         if event.type() == QEvent.Type.Wheel and obj is self._canvas:
             cx, cy = self._widget_pos_to_data(event.position())
             if cx is None or cy is None:
                 return False
             self._begin_zoom_gesture()
             scale_factor = self._scale_factor_from_wheel_event(event)
-            self._apply_zoom_from_input(scale_factor, cx, cy, modifiers=event.modifiers())
+            self._apply_zoom_from_input(scale_factor, cx, cy)
             return True
         if self._use_native_pinch_zoom and event.type() == QEvent.Type.NativeGesture and obj is self._canvas:
             gesture_type = event.gestureType()
@@ -2155,7 +2228,7 @@ class LapTimeChartWindow(PitWallWindow):
                 if scale_delta <= 0.0:
                     return True
                 zoom_factor = self._smooth_zoom_factor(1.0 / scale_delta, deadband=0.0035, clamp=0.10)
-                self._apply_zoom_from_input(zoom_factor, cx, cy, modifiers=event.modifiers())
+                self._apply_zoom_from_input(zoom_factor, cx, cy)
                 return True
         if (not self._use_native_pinch_zoom) and event.type() == QEvent.Type.Gesture:
             pinch = event.gesture(Qt.GestureType.PinchGesture)
@@ -2178,13 +2251,11 @@ class LapTimeChartWindow(PitWallWindow):
         return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event):
-        self._update_modifier_latch(event, True)
         if self._handle_ui_key_event(event):
             return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
-        self._update_modifier_latch(event, False)
         super().keyReleaseEvent(event)
 
     def _handle_ui_key_event(self, event):
