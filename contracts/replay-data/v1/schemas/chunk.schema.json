@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+  "title": "Column-oriented replay data chunk",
+  "description": "Schema for a committed column-oriented replay chunk in the Phase 0 v1 offline replay contract. Semantic validation enforces that every column is aligned to timeMs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "chunkId",
+    "sequence",
+    "startMs",
+    "endMs",
+    "overlap",
+    "timeMs",
+    "authoritativeStartIndex",
+    "drivers",
+    "leaderboardOrder",
+    "trackStatusCode",
+    "weatherState",
+    "events"
+  ],
+  "$defs": {
+    "driverCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "sessionTimeMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "timeRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "startMs",
+        "endMs"
+      ],
+      "properties": {
+        "startMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "endMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        }
+      }
+    },
+    "chunkFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "path",
+        "schemaId",
+        "startMs",
+        "endMs",
+        "overlapWithPreviousMs"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^chunks/chunk-[0-9]{3}\\.json$"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:chunk"
+        },
+        "startMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "endMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "overlapWithPreviousMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "overlapNone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "previousChunkPath",
+        "range",
+        "authoritativeFromMs"
+      ],
+      "properties": {
+        "kind": {
+          "const": "none"
+        },
+        "previousChunkPath": {
+          "type": "null"
+        },
+        "range": {
+          "type": "null"
+        },
+        "authoritativeFromMs": {
+          "type": "null"
+        }
+      }
+    },
+    "overlapHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "previousChunkPath",
+        "range",
+        "authoritativeFromMs"
+      ],
+      "properties": {
+        "kind": {
+          "const": "handoff"
+        },
+        "previousChunkPath": {
+          "type": "string",
+          "pattern": "^chunks/chunk-[0-9]{3}\\.json$"
+        },
+        "range": {
+          "$ref": "#/$defs/timeRange"
+        },
+        "authoritativeFromMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        }
+      }
+    },
+    "nullableInteger": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableBoolean": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "nullableNumberColumn": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nullableNumber"
+      }
+    },
+    "driverColumns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "trackDistanceMeters",
+        "speed",
+        "throttle",
+        "brake",
+        "gapToLeaderMs",
+        "lap",
+        "position",
+        "gear",
+        "drs",
+        "tyreCompound",
+        "status",
+        "isInPitLane"
+      ],
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "y": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "trackDistanceMeters": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "speed": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "throttle": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "brake": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "gapToLeaderMs": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
+        "lap": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        "position": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        "gear": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 0,
+                "maximum": 8
+              }
+            ]
+          }
+        },
+        "drs": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "tyreCompound": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableString"
+              },
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "status": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableString"
+              },
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "isInPitLane": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableBoolean"
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionTimeMs",
+        "eventType",
+        "description"
+      ],
+      "properties": {
+        "sessionTimeMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "eventType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "driverId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Z0-9]{2,4}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "chunk001": {
+      "properties": {
+        "chunkId": {
+          "const": "chunk-001"
+        },
+        "sequence": {
+          "const": 1
+        },
+        "authoritativeStartIndex": {
+          "const": 0
+        },
+        "overlap": {
+          "$ref": "#/$defs/overlapNone"
+        }
+      }
+    },
+    "chunk002": {
+      "properties": {
+        "chunkId": {
+          "const": "chunk-002"
+        },
+        "sequence": {
+          "const": 2
+        },
+        "authoritativeStartIndex": {
+          "const": 1
+        },
+        "overlap": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/overlapHandoff"
+            },
+            {
+              "properties": {
+                "previousChunkPath": {
+                  "const": "chunks/chunk-001.json"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "const": "deterministic-race"
+    },
+    "chunkId": {
+      "type": "string",
+      "pattern": "^chunk-[0-9]{3}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "startMs": {
+      "$ref": "#/$defs/sessionTimeMs"
+    },
+    "endMs": {
+      "$ref": "#/$defs/sessionTimeMs"
+    },
+    "overlap": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/overlapNone"
+        },
+        {
+          "$ref": "#/$defs/overlapHandoff"
+        }
+      ]
+    },
+    "timeMs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sessionTimeMs"
+      }
+    },
+    "authoritativeStartIndex": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/driverCode"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/driverColumns"
+      }
+    },
+    "leaderboardOrder": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "$ref": "#/$defs/driverCode"
+        }
+      }
+    },
+    "trackStatusCode": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "weatherState": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/chunk001"
+    },
+    {
+      "$ref": "#/$defs/chunk002"
+    }
+  ]
+}

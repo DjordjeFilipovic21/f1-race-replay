@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:track-assets",
+  "title": "Replay track assets",
+  "description": "Schema for committed static track geometry used by the Phase 0 v1 offline replay contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "trackId",
+    "trackName",
+    "coordinateSpace",
+    "circuitLengthMeters",
+    "rotationDegrees",
+    "startFinish",
+    "centerLine",
+    "innerBoundary",
+    "outerBoundary"
+  ],
+  "$defs": {
+    "trackAssetsFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId"
+      ],
+      "properties": {
+        "path": {
+          "const": "track-assets.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+        }
+      }
+    },
+    "worldPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
+    },
+    "polyline": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "$ref": "#/$defs/worldPoint"
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "const": "deterministic-race"
+    },
+    "trackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "trackName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "coordinateSpace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "units",
+        "origin"
+      ],
+      "properties": {
+        "units": {
+          "const": "meters"
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "circuitLengthMeters": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "rotationDegrees": {
+      "type": "number"
+    },
+    "startFinish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "center",
+        "inner",
+        "outer"
+      ],
+      "properties": {
+        "center": {
+          "$ref": "#/$defs/worldPoint"
+        },
+        "inner": {
+          "$ref": "#/$defs/worldPoint"
+        },
+        "outer": {
+          "$ref": "#/$defs/worldPoint"
+        }
+      }
+    },
+    "centerLine": {
+      "$ref": "#/$defs/polyline"
+    },
+    "innerBoundary": {
+      "$ref": "#/$defs/polyline"
+    },
+    "outerBoundary": {
+      "$ref": "#/$defs/polyline"
+    },
+    "distanceMarkersMeters": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "uniqueItems": true
+    },
+    "drsZones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "startMeters",
+          "endMeters"
+        ],
+        "properties": {
+          "startMeters": {
+            "type": "number",
+            "minimum": 0
+          },
+          "endMeters": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

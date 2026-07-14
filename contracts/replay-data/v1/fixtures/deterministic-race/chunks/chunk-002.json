@@ -1,0 +1,68 @@
+{
+  "contractVersion": "v1",
+  "fixtureId": "deterministic-race",
+  "chunkId": "chunk-002",
+  "sequence": 2,
+  "startMs": 2000,
+  "endMs": 4000,
+  "overlap": {
+    "kind": "handoff",
+    "previousChunkPath": "chunks/chunk-001.json",
+    "range": {
+      "startMs": 1500,
+      "endMs": 2000
+    },
+    "authoritativeFromMs": 2000
+  },
+  "timeMs": [1500, 2000, 3000],
+  "authoritativeStartIndex": 1,
+  "drivers": {
+    "HAM": {
+      "x": [420, 560, 790],
+      "y": [82, 95, 118],
+      "trackDistanceMeters": [1320, 1450, 1660],
+      "speed": [228, 210, 202],
+      "throttle": [87, 68, 63],
+      "brake": [0, 12, 16],
+      "gapToLeaderMs": [0, 0, 35],
+      "lap": [1, 1, 1],
+      "position": [1, 1, 2],
+      "gear": [7, 6, 6],
+      "drs": [1, 0, 0],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["push", "yellow", "defend"],
+      "isInPitLane": [false, false, false]
+    },
+    "RUS": {
+      "x": [395, 530, 810],
+      "y": [80, 92, 116],
+      "trackDistanceMeters": [1295, 1420, 1680],
+      "speed": [230, 236, 239],
+      "throttle": [88, 92, 94],
+      "brake": [0, 0, 0],
+      "gapToLeaderMs": [120, 40, 0],
+      "lap": [1, 1, 1],
+      "position": [2, 2, 1],
+      "gear": [7, 7, 7],
+      "drs": [1, 1, 1],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["chase", "attack", "lead"],
+      "isInPitLane": [false, false, false]
+    }
+  },
+  "leaderboardOrder": [["HAM", "RUS"], ["HAM", "RUS"], ["RUS", "HAM"]],
+  "trackStatusCode": [1, 4, 1],
+  "weatherState": ["clear", "clear", "clear"],
+  "events": [
+    {
+      "sessionTimeMs": 2600,
+      "eventType": "overtake_completed",
+      "driverId": "RUS",
+      "description": "Russell completes the pass for the lead between the two stored authoritative samples.",
+      "payload": {
+        "passedDriverId": "HAM",
+        "forPosition": 1
+      }
+    }
+  ]
+}

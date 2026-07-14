@@ -10,6 +10,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Local tooling and workflow state
+.codegraph/
+.tmp/
+
 # Local FastF1/cache/generated data
 .fastf1-cache
 computed_data/

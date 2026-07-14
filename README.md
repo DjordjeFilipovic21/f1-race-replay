@@ -79,6 +79,22 @@ Recently added support for Qualifying session replays with telemetry visualizati
 - [Arcade](https://api.arcade.academy/en/latest/)
 - numpy
 
+## Replay Data Contract (Phase 0)
+
+Phase 0 adds committed replay contract artifacts under `contracts/replay-data/v1/`.
+They are deterministic, offline fixtures shared by the Python contract tests and future
+TypeScript replay tests.
+
+- `fixtures/deterministic-race/manifest.json`
+- `fixtures/deterministic-race/track-assets.json`
+- `fixtures/deterministic-race/chunks/chunk-001.json`
+- `fixtures/deterministic-race/chunks/chunk-002.json`
+- `fixtures/deterministic-race/golden-snapshots.json`
+
+See `docs/replay-data-contract.md` for the exact timing, interpolation, and
+boundary semantics. These artifacts document the contract; they do not imply any
+runtime replay behavior change.
+
 Install dependencies:
 ```bash
 pip install -r requirements.txt

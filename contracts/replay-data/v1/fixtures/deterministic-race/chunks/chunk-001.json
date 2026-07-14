@@ -1,0 +1,58 @@
+{
+  "contractVersion": "v1",
+  "fixtureId": "deterministic-race",
+  "chunkId": "chunk-001",
+  "sequence": 1,
+  "startMs": 0,
+  "endMs": 2000,
+  "overlap": {
+    "kind": "none",
+    "previousChunkPath": null,
+    "range": null,
+    "authoritativeFromMs": null
+  },
+  "timeMs": [0, 1000, 1500],
+  "authoritativeStartIndex": 0,
+  "drivers": {
+    "HAM": {
+      "x": [100, 300, 420],
+      "y": [50, 70, 82],
+      "trackDistanceMeters": [1000, 1200, 1320],
+      "speed": [210, 220, 228],
+      "throttle": [82, 85, 87],
+      "brake": [0, 0, 0],
+      "gapToLeaderMs": [0, 0, 0],
+      "lap": [1, 1, 1],
+      "position": [1, 1, 1],
+      "gear": [6, 7, 7],
+      "drs": [0, 0, 1],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["push", "push", "push"],
+      "isInPitLane": [false, false, false]
+    },
+    "RUS": {
+      "x": [60, 250, 395],
+      "y": [48, 68, 80],
+      "trackDistanceMeters": [940, 1160, 1295],
+      "speed": [208, 222, 230],
+      "throttle": [81, 86, 88],
+      "brake": [0, 0, 0],
+      "gapToLeaderMs": [600, 420, 120],
+      "lap": [1, 1, 1],
+      "position": [2, 2, 2],
+      "gear": [6, 7, 7],
+      "drs": [0, 1, 1],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["chase", "chase", "chase"],
+      "isInPitLane": [false, false, false]
+    }
+  },
+  "leaderboardOrder": [
+    ["HAM", "RUS"],
+    ["HAM", "RUS"],
+    ["HAM", "RUS"]
+  ],
+  "trackStatusCode": [1, 1, 1],
+  "weatherState": ["clear", "clear", "clear"],
+  "events": []
+}
