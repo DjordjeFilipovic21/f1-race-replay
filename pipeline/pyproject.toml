@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "f1-replay-pipeline"
+version = "0.1.0"
+description = "Canonical Formula 1 replay data pipeline foundation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastf1>=3.8,<3.9",
+    "polars>=1.40,<2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
