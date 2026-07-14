@@ -13,6 +13,7 @@ This document defines the Phase 0 replay data contract that future offline repla
 ### Replay time
 
 - All replay timestamps are integer milliseconds.
+- `timeMs` is the shared timeline for a chunk; every per-driver and global array is aligned to it by index.
 - `sessionTimeMs` means elapsed replay time since the start of the fixture timeline.
 - Writers must round before serialization so the stored contract never depends on floating-point comparisons.
 - Readers must compare times as integers, not formatted strings.
@@ -25,11 +26,32 @@ This document defines the Phase 0 replay data contract that future offline repla
 - `endMs` is excluded from the chunk and belongs to the next chunk when a contiguous next chunk starts at the same millisecond.
 - Chunks may overlap only when the overlap is intentional and documented by matching samples near the handoff boundary.
 
+### Chunk shape
+
+- `authoritativeStartIndex` marks the first authoritative entry in `timeMs`.
+- Entries before `authoritativeStartIndex` are overlap-only reference points.
+- `drivers` is keyed by driver id; each driver stores aligned columns (`x`, `y`, `trackDistanceMeters`, `speed`, `throttle`, `brake`, `gapToLeaderMs`, `lap`, `position`, `gear`, `drs`, `tyreCompound`, `status`, `isInPitLane`).
+- `leaderboardOrder`, `trackStatusCode`, and `weatherState` are aligned global arrays, not repeated row objects.
+- `events` stay sparse point records and are never expanded into the timeline.
+
+Example:
+
+```json
+{
+  "timeMs": [1500, 2000, 3000],
+  "authoritativeStartIndex": 1,
+  "trackStatusCode": [1, 4, 1],
+  "weatherState": ["clear", "clear", "clear"],
+  "leaderboardOrder": [["HAM", "RUS"], ["HAM", "RUS"], ["RUS", "HAM"]]
+}
+```
+
 ### Overlap handling
 
 - Overlap exists to let consumers test chunk handoff behavior without network or buffering assumptions.
 - When two chunks contain the same `sessionTimeMs`, consumers must prefer the sample from the chunk whose interval owns that time under `[startMs, endMs)` semantics.
 - Samples in a later chunk that fall before that chunk's `startMs` are treated as overlap-only reference points for interpolation and boundary assertions, not as authoritative ownership of that timestamp.
+- For chunk 2, the sample before `startMs` is delivered only to support cross-boundary interpolation; authority begins at `authoritativeStartIndex` / `authoritativeFromMs`.
 - Fixture and golden snapshot assertions must include at least one boundary case that proves this ownership rule.
 
 ### Interpolation semantics
@@ -37,6 +59,8 @@ This document defines the Phase 0 replay data contract that future offline repla
 - Continuous numeric values may use linear interpolation between the nearest surrounding authoritative samples.
 - Discrete or categorical values must use previous-value / step semantics.
 - Interpolation is only valid when both surrounding samples refer to the same logical entity and no explicit discontinuity says otherwise.
+- Contract samples are the delivered points; browser `requestAnimationFrame` interpolation is a separate render-time concern.
+- rAF may visually interpolate continuous values between delivered samples, but it must not change the committed contract or invent new authoritative data.
 
 Use these defaults unless a field is explicitly documented differently:
 
@@ -90,7 +114,7 @@ contracts/replay-data/v1/
   - Top-level manifest for a replay fixture.
   - References chunk metadata and track-asset metadata.
 - `contracts/replay-data/v1/schemas/chunk.schema.json`
-  - Defines per-chunk payload structure, chunk bounds, overlap samples, and sample records.
+  - Defines per-chunk payload structure, shared `timeMs`, authoritative ownership, aligned driver/global arrays, overlap samples, and sparse events.
 - `contracts/replay-data/v1/schemas/track-assets.schema.json`
   - Defines track geometry and related static assets required by offline replay consumers.
 - `contracts/replay-data/v1/fixtures/deterministic-race/manifest.json`
@@ -128,6 +152,8 @@ Future chunk files must support these test cases:
 4. An interpolated timestamp query between two continuous samples.
 5. A categorical transition where previous-value semantics are required.
 6. A sparse event that exists at one timestamp and is absent elsewhere.
+
+For chunk delivery, the contract point set is authoritative data at the indices starting at `authoritativeStartIndex`; browser-side `requestAnimationFrame` frames may interpolate between those points for display, but they are not part of the committed chunk.
 
 ## Consumer expectations
 

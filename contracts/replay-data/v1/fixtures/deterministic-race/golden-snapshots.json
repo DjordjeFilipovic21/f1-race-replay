@@ -9,8 +9,8 @@
       "expectationKind": "exact",
       "expectedSource": {
         "chunkPath": "chunks/chunk-001.json",
-        "sampleTimeMs": 0,
-        "sampleRole": "authoritative"
+        "timeIndex": 0,
+        "sampleTimeMs": 0
       },
       "leaderboardOrder": [
         "HAM",
@@ -51,13 +51,15 @@
       "sessionTimeMs": 500,
       "expectationKind": "interpolated",
       "interpolationBounds": {
-        "previous": {
-          "chunkPath": "chunks/chunk-001.json",
-          "sampleTimeMs": 0
-        },
-        "next": {
-          "chunkPath": "chunks/chunk-001.json",
-          "sampleTimeMs": 1000
+          "previous": {
+            "chunkPath": "chunks/chunk-001.json",
+            "timeIndex": 0,
+            "sampleTimeMs": 0
+          },
+          "next": {
+            "chunkPath": "chunks/chunk-001.json",
+            "timeIndex": 1,
+            "sampleTimeMs": 1000
         }
       },
       "leaderboardOrder": [
@@ -100,13 +102,13 @@
       "expectationKind": "exact",
       "expectedSource": {
         "chunkPath": "chunks/chunk-001.json",
-        "sampleTimeMs": 1500,
-        "sampleRole": "authoritative"
+        "timeIndex": 2,
+        "sampleTimeMs": 1500
       },
       "nonAuthoritativeMatch": {
         "chunkPath": "chunks/chunk-002.json",
-        "sampleTimeMs": 1500,
-        "sampleRole": "overlap_reference"
+        "timeIndex": 0,
+        "sampleTimeMs": 1500
       },
       "leaderboardOrder": [
         "HAM",
@@ -147,13 +149,15 @@
       "sessionTimeMs": 1750,
       "expectationKind": "interpolated",
       "interpolationBounds": {
-        "previous": {
-          "chunkPath": "chunks/chunk-001.json",
-          "sampleTimeMs": 1500
-        },
-        "next": {
-          "chunkPath": "chunks/chunk-002.json",
-          "sampleTimeMs": 2000
+          "previous": {
+            "chunkPath": "chunks/chunk-001.json",
+            "timeIndex": 2,
+            "sampleTimeMs": 1500
+          },
+          "next": {
+            "chunkPath": "chunks/chunk-002.json",
+            "timeIndex": 1,
+            "sampleTimeMs": 2000
         }
       },
       "leaderboardOrder": [
@@ -196,8 +200,8 @@
       "expectationKind": "exact",
       "expectedSource": {
         "chunkPath": "chunks/chunk-002.json",
-        "sampleTimeMs": 2000,
-        "sampleRole": "authoritative"
+        "timeIndex": 1,
+        "sampleTimeMs": 2000
       },
       "leaderboardOrder": [
         "HAM",
@@ -238,13 +242,15 @@
       "sessionTimeMs": 2600,
       "expectationKind": "interpolated",
       "interpolationBounds": {
-        "previous": {
-          "chunkPath": "chunks/chunk-002.json",
-          "sampleTimeMs": 2000
-        },
-        "next": {
-          "chunkPath": "chunks/chunk-002.json",
-          "sampleTimeMs": 3000
+          "previous": {
+            "chunkPath": "chunks/chunk-002.json",
+            "timeIndex": 1,
+            "sampleTimeMs": 2000
+          },
+          "next": {
+            "chunkPath": "chunks/chunk-002.json",
+            "timeIndex": 2,
+            "sampleTimeMs": 3000
         }
       },
       "leaderboardOrder": [
@@ -298,8 +304,8 @@
       "expectationKind": "exact",
       "expectedSource": {
         "chunkPath": "chunks/chunk-002.json",
-        "sampleTimeMs": 3000,
-        "sampleRole": "authoritative"
+        "timeIndex": 2,
+        "sampleTimeMs": 3000
       },
       "leaderboardOrder": [
         "RUS",

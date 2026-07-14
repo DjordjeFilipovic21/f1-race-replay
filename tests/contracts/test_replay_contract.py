@@ -32,6 +32,7 @@ STEP_DRIVER_FIELDS = {
     "isInPitLane",
 }
 STEP_SAMPLE_FIELDS = {"leaderboardOrder", "trackStatusCode", "weatherState"}
+DRIVER_COLUMN_FIELDS = CONTINUOUS_DRIVER_FIELDS | STEP_DRIVER_FIELDS
 
 
 def load_json(path):
@@ -105,20 +106,31 @@ def assert_manifest_semantics(bundle):
         assert chunk_ref["endMs"] == chunk["endMs"]
         assert manifest["fixtureId"] == chunk["fixtureId"]
 
-        sample_times = [sample["sessionTimeMs"] for sample in chunk["samples"]]
-        assert sample_times == sorted(sample_times)
+        time_ms = chunk["timeMs"]
+        authoritative_start_index = chunk["authoritativeStartIndex"]
+        assert time_ms == sorted(time_ms)
+        assert len(time_ms) == len(set(time_ms))
+        assert 0 <= authoritative_start_index < len(time_ms)
+        assert set(chunk["drivers"]) == manifest_driver_ids
 
-        for sample in chunk["samples"]:
-            if sample["sampleRole"] == "authoritative":
-                assert chunk["startMs"] <= sample["sessionTimeMs"] < chunk["endMs"]
+        for driver_columns in chunk["drivers"].values():
+            assert set(driver_columns) == DRIVER_COLUMN_FIELDS
+            for column in driver_columns.values():
+                assert len(column) == len(time_ms)
+
+        for global_column in STEP_SAMPLE_FIELDS:
+            assert len(chunk[global_column]) == len(time_ms)
+
+        for time_index, session_time_ms in enumerate(time_ms):
+            if time_index >= authoritative_start_index:
+                assert chunk["startMs"] <= session_time_ms < chunk["endMs"]
             else:
                 overlap = chunk["overlap"]
                 assert overlap["kind"] == "handoff"
-                assert overlap["range"]["startMs"] <= sample["sessionTimeMs"] < overlap["range"]["endMs"]
-                assert sample["sessionTimeMs"] < chunk["startMs"]
+                assert overlap["range"]["startMs"] <= session_time_ms < overlap["range"]["endMs"]
+                assert session_time_ms < chunk["startMs"]
 
-            assert set(sample["leaderboardOrder"]) == manifest_driver_ids
-            assert set(sample["drivers"]) == manifest_driver_ids
+            assert set(chunk["leaderboardOrder"][time_index]) == manifest_driver_ids
 
         for event in chunk["events"]:
             if event.get("driverId") is not None:
@@ -131,6 +143,7 @@ def assert_manifest_semantics(bundle):
                 chunk["overlap"]["range"]["endMs"] - chunk["overlap"]["range"]["startMs"]
             )
             assert chunk["overlap"]["authoritativeFromMs"] == chunk_ref["startMs"]
+            assert time_ms[authoritative_start_index] == chunk["startMs"]
 
         previous_ref = chunk_ref
 
@@ -141,8 +154,20 @@ def assert_manifest_semantics(bundle):
         assert zone["startMeters"] < zone["endMeters"] <= track_assets["circuitLengthMeters"]
 
 
-def sample_lookup(chunk):
-    return {sample["sessionTimeMs"]: sample for sample in chunk["samples"]}
+def read_sample(chunk, time_index):
+    return {
+        "sessionTimeMs": chunk["timeMs"][time_index],
+        "leaderboardOrder": copy.deepcopy(chunk["leaderboardOrder"][time_index]),
+        "trackStatusCode": chunk["trackStatusCode"][time_index],
+        "weatherState": chunk["weatherState"][time_index],
+        "drivers": {
+            driver_id: {
+                field: copy.deepcopy(columns[field][time_index])
+                for field in DRIVER_COLUMN_FIELDS
+            }
+            for driver_id, columns in chunk["drivers"].items()
+        },
+    }
 
 
 def event_lookup(bundle):
@@ -157,7 +182,7 @@ def event_lookup(bundle):
 
 def find_sample(bundle, chunk_path, session_time_ms):
     chunk = bundle["chunks"][chunk_path]
-    return sample_lookup(chunk)[session_time_ms]
+    return read_sample(chunk, chunk["timeMs"].index(session_time_ms))
 
 
 def interpolate_value(previous_value, next_value, ratio):
@@ -292,6 +317,36 @@ def test_replay_contract_invalid_chunk_ordering_is_rejected(contract_bundle):
         assert_manifest_semantics(invalid_bundle)
 
 
+def test_replay_contract_misaligned_driver_column_is_rejected(contract_bundle):
+    # Arrange
+    invalid_bundle = copy.deepcopy(contract_bundle)
+    invalid_bundle["chunks"]["chunks/chunk-001.json"]["drivers"]["HAM"]["speed"].pop()
+
+    # Act / Assert
+    with pytest.raises(AssertionError):
+        assert_manifest_semantics(invalid_bundle)
+
+
+def test_replay_contract_misaligned_global_column_is_rejected(contract_bundle):
+    # Arrange
+    invalid_bundle = copy.deepcopy(contract_bundle)
+    invalid_bundle["chunks"]["chunks/chunk-002.json"]["weatherState"].pop()
+
+    # Act / Assert
+    with pytest.raises(AssertionError):
+        assert_manifest_semantics(invalid_bundle)
+
+
+def test_replay_contract_reference_index_cannot_be_authoritative(contract_bundle):
+    # Arrange
+    invalid_bundle = copy.deepcopy(contract_bundle)
+    invalid_bundle["chunks"]["chunks/chunk-002.json"]["authoritativeStartIndex"] = 0
+
+    # Act / Assert
+    with pytest.raises(AssertionError):
+        assert_manifest_semantics(invalid_bundle)
+
+
 @pytest.mark.parametrize("snapshot", load_contract_bundle()["golden"]["snapshots"])
 def test_replay_contract_golden_snapshots_match_expected_outputs(contract_bundle, snapshot):
     # Arrange
@@ -310,21 +365,34 @@ def test_replay_contract_overlap_reference_is_not_authoritative_owner(contract_b
     )
 
     # Act
-    authoritative_sample = find_sample(
-        contract_bundle,
-        snapshot["expectedSource"]["chunkPath"],
-        snapshot["expectedSource"]["sampleTimeMs"],
-    )
-    overlap_reference = find_sample(
-        contract_bundle,
-        snapshot["nonAuthoritativeMatch"]["chunkPath"],
-        snapshot["nonAuthoritativeMatch"]["sampleTimeMs"],
-    )
+    authoritative_chunk = contract_bundle["chunks"][snapshot["expectedSource"]["chunkPath"]]
+    reference_chunk = contract_bundle["chunks"][snapshot["nonAuthoritativeMatch"]["chunkPath"]]
 
     # Assert
-    assert authoritative_sample["sampleRole"] == "authoritative"
-    assert overlap_reference["sampleRole"] == "overlap_reference"
+    assert snapshot["expectedSource"]["timeIndex"] >= authoritative_chunk["authoritativeStartIndex"]
+    assert snapshot["nonAuthoritativeMatch"]["timeIndex"] < reference_chunk["authoritativeStartIndex"]
+    assert reference_chunk["timeMs"][snapshot["nonAuthoritativeMatch"]["timeIndex"]] < reference_chunk["startMs"]
     assert snapshot["expectedSource"]["chunkPath"] != snapshot["nonAuthoritativeMatch"]["chunkPath"]
+
+
+def test_replay_contract_exact_reads_use_the_golden_time_index(contract_bundle):
+    # Arrange
+    exact_snapshots = [
+        snapshot
+        for snapshot in contract_bundle["golden"]["snapshots"]
+        if snapshot["expectationKind"] == "exact"
+    ]
+
+    # Act
+    source_times = [
+        contract_bundle["chunks"][snapshot["expectedSource"]["chunkPath"]]["timeMs"][
+            snapshot["expectedSource"]["timeIndex"]
+        ]
+        for snapshot in exact_snapshots
+    ]
+
+    # Assert
+    assert source_times == [snapshot["expectedSource"]["sampleTimeMs"] for snapshot in exact_snapshots]
 
 
 def test_replay_contract_discrete_fields_use_step_semantics_not_linear_interpolation(contract_bundle):
@@ -345,10 +413,64 @@ def test_replay_contract_discrete_fields_use_step_semantics_not_linear_interpola
     )
 
     # Assert
-    assert actual["trackStatusCode"] == previous_sample["trackStatusCode"]
-    assert actual["drivers"]["HAM"]["position"] == previous_sample["drivers"]["HAM"]["position"]
-    assert actual["drivers"]["HAM"]["position"] != pytest.approx(linear_position)
-    assert actual["drivers"]["HAM"]["status"] == previous_sample["drivers"]["HAM"]["status"]
+    assert (
+        actual["trackStatusCode"] == previous_sample["trackStatusCode"]
+        and actual["leaderboardOrder"] == previous_sample["leaderboardOrder"]
+        and actual["weatherState"] == previous_sample["weatherState"]
+        and all(
+            actual["drivers"]["HAM"][field] == previous_sample["drivers"]["HAM"][field]
+            for field in STEP_DRIVER_FIELDS
+        )
+        and actual["drivers"]["HAM"]["position"] != pytest.approx(linear_position)
+    )
+
+
+def test_replay_contract_continuous_fields_use_linear_interpolation(contract_bundle):
+    # Arrange
+    snapshot = next(
+        item
+        for item in contract_bundle["golden"]["snapshots"]
+        if item["id"] == "interpolated-mid-chunk-001"
+    )
+    previous_sample = find_sample(contract_bundle, "chunks/chunk-001.json", 0)
+    next_sample = find_sample(contract_bundle, "chunks/chunk-001.json", 1000)
+
+    # Act
+    actual = resolve_snapshot(contract_bundle, snapshot)
+    expected = {
+        field: interpolate_value(previous_sample["drivers"]["HAM"][field], next_sample["drivers"]["HAM"][field], 0.5)
+        for field in CONTINUOUS_DRIVER_FIELDS
+    }
+
+    # Assert
+    assert {
+        field: actual["drivers"]["HAM"][field]
+        for field in CONTINUOUS_DRIVER_FIELDS
+    } == pytest.approx(expected)
+
+
+def test_replay_contract_cross_boundary_interpolation_uses_authoritative_bounds(contract_bundle):
+    # Arrange
+    snapshot = next(
+        item
+        for item in contract_bundle["golden"]["snapshots"]
+        if item["id"] == "cross-chunk-interpolation-before-boundary-owner-switch"
+    )
+    bounds = snapshot["interpolationBounds"]
+    previous_chunk = contract_bundle["chunks"][bounds["previous"]["chunkPath"]]
+    next_chunk = contract_bundle["chunks"][bounds["next"]["chunkPath"]]
+
+    # Act
+    actual = resolve_snapshot(contract_bundle, snapshot)
+
+    # Assert
+    assert (
+        previous_chunk["timeMs"][bounds["previous"]["timeIndex"]]
+        < snapshot["sessionTimeMs"]
+        < next_chunk["timeMs"][bounds["next"]["timeIndex"]]
+        and bounds["next"]["timeIndex"] >= next_chunk["authoritativeStartIndex"]
+        and actual["drivers"]["HAM"]["x"] == pytest.approx(490)
+    )
 
 
 def test_replay_contract_sparse_events_remain_point_in_time_records(contract_bundle):

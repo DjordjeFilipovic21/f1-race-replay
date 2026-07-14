@@ -11,139 +11,48 @@
     "range": null,
     "authoritativeFromMs": null
   },
-  "samples": [
-    {
-      "sessionTimeMs": 0,
-      "sampleRole": "authoritative",
-      "leaderboardOrder": [
-        "HAM",
-        "RUS"
-      ],
-      "trackStatusCode": 1,
-      "weatherState": "clear",
-      "drivers": {
-        "HAM": {
-          "x": 100,
-          "y": 50,
-          "trackDistanceMeters": 1000,
-          "speed": 210,
-          "throttle": 82,
-          "brake": 0,
-          "gapToLeaderMs": 0,
-          "lap": 1,
-          "position": 1,
-          "gear": 6,
-          "drs": 0,
-          "tyreCompound": "MEDIUM",
-          "status": "push",
-          "isInPitLane": false
-        },
-        "RUS": {
-          "x": 60,
-          "y": 48,
-          "trackDistanceMeters": 940,
-          "speed": 208,
-          "throttle": 81,
-          "brake": 0,
-          "gapToLeaderMs": 600,
-          "lap": 1,
-          "position": 2,
-          "gear": 6,
-          "drs": 0,
-          "tyreCompound": "MEDIUM",
-          "status": "chase",
-          "isInPitLane": false
-        }
-      }
+  "timeMs": [0, 1000, 1500],
+  "authoritativeStartIndex": 0,
+  "drivers": {
+    "HAM": {
+      "x": [100, 300, 420],
+      "y": [50, 70, 82],
+      "trackDistanceMeters": [1000, 1200, 1320],
+      "speed": [210, 220, 228],
+      "throttle": [82, 85, 87],
+      "brake": [0, 0, 0],
+      "gapToLeaderMs": [0, 0, 0],
+      "lap": [1, 1, 1],
+      "position": [1, 1, 1],
+      "gear": [6, 7, 7],
+      "drs": [0, 0, 1],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["push", "push", "push"],
+      "isInPitLane": [false, false, false]
     },
-    {
-      "sessionTimeMs": 1000,
-      "sampleRole": "authoritative",
-      "leaderboardOrder": [
-        "HAM",
-        "RUS"
-      ],
-      "trackStatusCode": 1,
-      "weatherState": "clear",
-      "drivers": {
-        "HAM": {
-          "x": 300,
-          "y": 70,
-          "trackDistanceMeters": 1200,
-          "speed": 220,
-          "throttle": 85,
-          "brake": 0,
-          "gapToLeaderMs": 0,
-          "lap": 1,
-          "position": 1,
-          "gear": 7,
-          "drs": 0,
-          "tyreCompound": "MEDIUM",
-          "status": "push",
-          "isInPitLane": false
-        },
-        "RUS": {
-          "x": 250,
-          "y": 68,
-          "trackDistanceMeters": 1160,
-          "speed": 222,
-          "throttle": 86,
-          "brake": 0,
-          "gapToLeaderMs": 420,
-          "lap": 1,
-          "position": 2,
-          "gear": 7,
-          "drs": 1,
-          "tyreCompound": "MEDIUM",
-          "status": "chase",
-          "isInPitLane": false
-        }
-      }
-    },
-    {
-      "sessionTimeMs": 1500,
-      "sampleRole": "authoritative",
-      "leaderboardOrder": [
-        "HAM",
-        "RUS"
-      ],
-      "trackStatusCode": 1,
-      "weatherState": "clear",
-      "drivers": {
-        "HAM": {
-          "x": 420,
-          "y": 82,
-          "trackDistanceMeters": 1320,
-          "speed": 228,
-          "throttle": 87,
-          "brake": 0,
-          "gapToLeaderMs": 0,
-          "lap": 1,
-          "position": 1,
-          "gear": 7,
-          "drs": 1,
-          "tyreCompound": "MEDIUM",
-          "status": "push",
-          "isInPitLane": false
-        },
-        "RUS": {
-          "x": 395,
-          "y": 80,
-          "trackDistanceMeters": 1295,
-          "speed": 230,
-          "throttle": 88,
-          "brake": 0,
-          "gapToLeaderMs": 120,
-          "lap": 1,
-          "position": 2,
-          "gear": 7,
-          "drs": 1,
-          "tyreCompound": "MEDIUM",
-          "status": "chase",
-          "isInPitLane": false
-        }
-      }
+    "RUS": {
+      "x": [60, 250, 395],
+      "y": [48, 68, 80],
+      "trackDistanceMeters": [940, 1160, 1295],
+      "speed": [208, 222, 230],
+      "throttle": [81, 86, 88],
+      "brake": [0, 0, 0],
+      "gapToLeaderMs": [600, 420, 120],
+      "lap": [1, 1, 1],
+      "position": [2, 2, 2],
+      "gear": [6, 7, 7],
+      "drs": [0, 1, 1],
+      "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
+      "status": ["chase", "chase", "chase"],
+      "isInPitLane": [false, false, false]
     }
+  },
+  "leaderboardOrder": [
+    ["HAM", "RUS"],
+    ["HAM", "RUS"],
+    ["HAM", "RUS"]
   ],
+  "trackStatusCode": [1, 1, 1],
+  "weatherState": ["clear", "clear", "clear"],
   "events": []
 }

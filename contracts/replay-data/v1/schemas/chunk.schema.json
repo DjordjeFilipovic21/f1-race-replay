@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
-  "title": "Replay data chunk",
-  "description": "Schema for a committed replay chunk in the Phase 0 v1 offline replay contract.",
+  "title": "Column-oriented replay data chunk",
+  "description": "Schema for a committed column-oriented replay chunk in the Phase 0 v1 offline replay contract. Semantic validation enforces that every column is aligned to timeMs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,12 @@
     "startMs",
     "endMs",
     "overlap",
-    "samples",
+    "timeMs",
+    "authoritativeStartIndex",
+    "drivers",
+    "leaderboardOrder",
+    "trackStatusCode",
+    "weatherState",
     "events"
   ],
   "$defs": {
@@ -131,138 +136,154 @@
         }
       }
     },
-    "driverSample": {
+    "nullableInteger": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableBoolean": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "nullableNumberColumn": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nullableNumber"
+      }
+    },
+    "driverColumns": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "x",
         "y",
         "trackDistanceMeters",
+        "speed",
+        "throttle",
+        "brake",
+        "gapToLeaderMs",
         "lap",
         "position",
         "gear",
         "drs",
         "tyreCompound",
-        "status"
+        "status",
+        "isInPitLane"
       ],
       "properties": {
         "x": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "y": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "trackDistanceMeters": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "speed": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "throttle": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "brake": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "gapToLeaderMs": {
-          "$ref": "#/$defs/nullableNumber"
+          "$ref": "#/$defs/nullableNumberColumn"
         },
         "lap": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 1
-        },
-        "position": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 1
-        },
-        "gear": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0,
-          "maximum": 8
-        },
-        "drs": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        },
-        "tyreCompound": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1
-        },
-        "status": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1
-        },
-        "isInPitLane": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
-    },
-    "sample": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "sessionTimeMs",
-        "sampleRole",
-        "leaderboardOrder",
-        "trackStatusCode",
-        "weatherState",
-        "drivers"
-      ],
-      "properties": {
-        "sessionTimeMs": {
-          "$ref": "#/$defs/sessionTimeMs"
-        },
-        "sampleRole": {
-          "enum": [
-            "authoritative",
-            "overlap_reference"
-          ]
-        },
-        "leaderboardOrder": {
           "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/driverCode"
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 1
+              }
+            ]
           }
         },
-        "trackStatusCode": {
-          "type": "integer",
-          "minimum": 0
+        "position": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 1
+              }
+            ]
+          }
         },
-        "weatherState": {
-          "type": "string",
-          "minLength": 1
+        "gear": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 0,
+                "maximum": 8
+              }
+            ]
+          }
         },
-        "drivers": {
-          "type": "object",
-          "minProperties": 1,
-          "propertyNames": {
-            "$ref": "#/$defs/driverCode"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/driverSample"
+        "drs": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "tyreCompound": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableString"
+              },
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "status": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableString"
+              },
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "isInPitLane": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableBoolean"
           }
         }
       }
@@ -307,6 +328,9 @@
         "sequence": {
           "const": 1
         },
+        "authoritativeStartIndex": {
+          "const": 0
+        },
         "overlap": {
           "$ref": "#/$defs/overlapNone"
         }
@@ -319,6 +343,9 @@
         },
         "sequence": {
           "const": 2
+        },
+        "authoritativeStartIndex": {
+          "const": 1
         },
         "overlap": {
           "allOf": [
@@ -368,11 +395,50 @@
         }
       ]
     },
-    "samples": {
+    "timeMs": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "$ref": "#/$defs/sample"
+        "$ref": "#/$defs/sessionTimeMs"
+      }
+    },
+    "authoritativeStartIndex": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/driverCode"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/driverColumns"
+      }
+    },
+    "leaderboardOrder": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "$ref": "#/$defs/driverCode"
+        }
+      }
+    },
+    "trackStatusCode": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "weatherState": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
     },
     "events": {
