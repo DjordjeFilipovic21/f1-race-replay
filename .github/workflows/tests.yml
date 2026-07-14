@@ -76,7 +76,8 @@ jobs:
             libegl1 \
             libgl1 \
             libxkbcommon-x11-0 \
-            libxcb-cursor0
+            libxcb-cursor0 \
+            xvfb
 
       - name: Install project dependencies
         run: |
@@ -84,4 +85,4 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Run full test suite
-        run: python -m pytest
+        run: xvfb-run -a python -m pytest
