@@ -1,0 +1,339 @@
+{
+  "contractVersion": "v1",
+  "fixtureId": "deterministic-race",
+  "description": "Golden snapshot expectations for exact sample reads, interpolation, overlap ownership, sparse events, and leaderboard ordering.",
+  "snapshots": [
+    {
+      "id": "exact-authoritative-start",
+      "sessionTimeMs": 0,
+      "expectationKind": "exact",
+      "expectedSource": {
+        "chunkPath": "chunks/chunk-001.json",
+        "sampleTimeMs": 0,
+        "sampleRole": "authoritative"
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 1,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 100,
+          "y": 50,
+          "trackDistanceMeters": 1000,
+          "speed": 210,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "push"
+        },
+        "RUS": {
+          "x": 60,
+          "y": 48,
+          "trackDistanceMeters": 940,
+          "speed": 208,
+          "gapToLeaderMs": 600,
+          "position": 2,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "chase"
+        }
+      }
+    },
+    {
+      "id": "interpolated-mid-chunk-001",
+      "sessionTimeMs": 500,
+      "expectationKind": "interpolated",
+      "interpolationBounds": {
+        "previous": {
+          "chunkPath": "chunks/chunk-001.json",
+          "sampleTimeMs": 0
+        },
+        "next": {
+          "chunkPath": "chunks/chunk-001.json",
+          "sampleTimeMs": 1000
+        }
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 1,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 200,
+          "y": 60,
+          "trackDistanceMeters": 1100,
+          "speed": 215,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "push"
+        },
+        "RUS": {
+          "x": 155,
+          "y": 58,
+          "trackDistanceMeters": 1050,
+          "speed": 215,
+          "gapToLeaderMs": 510,
+          "position": 2,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "chase"
+        }
+      }
+    },
+    {
+      "id": "overlap-ownership-at-1500",
+      "sessionTimeMs": 1500,
+      "expectationKind": "exact",
+      "expectedSource": {
+        "chunkPath": "chunks/chunk-001.json",
+        "sampleTimeMs": 1500,
+        "sampleRole": "authoritative"
+      },
+      "nonAuthoritativeMatch": {
+        "chunkPath": "chunks/chunk-002.json",
+        "sampleTimeMs": 1500,
+        "sampleRole": "overlap_reference"
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 1,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 420,
+          "y": 82,
+          "trackDistanceMeters": 1320,
+          "speed": 228,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "push"
+        },
+        "RUS": {
+          "x": 395,
+          "y": 80,
+          "trackDistanceMeters": 1295,
+          "speed": 230,
+          "gapToLeaderMs": 120,
+          "position": 2,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "chase"
+        }
+      }
+    },
+    {
+      "id": "cross-chunk-interpolation-before-boundary-owner-switch",
+      "sessionTimeMs": 1750,
+      "expectationKind": "interpolated",
+      "interpolationBounds": {
+        "previous": {
+          "chunkPath": "chunks/chunk-001.json",
+          "sampleTimeMs": 1500
+        },
+        "next": {
+          "chunkPath": "chunks/chunk-002.json",
+          "sampleTimeMs": 2000
+        }
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 1,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 490,
+          "y": 88.5,
+          "trackDistanceMeters": 1385,
+          "speed": 219,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "push"
+        },
+        "RUS": {
+          "x": 462.5,
+          "y": 86,
+          "trackDistanceMeters": 1357.5,
+          "speed": 233,
+          "gapToLeaderMs": 80,
+          "position": 2,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "chase"
+        }
+      }
+    },
+    {
+      "id": "exact-boundary-owner-is-chunk-002",
+      "sessionTimeMs": 2000,
+      "expectationKind": "exact",
+      "expectedSource": {
+        "chunkPath": "chunks/chunk-002.json",
+        "sampleTimeMs": 2000,
+        "sampleRole": "authoritative"
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 4,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 560,
+          "y": 95,
+          "trackDistanceMeters": 1450,
+          "speed": 210,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "yellow"
+        },
+        "RUS": {
+          "x": 530,
+          "y": 92,
+          "trackDistanceMeters": 1420,
+          "speed": 236,
+          "gapToLeaderMs": 40,
+          "position": 2,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "attack"
+        }
+      }
+    },
+    {
+      "id": "interpolated-sparse-event-at-2600",
+      "sessionTimeMs": 2600,
+      "expectationKind": "interpolated",
+      "interpolationBounds": {
+        "previous": {
+          "chunkPath": "chunks/chunk-002.json",
+          "sampleTimeMs": 2000
+        },
+        "next": {
+          "chunkPath": "chunks/chunk-002.json",
+          "sampleTimeMs": 3000
+        }
+      },
+      "leaderboardOrder": [
+        "HAM",
+        "RUS"
+      ],
+      "trackStatusCode": 4,
+      "weatherState": "clear",
+      "events": [
+        {
+          "sessionTimeMs": 2600,
+          "eventType": "overtake_completed",
+          "driverId": "RUS",
+          "description": "Russell completes the pass for the lead between the two stored authoritative samples.",
+          "payload": {
+            "passedDriverId": "HAM",
+            "forPosition": 1
+          }
+        }
+      ],
+      "drivers": {
+        "HAM": {
+          "x": 698,
+          "y": 108.8,
+          "trackDistanceMeters": 1576,
+          "speed": 205.2,
+          "gapToLeaderMs": 21,
+          "position": 1,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "yellow"
+        },
+        "RUS": {
+          "x": 698,
+          "y": 106.4,
+          "trackDistanceMeters": 1576,
+          "speed": 237.8,
+          "gapToLeaderMs": 16,
+          "position": 2,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "attack"
+        }
+      }
+    },
+    {
+      "id": "exact-order-change-at-3000",
+      "sessionTimeMs": 3000,
+      "expectationKind": "exact",
+      "expectedSource": {
+        "chunkPath": "chunks/chunk-002.json",
+        "sampleTimeMs": 3000,
+        "sampleRole": "authoritative"
+      },
+      "leaderboardOrder": [
+        "RUS",
+        "HAM"
+      ],
+      "trackStatusCode": 1,
+      "weatherState": "clear",
+      "events": [],
+      "drivers": {
+        "HAM": {
+          "x": 790,
+          "y": 118,
+          "trackDistanceMeters": 1660,
+          "speed": 202,
+          "gapToLeaderMs": 35,
+          "position": 2,
+          "gear": 6,
+          "drs": 0,
+          "tyreCompound": "MEDIUM",
+          "status": "defend"
+        },
+        "RUS": {
+          "x": 810,
+          "y": 116,
+          "trackDistanceMeters": 1680,
+          "speed": 239,
+          "gapToLeaderMs": 0,
+          "position": 1,
+          "gear": 7,
+          "drs": 1,
+          "tyreCompound": "MEDIUM",
+          "status": "lead"
+        }
+      }
+    }
+  ]
+}

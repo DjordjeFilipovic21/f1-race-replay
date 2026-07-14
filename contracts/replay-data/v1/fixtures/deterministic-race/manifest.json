@@ -1,0 +1,53 @@
+{
+  "contractVersion": "v1",
+  "fixtureId": "deterministic-race",
+  "fixtureName": "Deterministic Two-Driver Handoff Fixture",
+  "description": "Two-driver, two-chunk offline replay fixture with an intentional overlap handoff, discrete state transitions, a sparse event, and a leaderboard order change.",
+  "schemas": {
+    "manifest": "urn:f1-cache-replay:schema:replay-data:v1:manifest",
+    "chunk": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+    "trackAssets": "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+  },
+  "trackAssets": {
+    "path": "track-assets.json",
+    "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+  },
+  "chunks": [
+    {
+      "sequence": 1,
+      "path": "chunks/chunk-001.json",
+      "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+      "startMs": 0,
+      "endMs": 2000,
+      "overlapWithPreviousMs": 0
+    },
+    {
+      "sequence": 2,
+      "path": "chunks/chunk-002.json",
+      "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+      "startMs": 2000,
+      "endMs": 4000,
+      "overlapWithPreviousMs": 500
+    }
+  ],
+  "drivers": [
+    {
+      "id": "HAM",
+      "displayName": "Lewis Hamilton",
+      "teamName": "Mercedes",
+      "colorHex": "#00D2BE",
+      "carNumber": "44"
+    },
+    {
+      "id": "RUS",
+      "displayName": "George Russell",
+      "teamName": "Mercedes",
+      "colorHex": "#27F4D2",
+      "carNumber": "63"
+    }
+  ],
+  "goldenSnapshots": {
+    "path": "golden-snapshots.json"
+  },
+  "createdAt": "2026-07-14T00:00:00Z"
+}

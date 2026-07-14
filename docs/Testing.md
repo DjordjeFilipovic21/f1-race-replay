@@ -24,6 +24,15 @@ Run only the lightweight unit tests with:
 
     python -m pytest tests/lib
 
+Run the offline replay contract checks with:
+
+    python -m pytest tests/contracts/test_replay_contract.py
+
+These contract tests validate the committed deterministic fixture in
+`contracts/replay-data/v1/fixtures/deterministic-race/` without FastF1 session
+loading or network access. The same fixture is intended for future TypeScript
+replay tests as a shared offline contract.
+
 ## Test strategy
 
 The initial test suite focuses on lightweight modules that do not require:

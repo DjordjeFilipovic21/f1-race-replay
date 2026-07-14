@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:manifest",
+  "title": "Replay fixture manifest",
+  "description": "Schema for the top-level offline replay fixture manifest in the Phase 0 v1 replay contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "fixtureName",
+    "schemas",
+    "trackAssets",
+    "chunks",
+    "drivers",
+    "goldenSnapshots"
+  ],
+  "$defs": {
+    "chunkFileReferenceFirst": {
+      "allOf": [
+        {
+          "$ref": "urn:f1-cache-replay:schema:replay-data:v1:chunk#/$defs/chunkFileReference"
+        },
+        {
+          "properties": {
+            "sequence": {
+              "const": 1
+            },
+            "path": {
+              "const": "chunks/chunk-001.json"
+            },
+            "overlapWithPreviousMs": {
+              "const": 0
+            }
+          }
+        }
+      ]
+    },
+    "chunkFileReferenceSecond": {
+      "allOf": [
+        {
+          "$ref": "urn:f1-cache-replay:schema:replay-data:v1:chunk#/$defs/chunkFileReference"
+        },
+        {
+          "properties": {
+            "sequence": {
+              "const": 2
+            },
+            "path": {
+              "const": "chunks/chunk-002.json"
+            },
+            "overlapWithPreviousMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      ]
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "displayName",
+        "teamName",
+        "colorHex",
+        "carNumber"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{2,4}$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "teamName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "colorHex": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        "carNumber": {
+          "type": "string",
+          "pattern": "^[0-9]{1,2}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "const": "deterministic-race"
+    },
+    "fixtureName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest",
+        "chunk",
+        "trackAssets"
+      ],
+      "properties": {
+        "manifest": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:manifest"
+        },
+        "chunk": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:chunk"
+        },
+        "trackAssets": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+        }
+      }
+    },
+    "trackAssets": {
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:track-assets#/$defs/trackAssetsFileReference"
+    },
+    "chunks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/chunkFileReferenceFirst"
+        },
+        {
+          "$ref": "#/$defs/chunkFileReferenceSecond"
+        }
+      ],
+      "items": false
+    },
+    "drivers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/driver"
+      }
+    },
+    "goldenSnapshots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "const": "golden-snapshots.json"
+        }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
