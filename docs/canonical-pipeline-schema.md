@@ -1,6 +1,6 @@
 # Canonical pipeline schema and policies
 
-This is the Phase 1 logical contract for native-cadence tables produced from
+This was the original Phase 1 foundation boundary for native-cadence tables produced from
 FastF1. It is separate from the [Phase 0 browser chunk
 contract](replay-data-contract.md): canonical tables preserve source rows;
 browser chunks align data for delivery and may support render-time
@@ -37,8 +37,10 @@ The implemented in-memory adapters map these sources to the canonical tables:
 | `race_control_messages` | `Session.race_control_messages` | `adapt_race_control_messages` |
 | `results` | `Session.results` | `adapt_results` |
 
-Each adapter returns an in-memory typed Polars frame. This phase does not
-implement output writing.
+Each adapter returns an in-memory typed Polars frame. At the time this
+foundation was written, it did not implement output writing. The current
+canonical output contract is [ADR-002](adr/002-canonical-parquet-writer.md) and
+the normative [canonical Parquet writer contract](canonical-parquet-writer-contract.md).
 
 ### Offline testing seam
 
@@ -318,9 +320,9 @@ This foundation defines the inputs to logical determinism for a fixed input:
 - the schema, ordered rows, and scalar/null values that a future logical hash
   must encode.
 
-It does not define or implement logical hash encoding yet. The writer PR will
-specify the canonical scalar/null encoding and hash algorithm alongside Parquet
-writing, atomic output, and the checksum manifest. It also will not guarantee
+It did not originally define or implement logical hash encoding. The current
+writer contract specifies the canonical scalar/null encoding, hash algorithm,
+Parquet writing, atomic output, and checksum manifest. It does not guarantee
 identical Parquet bytes: writer version, compression, row-group boundaries,
 metadata, and footer details can change bytes while the logical table stays
 equal.
