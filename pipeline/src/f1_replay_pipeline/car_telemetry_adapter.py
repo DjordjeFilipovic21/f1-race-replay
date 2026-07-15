@@ -31,16 +31,20 @@ _INT16_MIN = -32_768
 _INT16_MAX = 32_767
 
 
-def adapt_car_telemetry(session: object, session_id: str | None = None) -> pl.DataFrame:
-    """Return normalized native car samples without merging or resampling streams."""
+def adapt_car_telemetry(
+    session: object,
+    session_id: str | None = None,
+    driver_ids: Mapping[str, str] | None = None,
+) -> pl.DataFrame:
+    """Return normalized native car samples without merging or resampling streams.
+
+    Callers that already normalized the driver roster can pass ``driver_ids`` to
+    keep every adapter on one session-scoped source-key mapping.
+    """
     canonical_session_id = _session_id(session, session_id)
-    drivers = adapt_drivers(session, canonical_session_id)
-    driver_ids = {
-        row["source_driver_key"]: row["driver_id"]
-        for row in drivers.select("source_driver_key", "driver_id").to_dicts()
-    }
+    canonical_driver_ids = driver_ids if driver_ids is not None else _driver_ids(session, canonical_session_id)
     rows = [
-        _car_row(record, canonical_session_id, source_key, driver_ids)
+        _car_row(record, canonical_session_id, source_key, canonical_driver_ids)
         for source_key, stream in _car_data(session).items()
         for record in _records(stream, source_key)
     ]
@@ -52,6 +56,14 @@ def adapt_car_telemetry(session: object, session_id: str | None = None) -> pl.Da
     frame = pl.DataFrame(retained, schema=CAR_TELEMETRY_SCHEMA)
     validate_canonical_table("car_telemetry", frame)
     return frame
+
+
+def _driver_ids(session: object, session_id: str) -> Mapping[str, str]:
+    drivers = adapt_drivers(session, session_id)
+    return {
+        row["source_driver_key"]: row["driver_id"]
+        for row in drivers.select("source_driver_key", "driver_id").to_dicts()
+    }
 
 
 normalize_car_telemetry = adapt_car_telemetry

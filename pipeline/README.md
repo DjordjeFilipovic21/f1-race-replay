@@ -92,10 +92,83 @@ rejected. See [the canonical schema](../docs/canonical-pipeline-schema.md) for
 columns, nulls, ordering, and deduplication.
 
 This boundary explicitly excludes the legacy `src/` application, network-backed
-CI or network-loading tests, browser chunks, and CLI orchestration. Those
-concerns must not be inferred from the adapters documented here. Testing events
-retain FastF1 round zero; they are selected through testing-event APIs, not
-ordinary round lookup.
+CI or network-loading tests, and browser chunks. Testing events
+retain FastF1 round zero; they are selected through the explicit `testing`
+command and testing-session API, never through ordinary round lookup.
+
+## Run the pipeline
+
+Install the package from `pipeline/` first:
+
+```bash
+python -m pip install .
+```
+
+The installed console command and the module entry point accept the same
+non-interactive commands:
+
+```bash
+f1-replay-pipeline race \
+  --year 2026 --round 3 --session R --output artifacts
+
+python -m f1_replay_pipeline race \
+  --year 2026 --event "Australian Grand Prix" --session R \
+  --backend fastf1 --generation-id 2026-aus-race --output artifacts
+
+f1-replay-pipeline testing \
+  --year 2026 --test-number 1 --session-number 2 \
+  --backend f1timing --output artifacts
+```
+
+### Selectors and backends
+
+- `race` requires `--year`, `--session`, `--output`, and exactly one of
+  `--round` or `--event`. `--round` must be a positive integer; `0` is not a
+  testing selector. `--event` is an exact event name.
+- Supported race session aliases are `fp1`, `fp2`, `fp3`, `q`, `s`, `ss`,
+  `sq`, `r`, plus `practice 1`, `practice 2`, `practice 3`, `qualifying`,
+  `sprint`, `sprint shootout`, `sprint qualifying`, and `race`.
+- `testing` requires positive `--test-number` and positive `--session-number`.
+  It has no race event or round selector and uses the dedicated testing API.
+- `--backend` is optional, case-insensitive, and normalized to lowercase. Race
+  accepts `fastf1`, `f1timing`, or `ergast`; testing accepts only `fastf1` or
+  `f1timing`.
+
+The default resolver imports FastF1 lazily, resolves one session, and loads it
+once with laps, telemetry, weather, and messages enabled. This is a real
+FastF1 path: its cache and network behavior still applies. The CLI has no
+offline or fixture mode. Offline tests inject fake resolvers, sessions, and
+publishers instead of using network, GUI, OpenGL, or real FastF1 loading.
+
+### Output and status
+
+The command normalizes and validates exactly the ten canonical tables, then
+publishes one generation below the required `--output` directory. Supply
+`--generation-id` for a safe deterministic path component; otherwise the CLI
+generates a UTC timestamp ID. Successful stdout is intentionally stable:
+
+```text
+generation_id=2026-aus-race
+```
+
+Publication stages and validates the generation before atomically replacing
+`<output>/current.json`; that pointer is the reader visibility boundary. The
+pointer names the selected generation and manifest digest. A pre-commit
+failure leaves the previous valid pointer in place; a post-commit durability
+failure reports that the new generation may already be selected.
+
+Exit behavior:
+
+- `0`: publication succeeded; generation ID is printed to stdout.
+- `1`: expected application/resolution/normalization/validation/publication
+  failure; one `error: ...` line is printed to stderr, without a traceback.
+- `2`: argparse usage or validation failure (including missing, abbreviated, or
+  unknown options); argparse writes its error to stderr.
+
+The command is deliberately limited to Phase 1 canonical generation
+publication. It does not provide prompts, GUI integration, legacy `src/`
+integration, browser chunks, CDN upload, interpolation, resampling, consumer
+alignment, or a new CLI framework.
 
 ## Publish a canonical generation
 
@@ -236,9 +309,9 @@ filesystem supports it—not multi-path transactionality.
 
 ## Deferred work
 
-Browser/CDN publishing, a CLI, memory-streaming optimization, and any
-future consumer-side alignment remain deferred. This phase preserves native
-rows and prioritizes deterministic correctness; it does not change the Phase 0
-browser manifest schema or publish browser artifacts. The writer uses native
-Polars without PyArrow, accepts already validated frames, does not load FastF1,
-and remains separate from the Phase 0 browser pipeline and legacy `src/`.
+Browser/CDN publishing, memory-streaming optimization, and future
+consumer-side alignment remain deferred. This phase preserves native rows and
+prioritizes deterministic correctness; it does not change the Phase 0 browser
+manifest schema or publish browser artifacts. The writer uses native Polars
+without PyArrow, accepts already validated frames, does not load FastF1, and
+remains separate from the Phase 0 browser pipeline and legacy `src/`.
