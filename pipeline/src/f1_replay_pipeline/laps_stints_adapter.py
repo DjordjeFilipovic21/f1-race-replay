@@ -33,9 +33,18 @@ def adapt_laps(session: object, session_id: str, driver_ids: Mapping[str, str]) 
     return frame
 
 
-def adapt_stints(session: object, session_id: str, driver_ids: Mapping[str, str]) -> pl.DataFrame:
-    """Derive contiguous tyre-stint summaries solely from canonical timing laps."""
-    laps = adapt_laps(session, session_id, driver_ids).to_dicts()
+def adapt_stints(
+    session: object,
+    session_id: str,
+    driver_ids: Mapping[str, str],
+    laps_frame: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    """Derive contiguous tyre-stint summaries solely from canonical timing laps.
+
+    ``laps_frame`` lets an orchestrator derive stints from the exact already
+    validated lap snapshot instead of reading mutable session data a second time.
+    """
+    laps = (laps_frame if laps_frame is not None else adapt_laps(session, session_id, driver_ids)).to_dicts()
     stints = [
         _stint_row(group)
         for _, driver_laps in groupby(laps, key=lambda row: (row["session_id"], row["driver_id"]))

@@ -13,5 +13,8 @@ dependencies = [
     "polars>=1.40,<2",
 ]
 
+[project.scripts]
+f1-replay-pipeline = "f1_replay_pipeline.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
