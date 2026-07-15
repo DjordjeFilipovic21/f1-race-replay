@@ -21,6 +21,11 @@ introduce resampling and interpolated values.
    subtract the first driver sample, first row, or any other observed origin.
    A source value of `12.4995 s` therefore becomes `12500`, while a source
    value of `12.4994 s` becomes `12499`.
+   FastF1 `session_start_time` is a duration, not an absolute datetime. For
+   absolute race-control timestamps, subtract `session.t0_date`; weather,
+   track-status, car, and position times are duration-shaped inputs. A
+   duration-shaped race-control value is supported only as an explicit
+   compatibility branch.
 2. **Keep native streams separate.** Car telemetry and position telemetry are
    separate canonical tables. Their native timestamps, duplicate timestamps,
    missing values, and cadences are preserved after normalization. The
@@ -34,9 +39,14 @@ introduce resampling and interpolated values.
    fabricated previous value. Non-finite numeric values are invalid
    measurements and are normalized to `null` at the boundary.
 5. **Make schema and ordering explicit.** Every canonical table has a declared
-   Polars schema and stable column order. Rows are sorted by the documented
-   total key, and duplicate keys use the retained-row rule in the schema
-   policy document.
+   Polars schema and stable column order. Source rows may contain duplicate
+   observations; normalization accepts those rows and reduces duplicate
+   *canonical keys* deterministically where the schema permits reduction.
+   Telemetry retains the row with the most non-null measurements, then the
+   highest declared native-source priority, then the lexicographically smallest
+   type-aware scalar tuple in declared column order. Tables whose duplicate
+   keys are invalid reject them instead. Rows are sorted by the documented
+   total key after reduction.
 6. **Use stable driver identifiers.** `driver_id` is the normalized uppercase
    FastF1 driver abbreviation when available. A missing abbreviation uses the
    collision-checked `D` + car-number fallback; the original FastF1 key remains
@@ -46,6 +56,11 @@ introduce resampling and interpolated values.
    logical table content. It deliberately defers the logical hash encoding and
    implementation to the writer PR, and does not promise identical Parquet file
    bytes across writer versions or environments.
+8. **Keep loading separate from adaptation.** Adapters are I/O-free: they
+   consume an injected, already-loaded FastF1-compatible session. An injected
+   factory passed to `load_session` performs the one session creation/load and
+   may invoke FastF1 cache or network behavior. Passing an already-loaded
+   `session` skips loading and never calls `session.load()` again.
 
 ## Consequences
 
@@ -58,6 +73,8 @@ introduce resampling and interpolated values.
   publishes artifacts.
 - Browser chunks remain a derived delivery format; they are not canonical
   tables and must not be used to redefine source cadence.
+- FastF1 `car_data` and `pos_data` remain separate native streams. They are not
+  joined, resampled, or interpolated by this foundation.
 
 ## Deferred to the next PR
 
@@ -68,6 +85,8 @@ This foundation does **not** implement or promise:
 - temporary-file writes, flush/fsync, atomic replacement, or recovery behavior;
 - a checksum manifest or byte-level Parquet hashes.
 - logical hash scalar/null encoding, hash algorithm, or implementation.
+- telemetry performance optimization; preserving correctness and native rows
+  takes priority, and performance work is deferred to a later PR.
 
 The next writer PR will define those artifact, transport, and logical-hash
 policies. Its byte hashes must not be confused with logical-table identity.
