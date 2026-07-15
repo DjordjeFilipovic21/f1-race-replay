@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
 from numbers import Integral, Real
 import re
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 
 NormalizedScalar: TypeAlias = str | int | float | bool
@@ -26,6 +26,8 @@ class NormalizationError(ValueError):
 
 def normalize_session_time_ms(session_time: object) -> int:
     """Convert a non-negative SessionTime-like duration to half-up milliseconds."""
+    if _is_missing_time(session_time):
+        raise NormalizationError("SessionTime is missing required timestamp")
     if isinstance(session_time, timedelta):
         return _milliseconds_from_nanoseconds(_timedelta_nanoseconds(session_time))
     pandas_value = getattr(session_time, "value", None)
@@ -38,9 +40,40 @@ def normalize_session_time_ms(session_time: object) -> int:
     raise NormalizationError("unsupported SessionTime value")
 
 
+def normalize_race_control_time_ms(message_time: object, t0_date: object | None) -> int:
+    """Normalize an absolute message timestamp or an explicit duration fallback.
+
+    FastF1 race-control ``Time`` is normally an absolute UTC timestamp. Older
+    or synthetic inputs can supply a session-relative duration instead, which
+    deliberately remains a separate compatibility branch.
+    """
+    if _is_missing_time(message_time):
+        raise NormalizationError("race-control Time is missing required timestamp")
+    if _is_duration_like(message_time):
+        return normalize_session_time_ms(message_time)
+    if not isinstance(message_time, datetime):
+        raise NormalizationError("race-control Time must be an absolute datetime or duration")
+    if _is_missing_time(t0_date):
+        raise NormalizationError("absolute race-control Time requires session.t0_date")
+    if not isinstance(t0_date, datetime):
+        raise NormalizationError("session.t0_date must be an absolute datetime")
+    try:
+        elapsed_nanoseconds = _datetime_nanoseconds(_as_naive_utc(message_time)) - _datetime_nanoseconds(
+            _as_naive_utc(t0_date)
+        )
+    except (OverflowError, TypeError, ValueError) as error:
+        raise NormalizationError("race-control Time cannot be compared with session.t0_date") from error
+    try:
+        return _milliseconds_from_nanoseconds(elapsed_nanoseconds)
+    except NormalizationError as error:
+        if "non-negative" in str(error):
+            raise NormalizationError("race-control Time precedes session.t0_date") from error
+        raise NormalizationError("race-control Time cannot be represented as milliseconds") from error
+
+
 def normalize_nullable_scalar(value: object) -> NormalizedScalar | None:
     """Return null for missing or non-finite numeric measurements."""
-    if value is None or _is_pandas_missing(value):
+    if value is None or _is_pandas_missing(value) or _is_nonfinite_numeric(value):
         return None
     if isinstance(value, bool):
         return value
@@ -98,6 +131,32 @@ def _timedelta_nanoseconds(value: timedelta) -> int:
     return ((value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds) * 1_000
 
 
+def _as_naive_utc(value: datetime) -> datetime:
+    """Put aware and FastF1's naive-UTC datetimes on one exact UTC timeline."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _is_missing_time(value: object | None) -> bool:
+    return value is None or _is_pandas_missing(value) or _is_nonfinite_numeric(value)
+
+
+def _is_duration_like(value: object) -> bool:
+    value_type = type(value)
+    return isinstance(value, timedelta) or (
+        value_type.__module__.startswith("pandas.") and value_type.__name__ == "Timedelta"
+    )
+
+
+def _datetime_nanoseconds(value: datetime) -> int:
+    """Return a datetime's exact UTC offset from the Unix epoch in nanoseconds."""
+    nanoseconds = getattr(value, "value", None)
+    if isinstance(nanoseconds, int) and not isinstance(nanoseconds, bool):
+        return nanoseconds
+    return _timedelta_nanoseconds(value - datetime(1970, 1, 1))
+
+
 def _milliseconds_from_nanoseconds(nanoseconds: int) -> int:
     if nanoseconds < 0:
         raise NormalizationError("session time must be non-negative")
@@ -116,7 +175,7 @@ def _milliseconds_from_decimal_seconds(seconds: Decimal) -> int:
 
 
 def _normalize_abbreviation(value: object | None) -> str | None:
-    if value is None:
+    if value is None or _is_pandas_missing(value) or _is_nonfinite_numeric(value):
         return None
     if not isinstance(value, str):
         raise NormalizationError("driver abbreviation must be a string")
@@ -129,7 +188,7 @@ def _normalize_abbreviation(value: object | None) -> str | None:
 
 
 def _normalize_car_number(value: object | None) -> str:
-    if value is None:
+    if value is None or _is_pandas_missing(value) or _is_nonfinite_numeric(value):
         raise NormalizationError("driver abbreviation or car number is required")
     number = str(value).strip()
     if not _CAR_NUMBER.fullmatch(number):
@@ -187,25 +246,39 @@ def _retention_key(
     row: Mapping[str, NormalizedScalar | None],
     column_order: Sequence[str],
     measurement_fields: Sequence[str],
-) -> tuple[int, int, tuple[tuple[int, str], ...]]:
+) -> tuple[int, int, tuple[tuple[int, object], ...]]:
     completeness = sum(row[field] is not None for field in measurement_fields)
     provenance = 1 if row.get("source") in {"car", "pos"} else 0
     values = tuple(_lexical_scalar(row[column]) for column in column_order)
     return -completeness, -provenance, values
 
 
-def _lexical_scalar(value: NormalizedScalar | None) -> tuple[int, str]:
+def _lexical_scalar(value: NormalizedScalar | None) -> tuple[int, object]:
     if value is None:
-        return 0, ""
+        return 0, 0
     if isinstance(value, bool):
-        return 1, str(int(value))
+        return 1, int(value)
     if isinstance(value, int):
-        return 2, str(value)
+        return 2, value
     if isinstance(value, float):
-        return 3, value.hex()
+        return 3, value
     return 4, value
+
+
+def canonical_scalar_sort_key(value: object) -> tuple[int, object]:
+    """Return the declared type-aware scalar order after null normalization."""
+    return _lexical_scalar(normalize_nullable_scalar(value))
 
 
 def _is_pandas_missing(value: object) -> bool:
     value_type = type(value)
     return value_type.__module__.startswith("pandas.") and value_type.__name__ in {"NAType", "NaTType"}
+
+
+def _is_nonfinite_numeric(value: object) -> bool:
+    if isinstance(value, (bool, str, bytes)):
+        return False
+    try:
+        return not math.isfinite(cast(Real, value))
+    except (TypeError, ValueError):
+        return False

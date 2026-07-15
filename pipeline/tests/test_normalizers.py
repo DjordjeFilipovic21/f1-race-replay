@@ -3,6 +3,8 @@ from decimal import Decimal
 from itertools import permutations
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from f1_replay_pipeline.normalizers import (
@@ -39,9 +41,26 @@ def test_normalize_session_time_ms_rejects_invalid_values(value):
         normalize_session_time_ms(value)
 
 
-@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), Decimal("-Infinity")])
+@pytest.mark.parametrize("value", [None, pd.NA, pd.NaT, np.float32("nan"), np.float32("inf"), Decimal("-Infinity")])
 def test_normalize_nullable_scalar_converts_missing_and_non_finite_values_to_null(value):
     assert normalize_nullable_scalar(value) is None
+
+
+@pytest.mark.parametrize("value", [pd.NA, pd.NaT])
+def test_normalize_session_time_ms_rejects_pandas_missing_values_before_scalar_conversion(value):
+    with pytest.raises(NormalizationError, match="missing required timestamp"):
+        normalize_session_time_ms(value)
+
+
+@pytest.mark.parametrize("value", [np.float32("nan"), np.float32("inf")])
+def test_normalize_driver_id_rejects_nonfinite_numpy_car_numbers_before_string_conversion(value):
+    with pytest.raises(NormalizationError, match="driver abbreviation or car number is required"):
+        normalize_driver_id(None, value)
+
+
+@pytest.mark.parametrize("abbreviation", [float("nan"), np.float32("nan"), np.float32("inf")])
+def test_normalize_driver_id_uses_car_number_fallback_for_nonfinite_abbreviations(abbreviation):
+    assert normalize_driver_id(abbreviation, "44") == "D44"
 
 
 def test_normalize_nullable_scalar_preserves_finite_values():
