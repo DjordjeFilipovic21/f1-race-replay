@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastf1>=3.8,<3.9",
+    "jsonschema>=4.23,<5",
     "polars>=1.40,<2",
+    "referencing>=0.35,<1",
 ]
 
 [project.scripts]

@@ -12,51 +12,9 @@
     "schemas",
     "trackAssets",
     "chunks",
-    "drivers",
-    "goldenSnapshots"
+    "drivers"
   ],
   "$defs": {
-    "chunkFileReferenceFirst": {
-      "allOf": [
-        {
-          "$ref": "urn:f1-cache-replay:schema:replay-data:v1:chunk#/$defs/chunkFileReference"
-        },
-        {
-          "properties": {
-            "sequence": {
-              "const": 1
-            },
-            "path": {
-              "const": "chunks/chunk-001.json"
-            },
-            "overlapWithPreviousMs": {
-              "const": 0
-            }
-          }
-        }
-      ]
-    },
-    "chunkFileReferenceSecond": {
-      "allOf": [
-        {
-          "$ref": "urn:f1-cache-replay:schema:replay-data:v1:chunk#/$defs/chunkFileReference"
-        },
-        {
-          "properties": {
-            "sequence": {
-              "const": 2
-            },
-            "path": {
-              "const": "chunks/chunk-002.json"
-            },
-            "overlapWithPreviousMs": {
-              "type": "integer",
-              "minimum": 1
-            }
-          }
-        }
-      ]
-    },
     "driver": {
       "type": "object",
       "additionalProperties": false,
@@ -96,7 +54,8 @@
       "const": "v1"
     },
     "fixtureId": {
-      "const": "deterministic-race"
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
     "fixtureName": {
       "type": "string",
@@ -104,6 +63,21 @@
     },
     "description": {
       "type": "string"
+    },
+    "formatVersion": {
+      "const": "browser-delivery-v1"
+    },
+    "deliveryVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceGenerationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceManifestSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "schemas": {
       "type": "object",
@@ -130,17 +104,10 @@
     },
     "chunks": {
       "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
-      "prefixItems": [
-        {
-          "$ref": "#/$defs/chunkFileReferenceFirst"
-        },
-        {
-          "$ref": "#/$defs/chunkFileReferenceSecond"
-        }
-      ],
-      "items": false
+      "minItems": 1,
+      "items": {
+        "$ref": "urn:f1-cache-replay:schema:replay-data:v1:chunk#/$defs/chunkFileReference"
+      }
     },
     "drivers": {
       "type": "array",

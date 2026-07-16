@@ -70,7 +70,7 @@
         },
         "path": {
           "type": "string",
-          "pattern": "^chunks/chunk-[0-9]{3}\\.json$"
+          "pattern": "^chunks/chunk-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})\\.json$"
         },
         "schemaId": {
           "const": "urn:f1-cache-replay:schema:replay-data:v1:chunk"
@@ -84,6 +84,10 @@
         "overlapWithPreviousMs": {
           "type": "integer",
           "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -126,7 +130,7 @@
         },
         "previousChunkPath": {
           "type": "string",
-          "pattern": "^chunks/chunk-[0-9]{3}\\.json$"
+          "pattern": "^chunks/chunk-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})\\.json$"
         },
         "range": {
           "$ref": "#/$defs/timeRange"
@@ -320,48 +324,9 @@
         }
       }
     },
-    "chunk001": {
-      "properties": {
-        "chunkId": {
-          "const": "chunk-001"
-        },
-        "sequence": {
-          "const": 1
-        },
-        "authoritativeStartIndex": {
-          "const": 0
-        },
-        "overlap": {
-          "$ref": "#/$defs/overlapNone"
-        }
-      }
-    },
-    "chunk002": {
-      "properties": {
-        "chunkId": {
-          "const": "chunk-002"
-        },
-        "sequence": {
-          "const": 2
-        },
-        "authoritativeStartIndex": {
-          "const": 1
-        },
-        "overlap": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/overlapHandoff"
-            },
-            {
-              "properties": {
-                "previousChunkPath": {
-                  "const": "chunks/chunk-001.json"
-                }
-              }
-            }
-          ]
-        }
-      }
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     }
   },
   "properties": {
@@ -369,11 +334,11 @@
       "const": "v1"
     },
     "fixtureId": {
-      "const": "deterministic-race"
+      "$ref": "#/$defs/fixtureId"
     },
     "chunkId": {
       "type": "string",
-      "pattern": "^chunk-[0-9]{3}$"
+      "pattern": "^chunk-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$"
     },
     "sequence": {
       "type": "integer",
@@ -419,25 +384,28 @@
     "leaderboardOrder": {
       "type": "array",
       "items": {
-        "type": "array",
-        "minItems": 1,
-        "uniqueItems": true,
-        "items": {
-          "$ref": "#/$defs/driverCode"
-        }
+        "oneOf": [
+          {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/driverCode"}
+          },
+          {"type": "null"}
+        ]
       }
     },
     "trackStatusCode": {
       "type": "array",
       "items": {
-        "type": "integer",
+        "type": ["integer", "null"],
         "minimum": 0
       }
     },
     "weatherState": {
       "type": "array",
       "items": {
-        "type": "string",
+        "type": ["string", "null"],
         "minLength": 1
       }
     },
@@ -447,13 +415,5 @@
         "$ref": "#/$defs/event"
       }
     }
-  },
-  "oneOf": [
-    {
-      "$ref": "#/$defs/chunk001"
-    },
-    {
-      "$ref": "#/$defs/chunk002"
-    }
-  ]
+  }
 }

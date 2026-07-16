@@ -92,10 +92,8 @@ def assert_manifest_semantics(bundle):
 
     assert manifest["contractVersion"] == "v1"
     assert manifest["fixtureId"] == track_assets["fixtureId"]
-    assert len(manifest["chunks"]) == 2
-
     manifest_driver_ids = {driver["id"] for driver in manifest["drivers"]}
-    assert manifest_driver_ids == {"HAM", "RUS"}
+    assert manifest_driver_ids
 
     previous_ref = None
     for chunk_ref in manifest["chunks"]:
@@ -297,6 +295,127 @@ def test_replay_contract_invalid_manifest_format_is_rejected(contract_bundle, sc
     # Act / Assert
     with pytest.raises(ValidationError):
         validate_instance(contract_bundle["schemas"]["manifest"], invalid_manifest, schema_registry)
+
+
+def test_replay_contract_schema_accepts_a_general_ordered_three_chunk_manifest(
+    contract_bundle, schema_registry
+):
+    # Arrange
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["fixtureId"] = "season-opener-2026"
+    manifest["fixtureName"] = "Season Opener"
+    manifest["chunks"].append(
+        {
+            "sequence": 3,
+            "path": "chunks/chunk-003.json",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+            "startMs": 4000,
+            "endMs": 6000,
+            "overlapWithPreviousMs": 500,
+        }
+    )
+
+    # Act / Assert
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_schema_accepts_general_chunk_identifiers_and_handoffs(
+    contract_bundle, schema_registry
+):
+    # Arrange
+    chunk = copy.deepcopy(contract_bundle["chunks"]["chunks/chunk-002.json"])
+    chunk.update(
+        {
+            "fixtureId": "season-opener-2026",
+            "chunkId": "chunk-1001",
+            "sequence": 1001,
+            "startMs": 4000,
+            "endMs": 6000,
+            "timeMs": [3500, 3600, 4000],
+            "authoritativeStartIndex": 2,
+            "overlap": {
+                "kind": "handoff",
+                "previousChunkPath": "chunks/chunk-1000.json",
+                "range": {"startMs": 3500, "endMs": 4000},
+                "authoritativeFromMs": 4000,
+            },
+            "events": [],
+        }
+    )
+
+    # Act / Assert
+    validate_instance(contract_bundle["schemas"]["chunk"], chunk, schema_registry)
+
+
+def test_replay_contract_general_three_chunk_handoffs_preserve_order_and_ownership(
+    contract_bundle,
+):
+    # Arrange
+    bundle = copy.deepcopy(contract_bundle)
+    fixture_id = "season-opener-2026"
+    bundle["manifest"]["fixtureId"] = fixture_id
+    bundle["track_assets"]["fixtureId"] = fixture_id
+    for chunk in bundle["chunks"].values():
+        chunk["fixtureId"] = fixture_id
+
+    third_chunk_path = "chunks/chunk-003.json"
+    third_chunk = copy.deepcopy(bundle["chunks"]["chunks/chunk-002.json"])
+    third_chunk.update(
+        {
+            "fixtureId": fixture_id,
+            "chunkId": "chunk-003",
+            "sequence": 3,
+            "startMs": 4000,
+            "endMs": 6000,
+            "timeMs": [3500, 4000, 5000],
+            "authoritativeStartIndex": 1,
+            "overlap": {
+                "kind": "handoff",
+                "previousChunkPath": "chunks/chunk-002.json",
+                "range": {"startMs": 3500, "endMs": 4000},
+                "authoritativeFromMs": 4000,
+            },
+            "events": [],
+        }
+    )
+    bundle["chunks"][third_chunk_path] = third_chunk
+    bundle["manifest"]["chunks"].append(
+        {
+            "sequence": 3,
+            "path": third_chunk_path,
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+            "startMs": 4000,
+            "endMs": 6000,
+            "overlapWithPreviousMs": 500,
+        }
+    )
+
+    # Act / Assert
+    assert_manifest_semantics(bundle)
+
+
+@pytest.mark.parametrize(
+    ("instance_path", "value"),
+    [
+        (("fixtureId",), "season_opener"),
+        (("chunkId",), "chunk-0"),
+        (("sequence",), "3"),
+        (("overlap", "range"), None),
+    ],
+)
+def test_replay_contract_schema_rejects_malformed_general_chunk_values(
+    contract_bundle, schema_registry, instance_path, value
+):
+    # Arrange
+    invalid_chunk = copy.deepcopy(contract_bundle["chunks"]["chunks/chunk-002.json"])
+    target = invalid_chunk
+    for key in instance_path[:-1]:
+        target = target[key]
+    target[instance_path[-1]] = value
+
+    # Act / Assert
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["chunk"], invalid_chunk, schema_registry)
 
 
 def test_replay_contract_cross_file_semantics_hold_for_fixture(contract_bundle):
