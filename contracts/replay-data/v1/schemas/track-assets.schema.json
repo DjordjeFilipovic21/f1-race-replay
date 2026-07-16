@@ -32,6 +32,10 @@
         },
         "schemaId": {
           "const": "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -64,7 +68,8 @@
       "const": "v1"
     },
     "fixtureId": {
-      "const": "deterministic-race"
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
     "trackId": {
       "type": "string",

@@ -91,8 +91,8 @@ only under the documented deterministic policy; invalid duplicate keys are
 rejected. See [the canonical schema](../docs/canonical-pipeline-schema.md) for
 columns, nulls, ordering, and deduplication.
 
-This boundary explicitly excludes the legacy `src/` application, network-backed
-CI or network-loading tests, and browser chunks. Testing events
+This boundary explicitly excludes the legacy `src/` application and
+network-backed CI or network-loading tests. Testing events
 retain FastF1 round zero; they are selected through the explicit `testing`
 command and testing-session API, never through ordinary round lookup.
 
@@ -307,11 +307,101 @@ staging residue, pointer temps, or an unselected complete generation. The
 contract guarantees only one atomic `current.json` replacement where the
 filesystem supports it—not multi-path transactionality.
 
-## Deferred work
+## Derive browser delivery
 
-Browser/CDN publishing, memory-streaming optimization, and future
-consumer-side alignment remain deferred. This phase preserves native rows and
-prioritizes deterministic correctness; it does not change the Phase 0 browser
-manifest schema or publish browser artifacts. The writer uses native Polars
-without PyArrow, accepts already validated frames, does not load FastF1, and
-remains separate from the Phase 0 browser pipeline and legacy `src/`.
+Browser artifacts are a derived view of one **fully validated, resolved** canonical
+generation. `read_validated_canonical_generation()` resolves `current.json`, runs
+the complete pointer/manifest/schema/row-count/logical-hash/byte-hash validation,
+and only then reads the ten Parquet tables. A directory name is never enough to
+select a generation. The reader is read-only: it never mutates or republishes
+canonical Parquet.
+
+Canonical tables retain their source timestamps and native cadence. Browser
+alignment is a delivery policy, not canonical resampling. `build_browser_delivery()`
+uses one immutable validated snapshot and the sorted, unique union of native
+driver, weather, track-status, and race-control timestamps. Exact telemetry is
+never filled; interval and previous-value fields are evaluated explicitly.
+
+### Field and time semantics
+
+- `x`/`y` come from position telemetry; `speed`, `throttle`, `gear`, and `drs`
+  come from car telemetry; `brake` is `0`/`1` and preserves `null`.
+- `status` comes from position telemetry. `lap` and `tyreCompound` use the
+  containing half-open lap interval. Pit state is `true` only in a known pit
+  interval, `false` for a known non-pit interval, otherwise `null`.
+- `trackDistanceMeters`, `gapToLeaderMs`, and `position` are always `null` in
+  v1; no source exists from which to fabricate them.
+- Leaderboard order comes from classified results, track status from its active
+  interval, weather from the latest native observation, and race-control
+  messages remain sparse events. Missing values remain `null`.
+- At render time only continuous fields (`x`, `y`, `speed`, `throttle`, `brake`,
+  `gapToLeaderMs`) may be linearly interpolated between two valid authoritative
+  bounds for the same driver. Discrete, categorical, and boolean fields use
+  previous-value semantics. Sparse `BrowserEvent` records remain point events
+  and are never interpolated.
+
+### Chunks and ownership
+
+`build_browser_chunks()` emits exact observations without resampling or
+interpolating. Production defaults are 10,000 ms chunks with a 1,000 ms handoff
+overlap. Coverage is half-open, `[startMs, endMs)`: the first sample at or after
+`startMs` owns the chunk, and earlier samples are overlap-only references.
+`authoritative_start_index` identifies that first owned sample;
+`overlap.authoritative_from_ms` equals `startMs`. Events belong only to the
+authoritative chunk containing their timestamp. Consumers resolve duplicate
+timestamps using the owning chunk, not the overlap copy.
+
+### Deterministic publication
+
+`publish_browser_delivery()` accepts only a `BrowserDeliveryBuild` already bound
+to one immutable canonical snapshot. It validates all manifest/chunk identities,
+hashes, alignment, ownership, overlap, and event invariants, verifies exact
+staged bytes, and validates every artifact against a caller-supplied local v1
+`schema_root` registry without remote retrieval. It then writes a version under:
+
+```text
+<browser_parent>/
+├── browser-current.json
+└── generations/<delivery-version>/
+    ├── manifest.json
+    ├── track-assets.json
+    └── chunks/chunk-001.json ...
+```
+
+Publication rejects symlinked roots, ancestors, and generation directories and
+uses descriptor-relative no-follow writes and cleanup. The complete staged
+delivery is validated before `browser-current.json` is atomically replaced;
+that replacement is the only browser visibility point.
+The manifest records the exact source generation ID and manifest digest plus
+artifact digests. Repeating the build with the same validated source and inputs
+produces the same bytes and names. This boundary never edits canonical
+`current.json`, mutates canonical tables, or copies/republishes canonical
+Parquet. It does not perform network, GUI, or FastF1 loading.
+
+### Minimal offline API example
+
+The canonical and track-asset paths below are supplied explicitly. The track
+asset file must validate against the replay-data v1 track-assets schema. No
+network, GUI, FastF1 loading, or automatic canonical selection is implied.
+
+```python
+from pathlib import Path
+import json
+
+from f1_replay_pipeline.browser_delivery_orchestration import build_browser_delivery
+from f1_replay_pipeline.browser_delivery_publication import publish_browser_delivery
+from f1_replay_pipeline.browser_delivery_reader import read_validated_canonical_generation
+
+canonical_parent = Path("artifacts/canonical")
+browser_parent = Path("artifacts/browser")
+snapshot = read_validated_canonical_generation(canonical_parent)
+track_assets = json.loads(Path("track-assets.json").read_text(encoding="utf-8"))
+delivery = build_browser_delivery(snapshot, track_assets)
+published = publish_browser_delivery(
+    browser_parent=browser_parent,
+    delivery_version="example-v1",
+    delivery=delivery,
+    schema_root=Path("../contracts/replay-data/v1/schemas"),
+)
+print(published.manifest_path)
+```
