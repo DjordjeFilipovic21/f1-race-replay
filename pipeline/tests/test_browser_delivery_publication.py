@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -167,3 +168,20 @@ def test_delivery_build_deep_freezes_nested_track_assets() -> None:
 
     with pytest.raises(TypeError):
         coordinate_space["units"] = "feet"  # type: ignore[index]
+
+
+def test_publication_round_trips_nested_immutable_event_payload(tmp_path: Path) -> None:
+    event = BrowserEvent(
+        1_000, "race_control", "nested payload", "HAM",
+        {"metadata": {"flags": ["GREEN", "CLEAR"]}},
+    )
+    delivery = _delivery()
+    delivery = replace(delivery, chunks=(replace(delivery.chunks[0], events=(event,)),))
+
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-nested",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    chunk = json.loads(result.chunk_paths[0].read_bytes())
+
+    assert chunk["events"][0]["payload"] == {"metadata": {"flags": ["GREEN", "CLEAR"]}}

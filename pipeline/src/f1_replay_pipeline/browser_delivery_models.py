@@ -14,6 +14,7 @@ import polars as pl
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 MAX_INT64 = (1 << 63) - 1
+FASTF1_POSITION_UNITS_PER_METER = 10.0
 
 
 def deep_freeze_json(value: object) -> object:
@@ -147,5 +148,5 @@ class BrowserManifest:
 
 __all__ = [
     "BrowserDriverFields", "BrowserManifest", "CanonicalGenerationSnapshot",
-    "MAX_INT64", "deep_freeze_json",
+    "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "deep_freeze_json",
 ]

@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from types import MappingProxyType
 from typing import cast
 
 import pytest
@@ -73,6 +74,14 @@ def test_deterministic_json_golden_handles_unicode_and_nested_unordered_mappings
 
     assert payload == b'{"a":true,"z":{"a":"caf\xc3\xa9","\xce\xb2":[2,1]}}\n'
     assert hashlib.sha256(payload).hexdigest() == "1884350b8dceab8d425d0af94005786c425e097f3aef8d6c8b206224c7dab16d"
+
+
+def test_deterministic_json_thaws_immutable_mappings_nested_inside_lists():
+    value = {"events": [MappingProxyType({"payload": MappingProxyType({"flag": "GREEN"})})]}
+
+    payload = serialize_deterministic_json(value)
+
+    assert payload == b'{"events":[{"payload":{"flag":"GREEN"}}]}\n'
 
 
 def test_manifest_writer_settings_preserve_nested_metadata_deterministically():
