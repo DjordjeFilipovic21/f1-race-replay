@@ -118,6 +118,12 @@ python -m f1_replay_pipeline race \
 f1-replay-pipeline testing \
   --year 2026 --test-number 1 --session-number 2 \
   --backend f1timing --output artifacts
+
+f1-replay-pipeline browser \
+  --canonical artifacts/demo-bahrain-2024 \
+  --output artifacts/browser-bahrain-2024 \
+  --delivery-version 2024-bahrain-race-v1 \
+  --schema-root ../contracts/replay-data/v1/schemas
 ```
 
 ### Selectors and backends
@@ -133,6 +139,9 @@ f1-replay-pipeline testing \
 - `--backend` is optional, case-insensitive, and normalized to lowercase. Race
   accepts `fastf1`, `f1timing`, or `ergast`; testing accepts only `fastf1` or
   `f1timing`.
+- `browser` requires a canonical parent selected by its validated `current.json`,
+  a separate output parent, one safe delivery version, and a local v1 schema
+  directory. It performs no FastF1 or network loading.
 
 The default resolver imports FastF1 lazily, resolves one session, and loads it
 once with laps, telemetry, weather, and messages enabled. This is a real
@@ -142,13 +151,21 @@ publishers instead of using network, GUI, OpenGL, or real FastF1 loading.
 
 ### Output and status
 
-The command normalizes and validates exactly the ten canonical tables, then
-publishes one generation below the required `--output` directory. Supply
+The `race` and `testing` commands normalize and validate exactly the ten
+canonical tables, then publish one generation below `--output`. Supply
 `--generation-id` for a safe deterministic path component; otherwise the CLI
 generates a UTC timestamp ID. Successful stdout is intentionally stable:
 
 ```text
 generation_id=2026-aus-race
+```
+
+The `browser` command validates the selected canonical generation, generates
+track assets, builds browser chunks, validates them against local schemas, and
+publishes them behind `browser-current.json`. Its stable stdout is:
+
+```text
+delivery_version=2024-bahrain-race-v1
 ```
 
 Publication stages and validates the generation before atomically replacing
@@ -157,18 +174,21 @@ pointer names the selected generation and manifest digest. A pre-commit
 failure leaves the previous valid pointer in place; a post-commit durability
 failure reports that the new generation may already be selected.
 
+This canonical-pointer behavior applies only to `race` and `testing`. Browser
+publication instead validates its derived artifacts before atomically replacing
+`<browser-output>/browser-current.json`; it never modifies canonical
+`current.json`.
+
 Exit behavior:
 
-- `0`: publication succeeded; generation ID is printed to stdout.
+- `0`: publication succeeded; generation or delivery version is printed.
 - `1`: expected application/resolution/normalization/validation/publication
   failure; one `error: ...` line is printed to stderr, without a traceback.
 - `2`: argparse usage or validation failure (including missing, abbreviated, or
   unknown options); argparse writes its error to stderr.
 
-The command is deliberately limited to Phase 1 canonical generation
-publication. It does not provide prompts, GUI integration, legacy `src/`
-integration, browser chunks, CDN upload, interpolation, resampling, consumer
-alignment, or a new CLI framework.
+The CLI remains non-interactive and does not provide GUI/legacy integration,
+CDN upload, or a second command framework.
 
 ## Publish a canonical generation
 

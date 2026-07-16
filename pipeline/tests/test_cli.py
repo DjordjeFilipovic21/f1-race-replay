@@ -11,6 +11,11 @@ import pytest
 
 import f1_replay_pipeline.cli as cli
 from f1_replay_pipeline.cli import build_parser, main
+from f1_replay_pipeline.browser_delivery_request import (
+    BrowserDeliveryServiceError,
+    BrowserPublishRequest,
+    BrowserPublishResult,
+)
 from f1_replay_pipeline.orchestration import (
     PipelineRequest,
     PipelineResult,
@@ -49,6 +54,28 @@ def test_testing_command_uses_explicit_testing_selection() -> None:
         service=service,
     ) == 0
     assert received[0].selection == PipelineTestingSelection(year=2026, test_number=1, session_number=2)
+
+
+def test_browser_command_builds_request_and_prints_delivery_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    received = []
+
+    def browser_service(request: BrowserPublishRequest) -> BrowserPublishResult:
+        received.append(request)
+        return BrowserPublishResult(request, request.delivery_version, object())
+
+    status = main([
+        "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
+        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+    ], browser_service=browser_service)
+
+    assert status == 0
+    assert received == [BrowserPublishRequest(
+        Path("artifacts/canonical"), Path("artifacts/browser"), "bahrain-v1",
+        Path("contracts/replay-data/v1/schemas"),
+    )]
+    assert capsys.readouterr().out == "delivery_version=bahrain-v1\n"
 
 
 @pytest.mark.parametrize(
@@ -113,6 +140,49 @@ def test_parser_rejects_abbreviated_or_incomplete_arguments(capsys: pytest.Captu
     assert "error:" in capsys.readouterr().err
 
 
+def test_browser_parser_rejects_unsafe_version_without_calling_service() -> None:
+    calls = []
+
+    with pytest.raises(SystemExit) as raised:
+        main([
+            "browser", "--canonical", "canonical", "--output", "browser",
+            "--delivery-version", "../unsafe", "--schema-root", "schemas",
+        ], browser_service=lambda request: calls.append(request))  # type: ignore[arg-type]
+
+    assert raised.value.code == 2
+    assert calls == []
+
+
+def test_expected_browser_failure_returns_one_visible_error_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def failing_service(request: BrowserPublishRequest) -> BrowserPublishResult:
+        del request
+        raise BrowserDeliveryServiceError("canonical current pointer is invalid")
+
+    status = main([
+        "browser", "--canonical", "canonical", "--output", "browser",
+        "--delivery-version", "delivery-v1", "--schema-root", "schemas",
+    ], browser_service=failing_service)
+
+    assert status == 1
+    assert capsys.readouterr().err == "error: canonical current pointer is invalid\n"
+
+
+def test_unexpected_browser_failure_is_not_rendered_by_cli(capsys: pytest.CaptureFixture[str]) -> None:
+    def failing_service(request: BrowserPublishRequest) -> BrowserPublishResult:
+        del request
+        raise ValueError("unexpected browser defect")
+
+    with pytest.raises(ValueError, match="unexpected browser defect"):
+        main([
+            "browser", "--canonical", "canonical", "--output", "browser",
+            "--delivery-version", "delivery-v1", "--schema-root", "schemas",
+        ], browser_service=failing_service)
+
+    assert capsys.readouterr().err == ""
+
+
 def test_expected_application_failure_returns_visible_reason_without_traceback(capsys: pytest.CaptureFixture[str]) -> None:
     def failing_service(request: PipelineRequest) -> PipelineResult:
         from f1_replay_pipeline.orchestration import SessionResolutionError
@@ -152,7 +222,7 @@ def test_help_writes_usage_to_stdout_and_exits_successfully(capsys: pytest.Captu
 
     # Assert
     assert raised.value.code == 0
-    assert "Publish one canonical Formula 1 replay generation." in captured.out
+    assert "Publish canonical or browser Formula 1 replay generations." in captured.out
     assert captured.err == ""
 
 

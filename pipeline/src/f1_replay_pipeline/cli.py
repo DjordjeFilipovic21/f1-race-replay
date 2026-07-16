@@ -10,6 +10,11 @@ from pathlib import Path
 import sys
 from typing import Protocol
 
+from f1_replay_pipeline.browser_delivery_request import (
+    BrowserDeliveryServiceError,
+    BrowserPublishRequest,
+    BrowserPublishResult,
+)
 from f1_replay_pipeline.orchestration import (
     NormalizationError,
     PipelineRequest,
@@ -29,6 +34,12 @@ class PipelineService(Protocol):
     """Execute a prepared pipeline request without exposing CLI dependencies."""
 
     def __call__(self, request: PipelineRequest) -> PipelineResult: ...
+
+
+class BrowserService(Protocol):
+    """Publish browser artifacts without exposing CLI dependencies."""
+
+    def __call__(self, request: BrowserPublishRequest) -> BrowserPublishResult: ...
 
 
 GenerationIdGenerator = Callable[[], str]
@@ -63,22 +74,49 @@ class DefaultPipelineService:
         return run_pipeline(request, FastF1SessionResolver(), publish_canonical_generation)
 
 
+@dataclass(frozen=True)
+class DefaultBrowserService:
+    """Lazy browser publication composition with no FastF1 loading."""
+
+    def __call__(self, request: BrowserPublishRequest) -> BrowserPublishResult:
+        from f1_replay_pipeline.browser_delivery_service import publish_browser_delivery_from_canonical
+
+        return publish_browser_delivery_from_canonical(request)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the stable parser without reading arguments or initializing FastF1."""
     parser = argparse.ArgumentParser(
         prog="f1-replay-pipeline",
-        description="Publish one canonical Formula 1 replay generation.",
+        description="Publish canonical or browser Formula 1 replay generations.",
         allow_abbrev=False,
     )
     commands = parser.add_subparsers(dest="mode", required=True)
     _add_race_parser(commands)
     _add_testing_parser(commands)
+    _add_browser_parser(commands)
     return parser
 
 
-def main(argv: Sequence[str] | None = None, *, service: PipelineService | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    service: PipelineService | None = None,
+    browser_service: BrowserService | None = None,
+) -> int:
     """Parse one non-interactive command and return a conventional exit status."""
     namespace = build_parser().parse_args(argv)
+    if namespace.mode == "browser":
+        request = BrowserPublishRequest(
+            namespace.canonical, namespace.output, namespace.delivery_version, namespace.schema_root,
+        )
+        try:
+            result = (browser_service or DefaultBrowserService())(request)
+        except BrowserDeliveryServiceError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"delivery_version={result.delivery_version}")
+        return 0
     generation_id_generator = _generation_id_generator(service)
     request = _request_from_namespace(namespace, generation_id_generator)
     try:
@@ -113,6 +151,17 @@ def _add_testing_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     _add_backend_option(testing, _TESTING_BACKENDS)
     testing.add_argument("--test-number", type=_positive_integer, required=True, help="Positive testing event number.")
     testing.add_argument("--session-number", type=_positive_integer, required=True, help="Positive testing session number.")
+
+
+def _add_browser_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    browser = commands.add_parser(
+        "browser", help="Publish browser artifacts from the selected canonical generation.",
+        allow_abbrev=False,
+    )
+    browser.add_argument("--canonical", type=Path, required=True, help="Canonical parent containing current.json.")
+    browser.add_argument("--output", type=Path, required=True, help="Output directory for browser generations.")
+    browser.add_argument("--delivery-version", type=_generation_id, required=True, help="Safe browser delivery version.")
+    browser.add_argument("--schema-root", type=Path, required=True, help="Local replay-data v1 schema directory.")
 
 
 def _add_backend_option(parser: argparse.ArgumentParser, choices: tuple[str, ...]) -> None:
@@ -186,4 +235,7 @@ def _request_from_namespace(
     )
 
 
-__all__ = ["DefaultPipelineService", "PipelineService", "build_parser", "main"]
+__all__ = [
+    "BrowserService", "DefaultBrowserService", "DefaultPipelineService", "PipelineService",
+    "build_parser", "main",
+]
