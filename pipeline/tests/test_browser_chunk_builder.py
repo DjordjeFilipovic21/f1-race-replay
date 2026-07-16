@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+import f1_replay_pipeline.browser_chunk_builder as chunk_builder
+
 from f1_replay_pipeline.browser_chunk_builder import (
     CONTINUOUS_FIELD_SEMANTICS,
     PREVIOUS_VALUE_FIELD_SEMANTICS,
@@ -75,6 +77,41 @@ def test_public_time_models_reject_values_above_signed_int64() -> None:
         BrowserEvent(MAX_INT64 + 1, "notice", "invalid time")
     with pytest.raises(ValueError, match="time_ms"):
         BrowserGlobalFields((MAX_INT64 + 1,), (("HAM",),), (1,), ("clear",))
+
+
+def test_alignment_is_performed_once_per_field_not_once_per_chunk(monkeypatch) -> None:
+    times = tuple(range(0, 10_000, 1_000))
+    driver = _driver("HAM", times, tuple(float(value) for value in range(len(times))))
+    globals_ = BrowserGlobalFields(times, (("HAM",),) * len(times), (1,) * len(times), ("clear",) * len(times))
+    original = chunk_builder._align
+    calls = 0
+
+    def counted_align(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(chunk_builder, "_align", counted_align)
+    chunks = build_browser_chunks(
+        {"HAM": driver}, globals_, (), start_ms=0, end_ms=10_000,
+        chunk_duration_ms=2_000, overlap_ms=500,
+    )
+
+    assert len(chunks) == 5
+    assert calls == 14
+
+
+def test_empty_nominal_interval_is_merged_without_emitting_an_empty_chunk() -> None:
+    times = (0, 1_000, 5_000)
+    driver = _driver("HAM", times, (0.0, 1.0, 5.0))
+    globals_ = BrowserGlobalFields(times, (("HAM",),) * 3, (1,) * 3, ("clear",) * 3)
+
+    chunks = build_browser_chunks(
+        {"HAM": driver}, globals_, (), start_ms=0, end_ms=6_000,
+        chunk_duration_ms=2_000, overlap_ms=500,
+    )
+
+    assert tuple((chunk.start_ms, chunk.end_ms) for chunk in chunks) == ((0, 4_000), (4_000, 6_000))
 
 
 def _drivers() -> dict[str, BrowserDriverFields]:

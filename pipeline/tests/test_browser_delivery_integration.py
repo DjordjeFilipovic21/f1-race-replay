@@ -87,8 +87,8 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
         "description": "boundary event",
         "driverId": "HAM",
     }]
-    assert first_chunks[1]["drivers"]["HAM"]["x"] == [None, 10.0, None, 20.0]
-    assert first_chunks[1]["drivers"]["HAM"]["y"] == [9.5, 11.0, None, None]
+    assert first_chunks[1]["drivers"]["HAM"]["x"] == [None, 1.0, None, 2.0]
+    assert first_chunks[1]["drivers"]["HAM"]["y"] == [0.95, 1.1, None, None]
     assert first_chunks[1]["drivers"]["HAM"]["speed"] == [None, 200.0, 210.0, None]
     assert first_chunks[1]["drivers"]["HAM"]["brake"] == [None, 1, 0, None]
     assert first_chunks[1]["drivers"]["HAM"]["trackDistanceMeters"] == [None] * 4

@@ -10,7 +10,11 @@ from typing import cast
 
 import polars as pl
 
-from f1_replay_pipeline.browser_delivery_models import BrowserDriverFields, CanonicalGenerationSnapshot
+from f1_replay_pipeline.browser_delivery_models import (
+    FASTF1_POSITION_UNITS_PER_METER,
+    BrowserDriverFields,
+    CanonicalGenerationSnapshot,
+)
 from f1_replay_pipeline.canonical_generation_validation import validate_complete_canonical_generation
 from f1_replay_pipeline.canonical_schema import CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.dataset_manifest import DatasetManifest, TableManifestEntry
@@ -133,11 +137,11 @@ def _field_values(
     lap_row = next((row for row in laps if _contains(row, time_ms)), None)
     brake = None if car_row is None or car_row["brake"] is None else int(cast(bool, car_row["brake"]))
     return (
-        None if position_row is None else cast(float | None, position_row["x"]),
-        None if position_row is None else cast(float | None, position_row["y"]),
+        _browser_coordinate(None if position_row is None else position_row["x"]),
+        _browser_coordinate(None if position_row is None else position_row["y"]),
         None if car_row is None else cast(float | None, car_row["speed_kph"]),
         None if car_row is None else cast(float | None, car_row["throttle_pct"]), brake,
-        None if car_row is None else cast(int | None, car_row["gear"]),
+        _browser_gear(None if car_row is None else car_row["gear"]),
         None if car_row is None else cast(int | None, car_row["drs"]),
         None if position_row is None else cast(str | None, position_row["status"]),
         None if lap_row is None else cast(int | None, lap_row["lap_number"]),
@@ -159,6 +163,16 @@ def _pit_state(row: dict[str, object] | None, time_ms: int) -> bool | None:
     if pit_in is None or pit_out is None:
         return None
     return cast(int, pit_in) <= time_ms < cast(int, pit_out)
+
+
+def _browser_gear(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= 8 else None
+
+
+def _browser_coordinate(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(cast(float, value)) / FASTF1_POSITION_UNITS_PER_METER
 
 
 __all__ = [

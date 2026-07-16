@@ -43,12 +43,43 @@ def test_field_mapping_uses_exact_timestamp_order_and_preserves_nulls() -> None:
     fields = derive_browser_driver_fields(snapshot, "HAM")
 
     assert fields.time_ms == (1000, 1003, 1012)
-    assert fields.x == (None, 1.0, None)
+    assert fields.x == (None, 0.1, None)
     assert fields.speed == (300.0, None, None)
     assert fields.brake == (None, None, 0)
     assert fields.gear == (None, None, 6)
     assert fields.status == (None, None, None)
     assert fields.track_distance_meters == (None, None, None)
+
+
+def test_field_mapping_preserves_raw_invalid_gear_in_canonical_but_exposes_null() -> None:
+    frames = _frames()
+    invalid = pl.DataFrame([{
+        "session_id": "race", "driver_id": "HAM", "source_driver_key": "44",
+        "session_time_ms": 1020, "speed_kph": 0.0, "rpm": 3900.0, "gear": 75,
+        "throttle_pct": 0.0, "brake": False, "drs": 0, "source": "car",
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)
+    frames["car_telemetry"] = frames["car_telemetry"].vstack(invalid).sort("session_time_ms")
+    snapshot = CanonicalGenerationSnapshot("generation", "a" * 64, frames)
+
+    fields = derive_browser_driver_fields(snapshot, "HAM")
+
+    assert snapshot.frames["car_telemetry"].filter(pl.col("session_time_ms") == 1020).item(0, "gear") == 75
+    assert fields.gear[fields.time_ms.index(1020)] is None
+
+
+@pytest.mark.parametrize(("raw_gear", "expected"), [(-1, None), (0, 0), (8, 8), (9, None)])
+def test_field_mapping_enforces_browser_gear_domain(raw_gear: int, expected: int | None) -> None:
+    frames = _frames()
+    row = pl.DataFrame([{
+        "session_id": "race", "driver_id": "HAM", "source_driver_key": "44",
+        "session_time_ms": 1020, "speed_kph": 0.0, "rpm": 3900.0, "gear": raw_gear,
+        "throttle_pct": 0.0, "brake": False, "drs": 0, "source": "car",
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)
+    frames["car_telemetry"] = frames["car_telemetry"].vstack(row).sort("session_time_ms")
+
+    fields = derive_browser_driver_fields(CanonicalGenerationSnapshot("generation", "a" * 64, frames), "HAM")
+
+    assert fields.gear[fields.time_ms.index(1020)] == expected
 
 
 def _frames() -> dict[str, pl.DataFrame]:

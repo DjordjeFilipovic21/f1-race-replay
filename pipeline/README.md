@@ -324,8 +324,9 @@ never filled; interval and previous-value fields are evaluated explicitly.
 
 ### Field and time semantics
 
-- `x`/`y` come from position telemetry; `speed`, `throttle`, `gear`, and `drs`
-  come from car telemetry; `brake` is `0`/`1` and preserves `null`.
+- `x`/`y` come from position telemetry and are converted from FastF1 raw
+  decimetres to metres, matching track assets. `speed`, `throttle`, `gear`, and
+  `drs` come from car telemetry; `brake` is `0`/`1` and preserves `null`.
 - `status` comes from position telemetry. `lap` and `tyreCompound` use the
   containing half-open lap interval. Pit state is `true` only in a known pit
   interval, `false` for a known non-pit interval, otherwise `null`.
@@ -386,16 +387,16 @@ network, GUI, FastF1 loading, or automatic canonical selection is implied.
 
 ```python
 from pathlib import Path
-import json
 
 from f1_replay_pipeline.browser_delivery_orchestration import build_browser_delivery
 from f1_replay_pipeline.browser_delivery_publication import publish_browser_delivery
 from f1_replay_pipeline.browser_delivery_reader import read_validated_canonical_generation
+from f1_replay_pipeline.track_assets_generator import generate_track_assets
 
 canonical_parent = Path("artifacts/canonical")
 browser_parent = Path("artifacts/browser")
 snapshot = read_validated_canonical_generation(canonical_parent)
-track_assets = json.loads(Path("track-assets.json").read_text(encoding="utf-8"))
+track_assets = generate_track_assets(snapshot)
 delivery = build_browser_delivery(snapshot, track_assets)
 published = publish_browser_delivery(
     browser_parent=browser_parent,
@@ -405,3 +406,29 @@ published = publish_browser_delivery(
 )
 print(published.manifest_path)
 ```
+
+### Generated track assets
+
+`generate_track_assets()` selects the shortest accurate, non-deleted, non-pit
+lap with usable position telemetry. Raw FastF1 `X/Y` decimetres are converted to
+metres, cleaned, closed, and arc-length resampled to 600 centerline points.
+Synthetic inner and outer boundaries use a fixed 20 m visual width; they are not
+surveyed asphalt limits. Missing or degenerate geometry fails closed. Rotation
+defaults to zero because it is cosmetic and absent from canonical Parquet.
+
+### Bahrain 2024 sizing baseline
+
+The real Bahrain race generation contains 72,015 exact union timestamps over
+9,372,932 ms (about 7.7 Hz average). Exact-union browser publication produced
+935 chunks, including overlap, and 79,218 delivered points. Measured output:
+
+- 126.48 MB raw JSON total;
+- 7.61 MB for individually gzip-compressed chunks;
+- median chunk: 135.1 KB raw / 10.5 KB gzip;
+- p95 chunk: 147.8 KB raw / 11.5 KB gzip;
+- maximum chunk: 159.9 KB raw / 12.1 KB gzip.
+
+The baseline therefore keeps exact native timestamps for the MVP. A regular
+5/10/20 Hz cadence would respectively create about 46,865 / 93,730 / 187,459
+samples and would change delivery semantics without a material need. CDN and
+HTTP servers should enable gzip or Brotli content encoding for chunk JSON.

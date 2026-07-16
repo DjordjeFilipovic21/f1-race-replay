@@ -18,6 +18,7 @@ __pycache__/
 # Local FastF1/cache/generated data
 .fastf1-cache
 computed_data/
+/artifacts/
 
 # Generated media/output
 output_animation.mp4

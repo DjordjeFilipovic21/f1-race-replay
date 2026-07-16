@@ -33,7 +33,7 @@ alter canonical rows.
 
 | Browser field | Canonical source | Rule |
 | --- | --- | --- |
-| `x`, `y` | `position_telemetry.x/y` | Exact timestamp alignment; otherwise `null`. |
+| `x`, `y` | `position_telemetry.x/y` | Divide raw FastF1 decimetres by 10 to metres; exact timestamp alignment, otherwise `null`. |
 | `speed` | `car_telemetry.speed_kph` | Preserve the canonical numeric value; otherwise `null`. |
 | `throttle` | `car_telemetry.throttle_pct` | Preserve the canonical numeric value; otherwise `null`. |
 | `brake` | `car_telemetry.brake` | Convert `false` to `0`, `true` to `1`, and preserve `null`. |
@@ -149,6 +149,22 @@ fixture identifiers and names, and `chunks` must support any non-empty ordered
 chunk count with the declared sequencing and ownership invariants. The
 committed deterministic fixture and its golden snapshots remain schema-valid
 and unchanged. Breaking changes require a new contract-version directory.
+
+## 8. Track generation and measured cadence
+
+Track assets may be deterministically derived from the shortest accurate,
+non-deleted, non-pit canonical lap with usable position telemetry. FastF1 raw
+`X/Y` values are divided by 10 to metres, closed, arc-length resampled to 600
+points, and offset by a fixed 20 m visual width. Boundaries are illustrative,
+not surveyed circuit limits. Collinear, out-and-back, zero-area, and otherwise
+degenerate geometry fails closed. A 2D crossing alone is not rejected because
+grade-separated layouts such as Suzuka are legitimate.
+
+The Bahrain 2024 race measured 72,015 exact union timestamps, 935 published
+chunks, 126.48 MB raw JSON, and 7.61 MB of individually gzip-compressed chunks.
+Median compressed chunk size was 10.5 KB and p95 was 11.5 KB. The MVP therefore
+retains exact-union timestamps and relies on HTTP compression rather than
+introducing a new sampling cadence.
 
 See [Replay Data Contract](replay-data-contract.md), [Canonical Parquet Writer
 Contract](canonical-parquet-writer-contract.md), [ADR-001](adr/001-canonical-pipeline-foundation.md),

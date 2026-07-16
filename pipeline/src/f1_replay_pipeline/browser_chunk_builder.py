@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -184,10 +185,20 @@ def build_browser_chunks(
     _validate_drivers(driver_fields)
     ordered_events = tuple(sorted(events, key=_event_sort_key))
     timeline = _shared_timeline(driver_fields, global_fields)
+    aligned_drivers = {
+        driver_id: _align_driver(fields, timeline) for driver_id, fields in driver_fields.items()
+    }
+    aligned_globals = BrowserGlobalFields(
+        timeline,
+        _align(global_fields.time_ms, global_fields.leaderboard_order, timeline),
+        _align(global_fields.time_ms, global_fields.track_status_code, timeline),
+        _align(global_fields.time_ms, global_fields.weather_state, timeline),
+    )
+    intervals = _chunk_intervals(timeline, start_ms, end_ms, chunk_duration_ms)
     return tuple(
-        _build_chunk(sequence, chunk_start, min(chunk_start + chunk_duration_ms, end_ms), timeline,
-                     driver_fields, global_fields, ordered_events, overlap_ms)
-        for sequence, chunk_start in enumerate(range(start_ms, end_ms, chunk_duration_ms), start=1)
+        _build_chunk(sequence, chunk_start, chunk_end, timeline,
+                     aligned_drivers, aligned_globals, ordered_events, overlap_ms)
+        for sequence, (chunk_start, chunk_end) in enumerate(intervals, start=1)
     )
 
 
@@ -197,18 +208,21 @@ def _build_chunk(
     events: tuple[BrowserEvent, ...], overlap_ms: int,
 ) -> BrowserChunk:
     overlap_start = start_ms if sequence == 1 else start_ms - overlap_ms
-    chunk_timeline = tuple(time_ms for time_ms in timeline if overlap_start <= time_ms < end_ms)
-    authoritative_start_index = sum(time_ms < start_ms for time_ms in chunk_timeline)
+    left = bisect_left(timeline, overlap_start)
+    authority = bisect_left(timeline, start_ms)
+    right = bisect_left(timeline, end_ms)
+    chunk_timeline = timeline[left:right]
+    authoritative_start_index = authority - left
     if authoritative_start_index == len(chunk_timeline):
         raise ValueError("every chunk interval must contain an authoritative observation")
     return BrowserChunk(
         chunk_id=_chunk_id(sequence), sequence=sequence, start_ms=start_ms, end_ms=end_ms,
         overlap=_overlap(sequence, start_ms, overlap_start), time_ms=chunk_timeline,
         authoritative_start_index=authoritative_start_index,
-        drivers={driver_id: _align_driver(fields, chunk_timeline) for driver_id, fields in driver_fields.items()},
-        leaderboard_order=_align(global_fields.time_ms, global_fields.leaderboard_order, chunk_timeline),
-        track_status_code=_align(global_fields.time_ms, global_fields.track_status_code, chunk_timeline),
-        weather_state=_align(global_fields.time_ms, global_fields.weather_state, chunk_timeline),
+        drivers={driver_id: _slice_driver(fields, left, right) for driver_id, fields in driver_fields.items()},
+        leaderboard_order=global_fields.leaderboard_order[left:right],
+        track_status_code=global_fields.track_status_code[left:right],
+        weather_state=global_fields.weather_state[left:right],
         events=tuple(event for event in events if start_ms <= event.session_time_ms < end_ms),
     )
 
@@ -227,6 +241,19 @@ def _align_driver(fields: BrowserDriverFields, timeline: tuple[int, ...]) -> Bro
     )
 
 
+def _slice_driver(fields: BrowserDriverFields, left: int, right: int) -> BrowserDriverFields:
+    return BrowserDriverFields(
+        driver_id=fields.driver_id, time_ms=fields.time_ms[left:right],
+        x=fields.x[left:right], y=fields.y[left:right], speed=fields.speed[left:right],
+        throttle=fields.throttle[left:right], brake=fields.brake[left:right],
+        gear=fields.gear[left:right], drs=fields.drs[left:right], status=fields.status[left:right],
+        lap=fields.lap[left:right], tyre_compound=fields.tyre_compound[left:right],
+        is_in_pit_lane=fields.is_in_pit_lane[left:right],
+        track_distance_meters=fields.track_distance_meters[left:right],
+        gap_to_leader_ms=fields.gap_to_leader_ms[left:right], position=fields.position[left:right],
+    )
+
+
 def _align(
     source_times: tuple[int, ...], values: tuple[FieldValue, ...], timeline: tuple[int, ...],
 ) -> tuple[FieldValue | None, ...]:
@@ -238,6 +265,20 @@ def _shared_timeline(
     driver_fields: Mapping[str, BrowserDriverFields], global_fields: BrowserGlobalFields,
 ) -> tuple[int, ...]:
     return tuple(sorted({time_ms for fields in driver_fields.values() for time_ms in fields.time_ms} | set(global_fields.time_ms)))
+
+
+def _chunk_intervals(timeline, start_ms: int, end_ms: int, duration_ms: int):
+    intervals: list[list[int]] = []
+    for chunk_start in range(start_ms, end_ms, duration_ms):
+        chunk_end = min(chunk_start + duration_ms, end_ms)
+        has_authority = bisect_left(timeline, chunk_start) < bisect_left(timeline, chunk_end)
+        if has_authority:
+            intervals.append([chunk_start, chunk_end])
+        elif intervals:
+            intervals[-1][1] = chunk_end
+        else:
+            raise ValueError("delivery begins without an authoritative observation")
+    return tuple((start, end) for start, end in intervals)
 
 
 def _overlap(sequence: int, start_ms: int, overlap_start: int) -> BrowserOverlap:
