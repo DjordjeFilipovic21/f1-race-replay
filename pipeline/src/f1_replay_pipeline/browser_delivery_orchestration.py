@@ -34,6 +34,10 @@ class BrowserDeliveryBuild:
         object.__setattr__(self, "chunks", tuple(self.chunks))
 
 
+class BrowserDeliveryBuildError(ValueError):
+    """An expected failure deriving browser artifacts from canonical data."""
+
+
 def build_browser_delivery(
     snapshot: CanonicalGenerationSnapshot,
     track_assets: Mapping[str, object],
@@ -42,34 +46,37 @@ def build_browser_delivery(
     overlap_ms: int = 1_000,
 ) -> BrowserDeliveryBuild:
     """Derive all contract fields without rereading or mutating canonical data."""
-    session = snapshot.frames["session_metadata"].row(0, named=True)
-    fixture_id = cast(str, session["session_id"])
-    _validate_track_assets(track_assets, fixture_id)
-    driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
-    native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
-    timeline = _delivery_timeline(snapshot, native_drivers)
-    if not timeline:
-        raise ValueError("a browser delivery requires at least one canonical timestamp")
-    drivers = {
-        driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
-        for driver_id in driver_ids
-    }
-    globals_ = _global_fields(snapshot, timeline, driver_ids)
-    events = _events(snapshot)
-    chunks = build_browser_chunks(
-        drivers,
-        globals_,
-        events,
-        start_ms=timeline[0],
-        end_ms=timeline[-1] + 1,
-        chunk_duration_ms=chunk_duration_ms,
-        overlap_ms=overlap_ms,
-    )
-    manifest = BrowserManifest(
-        fixture_id,
-        f"{session['event_name']} {session['session_name']}",
-        _driver_metadata(snapshot),
-    )
+    try:
+        session = snapshot.frames["session_metadata"].row(0, named=True)
+        fixture_id = cast(str, session["session_id"])
+        _validate_track_assets(track_assets, fixture_id)
+        driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
+        native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
+        timeline = _delivery_timeline(snapshot, native_drivers)
+        if not timeline:
+            raise ValueError("a browser delivery requires at least one canonical timestamp")
+        drivers = {
+            driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
+            for driver_id in driver_ids
+        }
+        globals_ = _global_fields(snapshot, timeline, driver_ids)
+        events = _events(snapshot)
+        chunks = build_browser_chunks(
+            drivers,
+            globals_,
+            events,
+            start_ms=timeline[0],
+            end_ms=timeline[-1] + 1,
+            chunk_duration_ms=chunk_duration_ms,
+            overlap_ms=overlap_ms,
+        )
+        manifest = BrowserManifest(
+            fixture_id,
+            f"{session['event_name']} {session['session_name']}",
+            _driver_metadata(snapshot),
+        )
+    except ValueError as error:
+        raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(snapshot, manifest, track_assets, chunks)
 
 
@@ -160,4 +167,4 @@ def _validate_track_assets(track_assets: Mapping[str, object], fixture_id: str) 
         raise ValueError("track assets must be v1 and match the canonical session_id")
 
 
-__all__ = ["BrowserDeliveryBuild", "build_browser_delivery"]
+__all__ = ["BrowserDeliveryBuild", "BrowserDeliveryBuildError", "build_browser_delivery"]

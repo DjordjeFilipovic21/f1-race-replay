@@ -19,6 +19,7 @@ from f1_replay_pipeline.canonical_generation_validation import validate_complete
 from f1_replay_pipeline.canonical_schema import CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.dataset_manifest import DatasetManifest, TableManifestEntry
 from f1_replay_pipeline.generation_publication import (
+    GenerationPublicationError,
     GenerationPublicationResult,
     read_regular_file_no_follow,
     resolve_current_generation,
@@ -31,6 +32,10 @@ from f1_replay_pipeline.validators import validate_canonical_table
 GenerationResolver = Callable[[Path], GenerationPublicationResult]
 GenerationValidator = Callable[..., DatasetManifest]
 TableReader = Callable[[Path, tuple[str, ...]], pl.DataFrame]
+
+
+class BrowserDeliveryReadError(ValueError):
+    """An expected canonical-read failure at the browser delivery boundary."""
 
 
 @dataclass(frozen=True)
@@ -53,18 +58,21 @@ def read_validated_canonical_generation(
     """
     if not isinstance(target_parent, Path):
         raise TypeError("target_parent must be a pathlib.Path")
-    resolved = dependencies.resolver(target_parent)
-    manifest = dependencies.validator(
-        resolved.generation_path,
-        expected_generation_id=resolved.generation_path.name,
-        expected_manifest_sha256=resolved.manifest_sha256,
-    )
-    reader = _read_projected_table if dependencies.table_reader is None else dependencies.table_reader
-    entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
-    frames = {
-        entry.name: _read_and_verify_table(resolved.generation_path, entry, reader)
-        for entry in entries
-    }
+    try:
+        resolved = dependencies.resolver(target_parent)
+        manifest = dependencies.validator(
+            resolved.generation_path,
+            expected_generation_id=resolved.generation_path.name,
+            expected_manifest_sha256=resolved.manifest_sha256,
+        )
+        reader = _read_projected_table if dependencies.table_reader is None else dependencies.table_reader
+        entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
+        frames = {
+            entry.name: _read_and_verify_table(resolved.generation_path, entry, reader)
+            for entry in entries
+        }
+    except (GenerationPublicationError, ValueError) as error:
+        raise BrowserDeliveryReadError(str(error)) from error
     return CanonicalGenerationSnapshot(resolved.generation_path.name, resolved.manifest_sha256, frames)
 
 
@@ -177,5 +185,5 @@ def _browser_coordinate(value: object) -> float | None:
 
 __all__ = [
     "CanonicalReaderDependencies", "GenerationResolver", "GenerationValidator", "TableReader",
-    "derive_browser_driver_fields", "read_validated_canonical_generation",
+    "BrowserDeliveryReadError", "derive_browser_driver_fields", "read_validated_canonical_generation",
 ]
