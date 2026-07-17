@@ -6,6 +6,14 @@ This document freezes the Phase 2 boundary between validated canonical Parquet
 and browser replay artifacts. Browser data is derived; canonical tables remain
 the loss-minimizing source of truth.
 
+Canonical generation is complete before delivery is built. Browser delivery is
+race-only: it starts at the earliest non-null canonical Lap 1
+`lap_start_time_ms` and excludes earlier timestamps and events from browser
+chunks. This crop keeps browser playback focused on the race while preserving
+pre-race canonical observations for resolving global state at race start. A
+missing Lap 1 start fails closed; it does not produce an ambiguous browser
+timeline.
+
 ## 1. Canonical-generation reader
 
 The reader accepts only `target_parent: Path`. It resolves the canonical
@@ -84,6 +92,11 @@ Events belong to the chunk whose authoritative interval contains their
 timestamp. A consumer resolves duplicate timestamps using the owning chunk, not
 the overlap reference.
 
+Chunk timestamps remain absolute integer `sessionTimeMs`; delivery does not
+rebase them to zero. Web controls may display elapsed time relative to the
+manifest's first chunk start (so Lap 1 displays as `0:00.000`), but engine time
+and seeking remain absolute.
+
 The committed `deterministic-race` fixture is a compatibility fixture: its
 existing two chunks, 2,000 ms boundaries, 500 ms overlap, golden snapshots, and
 all bytes remain unchanged. Production chunk sizing must not rewrite that
@@ -160,11 +173,18 @@ not surveyed circuit limits. Collinear, out-and-back, zero-area, and otherwise
 degenerate geometry fails closed. A 2D crossing alone is not rejected because
 grade-separated layouts such as Suzuka are legitimate.
 
-The Bahrain 2024 race measured 72,015 exact union timestamps, 935 published
-chunks, 126.48 MB raw JSON, and 7.61 MB of individually gzip-compressed chunks.
-Median compressed chunk size was 10.5 KB and p95 was 11.5 KB. The MVP therefore
-retains exact-union timestamps and relies on HTTP compression rather than
-introducing a new sampling cadence.
+The Bahrain 2024 race-only delivery currently measures:
+
+- `startMs`: `3,599,911`; `endMs`: `9,374,320`; displayed duration:
+  `5,774,409 ms`
+- 575 chunks, 44,747 authoritative timestamps, and 4,453 overlap rows
+- 78.38 MB raw chunk JSON and 6.28 MB gzip
+- median gzip chunk size 11.0 KB; p95 11.7 KB
+
+The delivery retains exact-union timestamps and relies on HTTP compression rather
+than introducing a new sampling cadence. An earlier whole-session measurement
+(72,015 timestamps, 935 chunks, 126.48 MB raw JSON, 7.61 MB gzip) is historical
+context only and is not the current race-only browser delivery.
 
 See [Replay Data Contract](replay-data-contract.md), [Canonical Parquet Writer
 Contract](canonical-parquet-writer-contract.md), [ADR-001](adr/001-canonical-pipeline-foundation.md),

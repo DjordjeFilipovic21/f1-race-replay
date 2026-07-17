@@ -13,6 +13,8 @@ export interface ReplayControlsProps {
 export function ReplayControls({ controller, startMs, endMs }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const isReady = snapshot.status === 'ready'
+  const elapsedMs = relativeElapsedMs(snapshot.timeMs, startMs, endMs)
+  const durationMs = relativeElapsedMs(endMs, startMs, endMs)
   const driver = snapshot.replay === null
     ? null
     : Object.entries(snapshot.replay.drivers)[0] ?? null
@@ -38,7 +40,7 @@ export function ReplayControls({ controller, startMs, endMs }: ReplayControlsPro
           <h1 id="replay-panel-title">F1 Race Replay</h1>
         </div>
         <output className="replay-time" aria-label="Replay time">
-          {formatTime(snapshot.timeMs)} / {formatTime(endMs)}
+          {formatTime(elapsedMs)} / {formatTime(durationMs)}
         </output>
       </header>
 
@@ -61,7 +63,7 @@ export function ReplayControls({ controller, startMs, endMs }: ReplayControlsPro
             max={endMs}
             step="1"
             value={snapshot.timeMs}
-            aria-valuetext={formatTime(snapshot.timeMs)}
+            aria-valuetext={formatTime(elapsedMs)}
             disabled={!isReady}
             onInput={handleSeek}
           />
@@ -105,6 +107,10 @@ function formatTime(timeMs: number): string {
   const seconds = wholeSeconds % 60
   const milliseconds = timeMs % 1000
   return `${minutes}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`
+}
+
+function relativeElapsedMs(timeMs: number, startMs: number, endMs: number): number {
+  return Math.min(Math.max(timeMs - startMs, 0), Math.max(endMs - startMs, 0))
 }
 
 function formatNumber(value: number | null, unit = ''): string {

@@ -14,7 +14,10 @@ from jsonschema.exceptions import ValidationError
 from referencing import Registry, Resource
 
 from f1_replay_pipeline.browser_chunk_builder import CONTINUOUS_FIELD_SEMANTICS, PREVIOUS_VALUE_FIELD_SEMANTICS
-from f1_replay_pipeline.browser_delivery_orchestration import build_browser_delivery
+from f1_replay_pipeline.browser_delivery_orchestration import (
+    BrowserDeliveryBuildError,
+    build_browser_delivery,
+)
 from f1_replay_pipeline.browser_delivery_publication import (
     BrowserDeliveryPublicationError,
     publish_browser_delivery,
@@ -23,6 +26,7 @@ from f1_replay_pipeline.browser_delivery_reader import read_validated_canonical_
 from f1_replay_pipeline.canonical_schema import CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
+from f1_replay_pipeline.validators import CanonicalValidationError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -118,6 +122,80 @@ def test_browser_publication_rejects_an_unsafe_version_before_creating_output(
     assert not (tmp_path / "browser").exists()
 
 
+def test_browser_delivery_starts_at_lap_one_and_preserves_pre_race_global_state(
+    tmp_path: Path,
+) -> None:
+    # Arrange: canonical data retains pre-race observations and a later Lap 1 start.
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(lap_one_start_ms=5_000, include_pre_race=True),
+        target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+
+    # Act: derive browser-only artifacts from the unmodified canonical generation.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets()
+    )
+
+    # Assert: absolute race-time delivery excludes the pre-race event but owns the boundary event.
+    first_chunk = delivery.chunks[0]
+    boundary_chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= 10_000 < chunk.end_ms)
+    assert first_chunk.start_ms == first_chunk.time_ms[0] == 5_000
+    assert all(time_ms >= 5_000 for chunk in delivery.chunks for time_ms in chunk.time_ms)
+    assert not any(
+        event.session_time_ms == 1_000 and event.description == "pre-race event"
+        for chunk in delivery.chunks
+        for event in chunk.events
+    )
+    assert [(event.session_time_ms, event.description) for event in boundary_chunk.events] == [
+        (10_000, "boundary event"),
+    ]
+    assert first_chunk.weather_state[0] == "clear"
+    assert first_chunk.track_status_code[0] == 2
+
+
+def test_browser_delivery_selects_the_earliest_lap_one_start_across_drivers(
+    tmp_path: Path,
+) -> None:
+    # Arrange: multiple drivers report different valid Lap 1 starts.
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(lap_one_rows=(("HAM", 7_000), ("VER", 6_000), ("LEC", 5_000))),
+        target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+
+    # Act: derive the browser delivery from the validated multi-driver snapshot.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets()
+    )
+
+    # Assert: the earliest canonical Lap 1 start owns delivery regardless of driver order.
+    assert delivery.chunks[0].start_ms == delivery.chunks[0].time_ms[0] == 5_000
+
+
+def test_canonical_boundary_rejects_null_lap_one_starts(tmp_path: Path) -> None:
+    # Canonical validation guarantees browser snapshots cannot contain null Lap 1 starts.
+    canonical_parent = tmp_path / "canonical"
+    with pytest.raises(CanonicalValidationError, match="lap_start_time_ms"):
+        publish_canonical_generation(
+            frames=_canonical_frames(lap_one_rows=(("HAM", None), ("VER", None))),
+            target_parent=canonical_parent,
+            generation_id="canonical-v1",
+        )
+
+
+def test_browser_delivery_fails_closed_without_lap_one_rows(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(lap_number=2), target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+    with pytest.raises(BrowserDeliveryBuildError, match="non-null Lap 1 start time"):
+        build_browser_delivery(read_validated_canonical_generation(canonical_parent), _track_assets())
+
+
 def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compatible() -> None:
     # Arrange: load only committed compatibility artifacts.
     manifest = _load_json(FIXTURE_ROOT / "manifest.json")
@@ -138,7 +216,11 @@ def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compati
     }
 
 
-def _canonical_frames() -> dict[str, pl.DataFrame]:
+def _canonical_frames(
+    *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
+    lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
+    include_pre_race: bool = False,
+) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
     rows["car_telemetry"] = [
         _row("car_telemetry", session_time_ms=time, speed_kph=speed, throttle_pct=throttle,
@@ -160,6 +242,50 @@ def _canonical_frames() -> dict[str, pl.DataFrame]:
         _row("track_status_intervals", start_time_ms=0, end_time_ms=5_000, status="1"),
         _row("track_status_intervals", start_time_ms=5_000, end_time_ms=None, status="4"),
     ]
+    if include_pre_race:
+        rows["track_status_intervals"] = [
+            _row("track_status_intervals", start_time_ms=0, end_time_ms=None, status="2"),
+        ]
+        rows["race_control_messages"] = [
+            _row(
+                "race_control_messages", session_time_ms=1_000,
+                message_index=0, message="pre-race event", driver_id="HAM",
+            ),
+            _row(
+                "race_control_messages", session_time_ms=10_000,
+                message_index=1, message="boundary event", driver_id="HAM",
+            ),
+    ]
+    lap_rows = lap_one_rows or (("HAM", lap_one_start_ms),)
+    extra_driver_ids = tuple(driver_id for driver_id, _ in lap_rows if driver_id != "HAM")
+    source_car_telemetry = tuple(rows["car_telemetry"])
+    source_position_telemetry = tuple(rows["position_telemetry"])
+    for driver_id in extra_driver_ids:
+        rows["drivers"].append(_row(
+            "drivers", driver_id=driver_id, source_driver_key=driver_id,
+            driver_number=1, full_name=driver_id, team_name=f"{driver_id} Racing", team_colour="112233",
+        ))
+        rows["results"].append(_row("results", driver_id=driver_id, classified_position="2"))
+        rows["car_telemetry"].extend(
+            {**row, "driver_id": driver_id, "source_driver_key": driver_id}
+            for row in source_car_telemetry
+        )
+        rows["position_telemetry"].extend(
+            {**row, "driver_id": driver_id, "source_driver_key": driver_id}
+            for row in source_position_telemetry
+        )
+    rows["laps"] = [
+        _row(
+            "laps", driver_id=driver_id, lap_number=lap_number, lap_start_time_ms=lap_start_ms,
+            lap_end_time_ms=20_001, compound="MEDIUM",
+        )
+        for driver_id, lap_start_ms in lap_rows
+    ]
+    rows["drivers"].sort(key=lambda row: row["driver_id"])
+    rows["results"].sort(key=lambda row: row["driver_id"])
+    rows["car_telemetry"].sort(key=lambda row: (row["driver_id"], row["session_time_ms"]))
+    rows["position_telemetry"].sort(key=lambda row: (row["driver_id"], row["session_time_ms"]))
+    rows["laps"].sort(key=lambda row: (row["driver_id"], row["lap_number"]))
     return {name: pl.DataFrame(value, schema=dict(CANONICAL_TABLE_SCHEMAS[name]), strict=True) for name, value in rows.items()}
 
 

@@ -5,6 +5,15 @@ and committed deterministic fixture remain unchanged: both are **v1**. Runtime
 sampling is a read-only interpretation of delivered chunks; it does not rewrite,
 resample, or publish new delivery data.
 
+Canonical generation remains complete, but browser delivery is cropped to the
+race. Its first chunk starts at the earliest non-null canonical Lap 1
+`lap_start_time_ms`; timestamps and events before that point are not delivered
+to browser chunks. The crop avoids making pre-race session activity part of the
+replay timeline. Global weather and status at race start still resolve from
+earlier canonical observations, so cropping delivery does not discard the
+canonical source needed for initial state. If Lap 1 is missing, delivery fails
+closed.
+
 See [Replay Data Contract](replay-data-contract.md) and [Browser delivery
 interface freeze](browser-delivery-interface-freeze.md) for the underlying
 artifact rules.
@@ -16,7 +25,7 @@ be present because another field or driver contributed that timestamp, while a
 particular field remains `null`. Bahrain evidence makes adjacent-index
 sampling unsafe:
 
-- 72,015 authoritative timestamps and 935 chunks were delivered.
+- 44,747 authoritative timestamps and 575 race-only chunks are delivered.
 - Immediate shared-timeline endpoints were both valid only **8.31–9.91%** of
   the time.
 - Per-field valid gaps reached **1,301 ms** for coordinates and **1,319 ms**
@@ -48,6 +57,11 @@ nearest non-null lower and upper values **for that field**:
   value (step semantics); they never look forward or invent a value.
 - Global leaderboard order, track status, and weather also use previous
   non-null semantics. Events remain sparse point records.
+
+Delivered `sessionTimeMs` values remain absolute integer milliseconds. The
+engine and seek API use those absolute values. The web controls separately
+display elapsed time from the manifest's first chunk start, so Lap 1 appears as
+`0:00.000` without rebasing engine time or serialized timestamps.
 
 The result is an immutable `ReplaySnapshot`; arrays and event payloads are
 copied/frozen before publication.
@@ -116,6 +130,11 @@ The following fields have no v1 production canonical source and are therefore
 must not infer production values for them. More generally, a `null` value is
 preserved; the 1,000 ms rule is runtime policy, not a guarantee that every
 production field can be interpolated.
+
+For current race-only Bahrain delivery, the measured range is `3,599,911` to
+`9,374,320` ms (displayed duration `5,774,409 ms`), with 4,453 overlap rows.
+The previous whole-session count of 72,015 timestamps and 935 chunks is
+historical context, not the current browser-delivery size.
 
 ## Public controller example
 
