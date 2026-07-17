@@ -70,15 +70,21 @@ export interface TrackAssets {
   readonly drsZones?: readonly DrsZone[]
 }
 
+/** Nullable derived columns preserve v1 null-only browser generations. */
+export type DerivedDistanceMeters = number | null
+export type DerivedGapToLeaderMs = number | null
+export type DerivedPosition = number | null
+
 export interface DriverColumns {
   readonly x: readonly (number | null)[]; readonly y: readonly (number | null)[]
-  readonly trackDistanceMeters: readonly (number | null)[]; readonly speed: readonly (number | null)[]
+  readonly trackDistanceMeters: readonly DerivedDistanceMeters[]; readonly speed: readonly (number | null)[]
   readonly throttle: readonly (number | null)[]; readonly brake: readonly (number | null)[]
-  readonly gapToLeaderMs: readonly (number | null)[]; readonly lap: readonly (number | null)[]
-  readonly position: readonly (number | null)[]; readonly gear: readonly (number | null)[]
+  readonly gapToLeaderMs: readonly DerivedGapToLeaderMs[]; readonly lap: readonly (number | null)[]
+  readonly position: readonly DerivedPosition[]; readonly gear: readonly (number | null)[]
   readonly drs: readonly (number | null)[]; readonly tyreCompound: readonly (string | null)[]
   readonly status: readonly (string | null)[]; readonly isInPitLane: readonly (boolean | null)[]
 }
+
 
 export interface ReplayEvent {
   readonly sessionTimeMs: number; readonly eventType: string; readonly description: string

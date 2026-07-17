@@ -18,6 +18,7 @@ interface PreparedDriver {
 
 export interface PreparedReplaySampler {
   readonly drivers: Readonly<Record<string, PreparedDriver>>
+  readonly circuitLengthMeters: number
   readonly leaderboardOrder: PreparedValues<readonly string[]>
   readonly trackStatusCode: PreparedValues<number>
   readonly weatherState: PreparedValues<string>
@@ -29,6 +30,7 @@ export function prepareReplaySampler(replay: ReplayData, timeline = createAuthor
   const driverValues = Object.fromEntries(replay.manifest.drivers.map(({ id }) => [id, prepareDriver(replay, timeline, id)]))
   return Object.freeze({
     drivers: Object.freeze(driverValues),
+    circuitLengthMeters: replay.trackAssets.circuitLengthMeters,
     leaderboardOrder: prepareGlobal(replay, timeline, 'leaderboardOrder'),
     trackStatusCode: prepareGlobal(replay, timeline, 'trackStatusCode'),
     weatherState: prepareGlobal(replay, timeline, 'weatherState'),
@@ -43,11 +45,13 @@ export function sampleReplayAt(replay: ReplayData, sessionTimeMs: number, timeli
 
 export function samplePreparedReplayAt(prepared: PreparedReplaySampler, sessionTimeMs: number): ReplaySnapshot {
   if (!Number.isSafeInteger(sessionTimeMs)) throw new RangeError('Replay time must be an integer millisecond')
-  const drivers = Object.fromEntries(Object.entries(prepared.drivers).map(([id, driver]) => [id, sampleDriver(driver, sessionTimeMs)]))
+  const sampledDrivers = Object.fromEntries(Object.entries(prepared.drivers).map(([id, driver]) => [id, sampleDriver(driver, sessionTimeMs, prepared.circuitLengthMeters)]))
+  const leaderboardOrder = copyStepArray(previousValue(prepared.leaderboardOrder, sessionTimeMs))
+  const drivers = setSampledLeaderGapToZero(sampledDrivers, leaderboardOrder)
   return Object.freeze({
     sessionTimeMs,
-    drivers: Object.freeze(drivers),
-    leaderboardOrder: copyStepArray(previousValue(prepared.leaderboardOrder, sessionTimeMs)),
+    drivers,
+    leaderboardOrder,
     trackStatusCode: previousValue(prepared.trackStatusCode, sessionTimeMs),
     weatherState: previousValue(prepared.weatherState, sessionTimeMs),
     events: Object.freeze(exactTimeEvents(prepared.events, sessionTimeMs).map(copyEvent)),
@@ -86,11 +90,11 @@ function prepareGlobal<T extends GlobalField>(replay: ReplayData, timeline: Auth
   return Object.freeze({ times: Object.freeze(times), values: Object.freeze(values) })
 }
 
-function sampleDriver(driver: PreparedDriver, timeMs: number): DriverSnapshot {
+function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeters: number): DriverSnapshot {
   const continuous = (field: ContinuousField) => interpolate(driver.continuous[field], timeMs)
   const step = <T,>(field: StepField): T | null => previousValue(driver.step[field], timeMs) as T | null
   return Object.freeze({
-    x: continuous('x'), y: continuous('y'), trackDistanceMeters: continuous('trackDistanceMeters'), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
+    x: continuous('x'), y: continuous('y'), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
     lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'),
   })
 }
@@ -98,9 +102,47 @@ function sampleDriver(driver: PreparedDriver, timeMs: number): DriverSnapshot {
 function interpolate(values: PreparedValues<number>, timeMs: number): number | null {
   const upperIndex = findTimeIndex(values.times, timeMs)
   const lowerIndex = upperIndex < values.times.length && values.times[upperIndex] === timeMs ? upperIndex : upperIndex - 1
-  if (lowerIndex < 0 || upperIndex === values.times.length || values.times[upperIndex] - values.times[lowerIndex] > MAX_INTERPOLATION_INTERVAL_MS) return null
   if (lowerIndex === upperIndex) return values.values[lowerIndex]
+  if (lowerIndex < 0 || upperIndex === values.times.length || values.times[upperIndex] - values.times[lowerIndex] > MAX_INTERPOLATION_INTERVAL_MS) return null
   return values.values[lowerIndex] + (values.values[upperIndex] - values.values[lowerIndex]) * ((timeMs - values.times[lowerIndex]) / (values.times[upperIndex] - values.times[lowerIndex]))
+}
+
+/** Keeps the marker moving forward across the centerline without changing source samples. */
+function interpolateCircuitDistance(values: PreparedValues<number>, timeMs: number, circuitLengthMeters: number): number | null {
+  const upperIndex = findTimeIndex(values.times, timeMs)
+  const lowerIndex = upperIndex < values.times.length && values.times[upperIndex] === timeMs ? upperIndex : upperIndex - 1
+  if (lowerIndex === upperIndex) return values.values[lowerIndex]
+  if (lowerIndex < 0 || upperIndex === values.times.length || values.times[upperIndex] - values.times[lowerIndex] > MAX_INTERPOLATION_INTERVAL_MS) return null
+
+  const lower = values.values[lowerIndex]
+  const upper = values.values[upperIndex]
+  const ratio = (timeMs - values.times[lowerIndex]) / (values.times[upperIndex] - values.times[lowerIndex])
+  if (isApprovedGeometricWrap(lower, upper, circuitLengthMeters)) return (lower + (upper + circuitLengthMeters - lower) * ratio) % circuitLengthMeters
+  if (isLargeBackwardDistance(lower, upper, circuitLengthMeters)) return null
+  return lower + (upper - lower) * ratio
+}
+
+function isApprovedGeometricWrap(lower: number, upper: number, circuitLengthMeters: number): boolean {
+  return isValidCircuitLength(circuitLengthMeters)
+    && lower >= circuitLengthMeters * 0.9
+    && upper <= circuitLengthMeters * 0.1
+    && lower - upper >= circuitLengthMeters * 0.8
+}
+
+function isLargeBackwardDistance(lower: number, upper: number, circuitLengthMeters: number): boolean {
+  return isValidCircuitLength(circuitLengthMeters) && lower - upper >= circuitLengthMeters * 0.8
+}
+
+function isValidCircuitLength(value: number): boolean { return Number.isFinite(value) && value > 0 }
+
+function setSampledLeaderGapToZero(
+  drivers: Record<string, DriverSnapshot>, leaderboardOrder: readonly string[] | null,
+): Readonly<Record<string, DriverSnapshot>> {
+  const leaderId = leaderboardOrder?.[0]
+  if (leaderId === undefined) return Object.freeze(drivers)
+  const leader = drivers[leaderId]
+  if (leader?.position !== 1) return Object.freeze(drivers)
+  return Object.freeze({ ...drivers, [leaderId]: Object.freeze({ ...leader, gapToLeaderMs: 0 }) })
 }
 
 function previousValue<T>(values: PreparedValues<T>, timeMs: number): T | null {

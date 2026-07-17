@@ -1,160 +1,97 @@
 # Browser replay-engine runtime semantics
 
-This document describes the implemented browser runtime. The delivery contract
-and committed deterministic fixture remain unchanged: both are **v1**. Runtime
-sampling is a read-only interpretation of delivered chunks; it does not rewrite,
-resample, or publish new delivery data.
+The runtime is a read-only interpretation of browser chunks. It does not
+rewrite, resample, or publish delivery data. Canonical Parquet remains native
+cadence and unchanged; track distance, cumulative progress, position, dynamic
+order, and gaps are browser-derived fields.
 
-Canonical generation remains complete, but browser delivery is cropped to the
-race. Its first chunk starts at the earliest non-null canonical Lap 1
-`lap_start_time_ms`; timestamps and events before that point are not delivered
-to browser chunks. The crop avoids making pre-race session activity part of the
-replay timeline. Global weather and status at race start still resolve from
-earlier canonical observations, so cropping delivery does not discard the
-canonical source needed for initial state. If Lap 1 is missing, delivery fails
-closed.
+## Timeline and ownership
 
-See [Replay Data Contract](replay-data-contract.md) and [Browser delivery
-interface freeze](browser-delivery-interface-freeze.md) for the underlying
-artifact rules.
+Delivery starts at the earliest non-null Lap 1 `lap_start_time_ms`. Timestamps
+remain absolute integer `sessionTimeMs`; controls display elapsed time relative
+to the race start. Chunk ownership remains half-open `[startMs, endMs)`, and
+samples before `authoritativeStartIndex` are overlap-only references. Overlap
+samples do not create duplicate authority.
 
-## Why shared-timeline adjacency is invalid
+The sampler searches valid values for the requested field, not merely adjacent
+shared-timeline rows:
 
-Production delivery uses the exact union of valid source timestamps. A row can
-be present because another field or driver contributed that timestamp, while a
-particular field remains `null`. Bahrain evidence makes adjacent-index
-sampling unsafe:
+- continuous values (`x`, `y`, `trackDistanceMeters`, `speed`, `throttle`,
+  `brake`, `gapToLeaderMs`) interpolate only between same-driver valid bounds;
+- the bound interval must be `<= 1,000 ms`; otherwise the result is `null`;
+- position, lap, status, pit state, tyre, and other discrete/categorical fields
+  use previous-value semantics; no forward fill or invention occurs;
+- sparse events are exact-time records.
 
-- 44,747 authoritative timestamps and 575 race-only chunks are delivered.
-- Immediate shared-timeline endpoints were both valid only **8.31–9.91%** of
-  the time.
-- Per-field valid gaps reached **1,301 ms** for coordinates and **1,319 ms**
-  for car telemetry (p99: 480 ms).
+Example: a null coordinate at `12,000` ms is not bridged from `10,000` to
+`12,001` ms, because that field's valid bound interval exceeds the 1,000 ms
+cap.
 
-The sampler therefore never treats the next shared-timeline row as the bound
-for a field merely because it is adjacent.
+## Circular track-distance sampling
 
-## Timeline, ownership, and sampling
+For `trackDistanceMeters`, interpolation follows the approved circular branch
+when the lower value is in the final 10%, the upper value is in the initial
+10%, and the backward decrease is at least 80% of circuit length. It adds one
+circuit length for interpolation and wraps the result back into the circuit.
+An invalid large backward jump returns `null`; it is not silently smoothed.
 
-- Time is an integer millisecond.
-- Chunk ownership is half-open: `[startMs, endMs)`.
-- Entries before `authoritativeStartIndex` are overlap-only references.
-- For duplicate timestamps, the chunk whose interval owns the time wins. The
-  overlap copy is available for handoff bounds, not ownership.
-- The active window is previous/current/next. The adjacent chunk is required at
-  a handoff because the current chunk can contain the lower bound while the
-  next chunk supplies the upper bound.
+The same `geometric-wrap-v1` ratios govern production derivation. Projection is
+onto metre centerline segments with a 75 m maximum residual; adjacent segments
+are one local branch, while non-adjacent candidates within 5 m require prior
+continuity. At most one wrap is allowed per timing lap, and timing-lap and
+geometric-origin boundaries may differ.
 
-For each driver field, the sampler searches the authoritative timeline for the
-nearest non-null lower and upper values **for that field**:
+## Live semantics
 
-- Continuous numeric fields (`x`, `y`, `speed`, `throttle`, `brake`,
-  `trackDistanceMeters`, `gapToLeaderMs`) are linearly interpolated only when
-  both bounds exist and their interval is at most **1,000 ms**.
-- A missing bound, or a bound interval over 1,000 ms, returns `null`.
-- There is no extrapolation before the first valid value or after the last.
-- Discrete, categorical, and boolean fields use the nearest previous non-null
-  value (step semantics); they never look forward or invent a value.
-- Global leaderboard order, track status, and weather also use previous
-  non-null semantics. Events remain sparse point records.
+The production gate is per generation, source-lap-excluding, native-cadence,
+and bounded to 32 samples per holdout lap. It is fail-closed. Failed,
+insufficient, or malformed legacy geometry leaves derived arrays null and
+falls back to stable classified-results order; old null-only v1 generations
+remain valid and replayable.
 
-Delivered `sessionTimeMs` values remain absolute integer milliseconds. The
-engine and seek API use those absolute values. The web controls separately
-display elapsed time from the manifest's first chunk start, so Lap 1 appears as
-`0:00.000` without rebasing engine time or serialized timestamps.
+Progress is monotonic through an envelope. Ranking ties resolve by prior order,
+then driver ID. Null progress is omitted, while pit and terminal modes freeze
+progress rather than receiving an artificial penalty. Active missing projection
+freezes the last valid progress only before the 1,000 ms stale boundary; at the
+boundary it becomes null. `OffTrack` is not terminal. Terminal inference from
+final results is conservative and only follows the final position sample.
 
-The result is an immutable `ReplaySnapshot`; arrays and event payloads are
-copied/frozen before publication.
+The serialized `status` remains the exact `position_telemetry.status` value.
+The UI must not infer retirement or fabricate `OUT` from a missing status.
 
-## Chunk cache and loading
+`gapToLeaderMs` is derived from the current leader's equivalent-progress
+crossing time, using linear time interpolation through available leader
+history. There is no constant-speed heuristic. The leader is zero; insufficient
+leader history produces null. At sampling time, the current leader is normalized
+to zero when its sampled position is 1, including after continuous interpolation.
 
-`createReplayController` loads a bounded working set rather than all chunks:
+## Deterministic control behavior
 
-1. A seek loads the requested chunk plus previous and next chunks in parallel
-   when they exist.
-2. Requests for the same sequence share one in-flight promise.
-3. After a successful seek, chunks outside the previous/current/next window
-   are evicted.
-4. `retry()` repeats the last requested sequence/window after an error.
-5. A seek revision makes completions from an abandoned seek inert: stale
-   completions do not replace the published snapshot or ready window.
-
-The controller reports `loading`, `ready`, or `error` and keeps the error for
-the current request. Playback does not resume from a failed load until the
-request succeeds (or the caller retries).
-
-## Clock and controller behavior
-
-Supported speeds are `0.25x`, `0.5x`, `1x`, `2x`, and `4x`; reverse playback is
-not supported. The controller:
-
-- clamps seeks to the replay start/end bounds;
-- pauses when the end is reached;
-- uses integer milliseconds for published time while advancing from the
-  scheduler's monotonic time;
-- caps one frame's elapsed wall time at **1,000 ms**. A background-tab rAF gap
-  is therefore not fully caught up as a surprise jump;
-- accepts an injected scheduler for deterministic tests. The browser scheduler
-  is resolved lazily and requires `performance`, `requestAnimationFrame`, and
-  `cancelAnimationFrame`.
-
-Seeking suppresses event crossings for the resulting update. A backward seek
-resets the crossing cursor; replaying forward from the new position can cross
-events again.
-
-## Events
-
-There are two distinct event views:
-
-- `replay.events` contains events whose `sessionTimeMs` exactly equals the
-  sampled time. It is empty at all other times.
-- `crossedEvents` contains forward crossings in the half-open movement window
-  `(previousTime, currentTime]`. It is empty for backward or stationary time,
-  and is suppressed for seeks.
-
-Events are selected from the active chunk window and are never interpolated.
-
-## React boundary
-
-The engine core is React-free. `ReplayStore<T>` exposes only a cached
-`getSnapshot`, `subscribe`, `publish`, and `dispose` contract, suitable for a
-thin React `useSyncExternalStore` adapter. React controls should subscribe to
-the controller/store; they should not own clock, cache, timeline, or sampling
-state.
-
-## Current production limitations
-
-The following fields have no v1 production canonical source and are therefore
-`null` in Bahrain delivery: `trackDistanceMeters`, `gapToLeaderMs`, and
-`position`. Their fixture values remain compatibility coverage, but the runtime
-must not infer production values for them. More generally, a `null` value is
-preserved; the 1,000 ms rule is runtime policy, not a guarantee that every
-production field can be interpolated.
-
-For current race-only Bahrain delivery, the measured range is `3,599,911` to
-`9,374,320` ms (displayed duration `5,774,409 ms`), with 4,453 overlap rows.
-The previous whole-session count of 72,015 timestamps and 935 chunks is
-historical context, not the current browser-delivery size.
-
-## Public controller example
-
-The replay-engine barrel currently exports `createReplayController` and
-`createBrowserPlaybackScheduler`:
+`sampleReplayAt`, playback, and seek use the same prepared sampler and therefore
+produce the same snapshot for the same absolute time. Seeking clamps to bounds;
+the frame elapsed-time cap is 1,000 ms; reverse playback is unsupported. A
+backward seek resets event-crossing state, while exact-time events remain sparse.
 
 ```ts
-import { createReplayController } from './replay-engine'
-
-const controller = createReplayController({ index })
-const unsubscribe = controller.subscribe(() => {
-  const snapshot = controller.getSnapshot()
-  render(snapshot.replay, snapshot.crossedEvents, snapshot.status)
-})
-
-controller.setSpeed(2)
-controller.start()
-// Later: controller.seek(120_000); controller.pause(); unsubscribe();
+const direct = sampleReplayAt(replay, timeMs)
+controller.seek(timeMs)
+// controller.getSnapshot().replay matches direct at the same timeMs.
 ```
 
-`index` is a loaded `ReplayIndex` with manifest, track assets, and a
-`loadChunk(sequence)` function. The initial controller state is loading until
-the first active window is available.
+The engine remains React-free; UI components subscribe to its immutable
+snapshot rather than owning clock, cache, or sampling state.
+
+## UI contract
+
+The dedicated responsive leaderboard is semantic and accessible. It orders
+rows from live `leaderboardOrder` when available, displays `PIT` from the pit
+flag, otherwise displays the raw exact status, and uses unavailable markers for
+null position, gap, tyre, or status. It must not fabricate `OUT`.
+
+## Current limitations
+
+The one-race Bahrain calibration is provisional pending a multi-circuit corpus.
+Gap availability depends on leader-history coverage. Terminal timing is inferred
+after the final position sample, not read as a canonical terminal timestamp.
+Quality assessment is internal `BrowserDeliveryBuild` provenance and is not in
+the serialized v1 manifest in this phase.

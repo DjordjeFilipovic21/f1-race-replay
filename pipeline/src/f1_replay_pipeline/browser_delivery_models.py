@@ -75,9 +75,9 @@ class BrowserDriverFields:
     lap: tuple[int | None, ...]
     tyre_compound: tuple[str | None, ...]
     is_in_pit_lane: tuple[bool | None, ...]
-    track_distance_meters: tuple[None, ...]
-    gap_to_leader_ms: tuple[None, ...]
-    position: tuple[None, ...]
+    track_distance_meters: tuple[float | None, ...]
+    gap_to_leader_ms: tuple[float | None, ...]
+    position: tuple[int | None, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.driver_id, str) or not self.driver_id:
@@ -105,8 +105,10 @@ class BrowserDriverFields:
             raise TypeError("categorical driver fields must contain strings or null")
         if any(value is not None and type(value) is not bool for value in self.is_in_pit_lane):
             raise TypeError("pit state must contain booleans or null")
-        if any(value is not None for field in (self.track_distance_meters, self.gap_to_leader_ms, self.position) for value in field):
-            raise ValueError("unsupported v1 fields must remain null")
+        if any(value is not None and (type(value) is not float or not math.isfinite(value) or value < 0) for field in (self.track_distance_meters, self.gap_to_leader_ms) for value in field):
+            raise ValueError("derived continuous fields must contain non-negative finite floats or null")
+        if any(value is not None and (type(value) is not int or value < 1) for value in self.position):
+            raise ValueError("position must contain positive integers or null")
 
 
 @dataclass(frozen=True)

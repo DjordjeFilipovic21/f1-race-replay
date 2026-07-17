@@ -1,191 +1,117 @@
 # Browser delivery interface freeze
 
-**Status:** Accepted · **Version:** browser-delivery-v1 · **Date:** 2026-07-15
+**Status:** Accepted · **Version:** browser-delivery-v1 · **Date:** 2026-07-17
 
-This document freezes the Phase 2 boundary between validated canonical Parquet
-and browser replay artifacts. Browser data is derived; canonical tables remain
-the loss-minimizing source of truth.
+This is the boundary between validated canonical Parquet and browser replay
+artifacts. Canonical Parquet is unchanged and remains the native-cadence,
+loss-minimizing source. Browser delivery derives presentation fields without
+mutating, resampling, or republishing canonical rows.
 
-Canonical generation is complete before delivery is built. Browser delivery is
-race-only: it starts at the earliest non-null canonical Lap 1
-`lap_start_time_ms` and excludes earlier timestamps and events from browser
-chunks. This crop keeps browser playback focused on the race while preserving
-pre-race canonical observations for resolving global state at race start. A
-missing Lap 1 start fails closed; it does not produce an ambiguous browser
-timeline.
+## 1. Timeline and provenance
 
-## 1. Canonical-generation reader
+The race window begins at the earliest non-null canonical Lap 1
+`lap_start_time_ms`. Serialized `sessionTimeMs` values remain absolute integer
+milliseconds; the UI displays time relative to that race start. A missing Lap 1
+start fails closed.
 
-The reader accepts only `target_parent: Path`. It resolves the canonical
-`current.json` pointer, then calls the complete-generation validator before
-reading any table. Invalid, incomplete, changed, or hash-mismatched generations
-are rejected; a directory name is never sufficient selection evidence.
+Canonical observations include coordinates, telemetry, lap data, exact
+`position_telemetry.status`, and classified results. The following are always
+browser-derived, not canonical observations:
 
-The result is an immutable `CanonicalGenerationSnapshot` containing:
+- track distance and cumulative race progress;
+- live position and dynamic `leaderboardOrder`; and
+- `gapToLeaderMs`.
 
-```text
-generation_id: str
-manifest_sha256: str
-frames: immutable mapping[str, validated Polars DataFrame]
+Canonical source cadence and source rows remain unchanged. `x`/`y` are converted
+from FastF1 decimetres to metres at delivery; other source fields retain their
+nullable values.
+
+## 2. Nullable v1 shape
+
+The existing nullable v1 shape remains backward compatible. Old null-only
+generations are valid and replay normally. Derived columns are aligned arrays:
+
+```json
+{
+  "trackDistanceMeters": [null, 42.5],
+  "position": [null, 1],
+  "gapToLeaderMs": [null, 0.0]
+}
 ```
 
-The mapping and metadata are immutable, tables retain the declared canonical
-schema and row order, and the reader never writes, resamples, interpolates, or
-republishes Parquet. The ten tables are read with native Polars only after
-pointer, manifest, schema, row-count, logical-hash, and byte-hash validation.
+`null` means unavailable; it is not zero, a guessed status, or a fabricated
+retirement. Failed, insufficient, or malformed legacy geometry produces null
+derived columns and uses the stable classified-results fallback order. Replay
+still works. Quality assessment is currently internal
+`BrowserDeliveryBuild` provenance and is not added to the serialized v1
+manifest in this phase.
 
-## 2. Browser fields and missing values
+## 3. Projection and quality gate
 
-The delivery transform uses exact integer-millisecond timestamps. It does not
-alter canonical rows.
+`projection-quality-gate-v1` runs independently for every generation. It is
+source-lap-excluding: the deterministic reference lap used to create the track
+asset is excluded from quality metrics. Each eligible holdout timing lap is
+sampled at native timestamps, bounded to 32 endpoint-inclusive stratified
+points per lap, and no telemetry merge or resampling is used. The gate is
+fail-closed: at least 20 independent laps, 500 independent samples, residual
+p95 at most 25 m, maximum residual at most 75 m, and valid continuity are
+required. Pit laps are measured separately and do not enter clean-track
+thresholds.
 
-| Browser field | Canonical source | Rule |
-| --- | --- | --- |
-| `x`, `y` | `position_telemetry.x/y` | Divide raw FastF1 decimetres by 10 to metres; exact timestamp alignment, otherwise `null`. |
-| `speed` | `car_telemetry.speed_kph` | Preserve the canonical numeric value; otherwise `null`. |
-| `throttle` | `car_telemetry.throttle_pct` | Preserve the canonical numeric value; otherwise `null`. |
-| `brake` | `car_telemetry.brake` | Convert `false` to `0`, `true` to `1`, and preserve `null`. |
-| `gear`, `drs` | `car_telemetry` | Exact nullable discrete value; otherwise `null`. |
-| `status` | `position_telemetry.status` | Exact nullable categorical value; otherwise `null`. |
-| `lap`, `tyreCompound` | `laps` | Use the row whose interval contains the time; no containing row means `null`. |
-| `isInPitLane` | `laps` pit interval | `true` only inside a known pit interval, `false` only when a known non-pit interval applies; otherwise `null`. |
-| `trackDistanceMeters`, `gapToLeaderMs`, `position` | No v1 canonical source | Always `null`; do not infer or fabricate values. |
-| `trackStatusCode` | `track_status_intervals.status` | Use the active interval; map the documented status code, otherwise `null`. |
-| `weatherState` | `weather` | Use the latest known native weather observation at or before the time; no observation means `null`. |
-| `leaderboardOrder` | `results` | Stable classified-position order, with unresolved/tied entries retained deterministically by `driver_id`. |
-| `events` | `race_control_messages` | Emit sparse point records at their source timestamp only. |
+Production projection is a metre-coordinate centerline segment projection:
 
-Null is preserved. A missing continuous value is not replaced by zero or a
-previous value, and a missing discrete/categorical value is not invented. The
-manifest’s driver metadata comes from `drivers`; static geometry comes from the
-validated track-assets input associated with the delivery build.
+- residuals over 75 m are invalid;
+- adjacent candidate segments form one local branch;
+- non-adjacent candidates within a 5 m residual difference are ambiguous and
+  require continuity from the previous accepted distance;
+- unresolved or malformed geometry yields `null` derived values.
 
-## 3. Shared timeline and semantics
+`geometric-wrap-v1` accepts at most one wrap per timing lap only when the prior
+distance is in the final 10% (`>= 90%`), the next is in the initial 10%
+(`<= 10%`), and the decrease is at least 80% of circuit length. A timing-lap
+boundary and the geometric centerline origin may differ by native samples.
 
-For each delivery, `timeMs` is the sorted, unique union of valid native
-timestamps needed by the selected driver/global fields, represented as signed
-64-bit integer milliseconds. Alignment is an exact-key, null-preserving left
-join; it is not canonical resampling, upsampling, interpolation, or cadence
-replacement. Source timestamps and native cadence remain unchanged in the
-canonical generation.
+## 4. Progress, ranking, and gaps
 
-At render time, consumers may linearly interpolate continuous numeric fields
-(`x`, `y`, `speed`, `throttle`, `brake`, `gapToLeaderMs`) only between two valid
-authoritative bounds for the same driver. Discrete, categorical, and boolean
-fields (`lap`, `position`, `gear`, `drs`, tyre/status fields, pit state, weather,
-track status, and leaderboard order) use previous-value semantics. Sparse events
-are point records and are never interpolated. If either continuous bound is
-missing, the rendered value is missing.
+- Progress uses `(lap - 1) * circuitLengthMeters + trackDistanceMeters`.
+- An active observation is stale at the 1,000 ms boundary: missing projection
+  may freeze the last valid progress only while younger than 1,000 ms; at
+  `>= 1,000 ms` it becomes null.
+- Pit and terminal modes freeze the last valid progress without an artificial
+  ranking penalty. `OffTrack` is not terminal. Terminal inference from final
+  results is conservative and occurs after the final valid position sample.
+- Ranking applies a monotonic progress envelope. Ties use prior order, then
+  `driver_id`; drivers with null progress are omitted from live ranking.
+- Gap is the current leader's equivalent-progress crossing time, with linear
+  time interpolation through the leader's history. There is no constant-speed
+  heuristic. The leader is zero; a gap is null when leader history is
+  insufficient.
 
-## 4. Chunks
-
-Production chunks cover **10,000 ms** with a **1,000 ms** intentional handoff
-overlap. Coverage is half-open: `[startMs, endMs)`. The first sample at or after
-`startMs` is authoritative; samples before it are overlap-only references.
-`authoritativeStartIndex` identifies that first authoritative sample, and
-`overlap.authoritativeFromMs` equals `startMs`.
-
-Chunks are ordered by ascending `sequence`, have contiguous boundaries, and are
-named `chunks/chunk-{sequence:03d}.json` (`chunk-001.json`, `chunk-002.json`, …).
-The manifest order is authoritative; filesystem or parallel-read order is not.
-Events belong to the chunk whose authoritative interval contains their
-timestamp. A consumer resolves duplicate timestamps using the owning chunk, not
-the overlap reference.
-
-Chunk timestamps remain absolute integer `sessionTimeMs`; delivery does not
-rebase them to zero. Web controls may display elapsed time relative to the
-manifest's first chunk start (so Lap 1 displays as `0:00.000`), but engine time
-and seeking remain absolute.
-
-The committed `deterministic-race` fixture is a compatibility fixture: its
-existing two chunks, 2,000 ms boundaries, 500 ms overlap, golden snapshots, and
-all bytes remain unchanged. Production chunk sizing must not rewrite that
-fixture.
-
-## 5. Immutable delivery artifacts
-
-The public models are frozen value objects:
+The exact source status is preserved:
 
 ```text
-BrowserManifest(
-  fixture_id, fixture_name, drivers
-)
-BrowserDeliveryBuild(source_snapshot, manifest, track_assets, chunks)
-BrowserChunk(
-  chunk_id, sequence, start_ms, end_ms, overlap,
-  time_ms, authoritative_start_index, drivers,
-  leaderboard_order, track_status_code, weather_state, events
-)
+status       = position_telemetry.status
+leaderboard  = browser-derived live order (or classified-results fallback)
 ```
 
-Arrays are ordered tuples (or equivalent immutable sequences), driver maps are
-read-only, and no model exposes mutable publication state. Serialization uses
-explicit field order and deterministic JSON: sorted object keys, compact
-separators, UTF-8, no NaN/infinity, and exactly one trailing newline.
-`BrowserDeliveryBuild` permanently binds output to the exact validated snapshot
-used for derivation; publication never resolves the canonical pointer again.
+The browser `status` column is never converted into a fabricated `OUT` label.
 
-## 6. Publication boundary
+## 5. Chunks and immutable publication
 
-Browser output is published separately from canonical output:
+Production chunks remain 10,000 ms with a 1,000 ms handoff overlap and
+half-open ownership `[startMs, endMs)`. Derived arrays are aligned to the
+shared exact-union timeline. Samples before `authoritativeStartIndex` are
+overlap references only; they do not become authoritative again at a handoff.
+Manifest order, deterministic JSON, finite values, and immutable build-to-source
+binding remain unchanged. Publication never edits canonical `current.json`.
 
-```text
-<browser_parent>/
-├── browser-current.json
-└── generations/<delivery-id>/
-    ├── manifest.json
-    ├── track-assets.json
-    └── chunks/chunk-001.json ...
-```
+See [Replay Data Contract](replay-data-contract.md) and
+[runtime semantics](browser-replay-engine-runtime-semantics.md).
 
-`delivery-id` is caller-supplied and safe as one path component. The browser
-manifest records `delivery_version`, the exact source canonical
-`generation_id` and `manifest_sha256`, ordered chunk metadata, and per-artifact
-SHA-256 digests. Exact staged bytes, identities, hashes, aligned columns,
-contiguous ownership, overlap, and event bounds are validated before
-`browser-current.json` is atomically replaced. Publication rejects symlink
-traversal and uses descriptor-relative no-follow writes and owned cleanup. The
-caller supplies a local v1 schema root; manifest, track assets, and every chunk
-must pass its Draft 2020-12 schema without remote retrieval. Pointer replacement
-is the sole browser visibility/commit point.
+## 6. Current limitations
 
-This publication never edits canonical `current.json`, never selects an
-unvalidated generation, and never copies or republishes canonical Parquet.
-Rebuilding from the same validated source generation and inputs produces the
-same manifest, chunk bytes, names, ordering, and digests.
-
-## 7. v1 compatibility requirement
-
-The contract remains **v1**. Its schemas must be generalized only to remove
-fixture-specific constants: manifest metadata must support arbitrary valid
-fixture identifiers and names, and `chunks` must support any non-empty ordered
-chunk count with the declared sequencing and ownership invariants. The
-committed deterministic fixture and its golden snapshots remain schema-valid
-and unchanged. Breaking changes require a new contract-version directory.
-
-## 8. Track generation and measured cadence
-
-Track assets may be deterministically derived from the shortest accurate,
-non-deleted, non-pit canonical lap with usable position telemetry. FastF1 raw
-`X/Y` values are divided by 10 to metres, closed, arc-length resampled to 600
-points, and offset by a fixed 20 m visual width. Boundaries are illustrative,
-not surveyed circuit limits. Collinear, out-and-back, zero-area, and otherwise
-degenerate geometry fails closed. A 2D crossing alone is not rejected because
-grade-separated layouts such as Suzuka are legitimate.
-
-The Bahrain 2024 race-only delivery currently measures:
-
-- `startMs`: `3,599,911`; `endMs`: `9,374,320`; displayed duration:
-  `5,774,409 ms`
-- 575 chunks, 44,747 authoritative timestamps, and 4,453 overlap rows
-- 78.38 MB raw chunk JSON and 6.28 MB gzip
-- median gzip chunk size 11.0 KB; p95 11.7 KB
-
-The delivery retains exact-union timestamps and relies on HTTP compression rather
-than introducing a new sampling cadence. An earlier whole-session measurement
-(72,015 timestamps, 935 chunks, 126.48 MB raw JSON, 7.61 MB gzip) is historical
-context only and is not the current race-only browser delivery.
-
-See [Replay Data Contract](replay-data-contract.md), [Canonical Parquet Writer
-Contract](canonical-parquet-writer-contract.md), [ADR-001](adr/001-canonical-pipeline-foundation.md),
-and [ADR-002](adr/002-canonical-parquet-writer.md).
+Calibration is currently provisional from one Bahrain race and awaits a
+multi-circuit corpus, including varied pit layouts and close/grade-separated
+geometry. Gap quality depends on available leader history. Terminal timing is
+inferred only after the final position sample; it is not a direct canonical
+retirement timestamp.

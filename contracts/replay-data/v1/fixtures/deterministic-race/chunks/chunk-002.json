@@ -20,7 +20,7 @@
     "HAM": {
       "x": [420, 560, 790],
       "y": [82, 95, 118],
-      "trackDistanceMeters": [1320, 1450, 1660],
+      "trackDistanceMeters": [1320, 1450, 1450],
       "speed": [228, 210, 202],
       "throttle": [87, 68, 63],
       "brake": [0, 12, 16],
@@ -30,8 +30,8 @@
       "gear": [7, 6, 6],
       "drs": [1, 0, 0],
       "tyreCompound": ["MEDIUM", "MEDIUM", "MEDIUM"],
-      "status": ["push", "yellow", "defend"],
-      "isInPitLane": [false, false, false]
+      "status": ["push", "pit", "out"],
+      "isInPitLane": [false, true, false]
     },
     "RUS": {
       "x": [395, 530, 810],
@@ -41,7 +41,7 @@
       "throttle": [88, 92, 94],
       "brake": [0, 0, 0],
       "gapToLeaderMs": [120, 40, 0],
-      "lap": [1, 1, 1],
+      "lap": [1, 1, 2],
       "position": [2, 2, 1],
       "gear": [7, 7, 7],
       "drs": [1, 1, 1],

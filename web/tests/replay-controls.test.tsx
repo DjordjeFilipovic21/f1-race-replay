@@ -7,6 +7,8 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { ReplayControls } from '../src/replay-ui/ReplayControls'
 import type { ReplayController, ReplayControllerSnapshot } from '../src/replay-engine'
 
+const drivers = [{ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }]
+
 function createController(snapshot: ReplayControllerSnapshot) {
   let current = snapshot
   const listeners = new Set<() => void>()
@@ -43,7 +45,7 @@ afterEach(() => {
 test('wires accessible playback, seek, and speed controls to the controller', async () => {
   const user = userEvent.setup()
   const { controller } = createController(readySnapshot)
-  render(<ReplayControls controller={controller} startMs={0} endMs={3000} />)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} />)
 
   await user.click(screen.getByRole('button', { name: 'Play' }))
   const slider = screen.getByRole('slider', { name: 'Seek replay' })
@@ -60,7 +62,7 @@ test('wires accessible playback, seek, and speed controls to the controller', as
 
 test('shows zero-based replay times while seeking with absolute session times', () => {
   const { controller } = createController({ ...readySnapshot, timeMs: 11_500 })
-  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} />)
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} drivers={drivers} />)
 
   const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
   expect(screen.getByLabelText('Replay time').textContent).toBe('0:01.500 / 0:03.000')
@@ -77,7 +79,7 @@ test('shows zero-based replay times while seeking with absolute session times', 
 
 test('previews rapid scrubbing locally and commits only the final value', () => {
   const { controller } = createController({ ...readySnapshot, timeMs: 10_500 })
-  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} />)
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} drivers={drivers} />)
   const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
 
   fireEvent.input(slider, { target: { value: '11000' } })
@@ -100,7 +102,7 @@ test.each([
   ['blur', (slider: HTMLInputElement) => fireEvent.blur(slider)],
 ])('commits the final absolute seek value on %s', (_label, commit) => {
   const { controller } = createController({ ...readySnapshot, timeMs: 10_500 })
-  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} />)
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} drivers={drivers} />)
   const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
 
   fireEvent.input(slider, { target: { value: '12250' } })
@@ -116,7 +118,7 @@ test('clamps before-start and after-end snapshots without changing absolute slid
   // Arrange: snapshots fall outside an absolute 10,000ms–13,000ms session range.
   const beforeStart = createController({ ...readySnapshot, timeMs: 9_000 })
   const afterEnd = createController({ ...readySnapshot, timeMs: 14_000 })
-  const { rerender } = render(<ReplayControls controller={beforeStart.controller} startMs={10_000} endMs={13_000} />)
+  const { rerender } = render(<ReplayControls controller={beforeStart.controller} startMs={10_000} endMs={13_000} drivers={drivers} />)
 
   // Act: render the before-start snapshot, then replace it with the after-end snapshot.
   const beforeStartSlider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
@@ -126,7 +128,7 @@ test('clamps before-start and after-end snapshots without changing absolute slid
     min: beforeStartSlider.min,
     max: beforeStartSlider.max,
   }
-  rerender(<ReplayControls controller={afterEnd.controller} startMs={10_000} endMs={13_000} />)
+  rerender(<ReplayControls controller={afterEnd.controller} startMs={10_000} endMs={13_000} drivers={drivers} />)
   const afterEndSlider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
   const afterEndValues = {
     output: screen.getByLabelText('Replay time').textContent,
@@ -147,11 +149,11 @@ test('clamps before-start and after-end snapshots without changing absolute slid
 test('shows loading and error diagnostics and retries controller loading', async () => {
   const user = userEvent.setup()
   const loading = createController({ ...readySnapshot, status: 'loading', replay: null })
-  const { rerender } = render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} />)
+  const { rerender } = render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} drivers={drivers} />)
   expect(screen.getByRole('status', { name: 'Replay loading' }).textContent).toContain('Loading')
 
   const failed = createController({ ...readySnapshot, status: 'error', replay: null, error: new Error('network unavailable') })
-  rerender(<ReplayControls controller={failed.controller} startMs={0} endMs={3000} />)
+  rerender(<ReplayControls controller={failed.controller} startMs={0} endMs={3000} drivers={drivers} />)
   await user.click(screen.getByRole('button', { name: 'Retry loading' }))
 
   expect(screen.getByRole('alert').textContent).toContain('network unavailable')
@@ -161,7 +163,7 @@ test('shows loading and error diagnostics and retries controller loading', async
 test('keeps Pause available while requested playback is loading or has failed', async () => {
   const user = userEvent.setup()
   const loading = createController({ ...readySnapshot, status: 'loading', replay: null, isPlaying: true })
-  const { rerender } = render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} />)
+  const { rerender } = render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} drivers={drivers} />)
 
   const loadingPause = screen.getByRole('button', { name: 'Pause' }) as HTMLButtonElement
   expect(loadingPause.disabled).toBe(false)
@@ -169,7 +171,7 @@ test('keeps Pause available while requested playback is loading or has failed', 
   expect(loading.controller.pause).toHaveBeenCalledOnce()
 
   const failed = createController({ ...readySnapshot, status: 'error', replay: null, error: new Error('network unavailable'), isPlaying: true })
-  rerender(<ReplayControls controller={failed.controller} startMs={0} endMs={3000} />)
+  rerender(<ReplayControls controller={failed.controller} startMs={0} endMs={3000} drivers={drivers} />)
   const failedPause = screen.getByRole('button', { name: 'Pause' }) as HTMLButtonElement
   expect(failedPause.disabled).toBe(false)
   await user.click(failedPause)
@@ -178,7 +180,7 @@ test('keeps Pause available while requested playback is loading or has failed', 
 
 test('unsubscribes when the adapter unmounts', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
-  const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} />)
+  const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} />)
   unmount()
   expect(controller.subscribe).toHaveBeenCalledOnce()
   expect(getUnsubscribeCalls()).toBe(1)
