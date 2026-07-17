@@ -23,6 +23,8 @@ computed_data/
 # Generated media/output
 output_animation.mp4
 still_frame.png
+/web/node_modules/
+/web/dist/
 
 # OS / IDE files
 .DS_Store
