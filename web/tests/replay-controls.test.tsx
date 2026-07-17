@@ -48,6 +48,8 @@ test('wires accessible playback, seek, and speed controls to the controller', as
   await user.click(screen.getByRole('button', { name: 'Play' }))
   const slider = screen.getByRole('slider', { name: 'Seek replay' })
   fireEvent.input(slider, { target: { value: '1501' } })
+  expect(controller.seek).not.toHaveBeenCalled()
+  fireEvent.pointerUp(slider)
   await user.selectOptions(screen.getByRole('combobox', { name: 'Playback speed' }), '2')
 
   expect(controller.start).toHaveBeenCalledOnce()
@@ -68,7 +70,46 @@ test('shows zero-based replay times while seeking with absolute session times', 
   expect(slider.getAttribute('aria-valuetext')).toBe('0:01.500')
 
   fireEvent.input(slider, { target: { value: '11501' } })
+  expect(controller.seek).not.toHaveBeenCalled()
+  fireEvent.pointerUp(slider)
   expect(controller.seek).toHaveBeenCalledWith(11501)
+})
+
+test('previews rapid scrubbing locally and commits only the final value', () => {
+  const { controller } = createController({ ...readySnapshot, timeMs: 10_500 })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} />)
+  const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
+
+  fireEvent.input(slider, { target: { value: '11000' } })
+  fireEvent.input(slider, { target: { value: '12000' } })
+  fireEvent.input(slider, { target: { value: '12900' } })
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.getByLabelText('Replay time').textContent).toBe('0:02.900 / 0:03.000')
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:02.900')
+  fireEvent.pointerUp(slider)
+  fireEvent.blur(slider)
+  expect(controller.seek).toHaveBeenCalledOnce()
+  expect(controller.seek).toHaveBeenCalledWith(12_900)
+  expect(slider.value).toBe('10500')
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:00.500')
+})
+
+test.each([
+  ['keyboard release', (slider: HTMLInputElement) => fireEvent.keyUp(slider, { key: 'ArrowRight' })],
+  ['blur', (slider: HTMLInputElement) => fireEvent.blur(slider)],
+])('commits the final absolute seek value on %s', (_label, commit) => {
+  const { controller } = createController({ ...readySnapshot, timeMs: 10_500 })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} />)
+  const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
+
+  fireEvent.input(slider, { target: { value: '12250' } })
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:02.250')
+  commit(slider)
+
+  expect(controller.seek).toHaveBeenCalledOnce()
+  expect(controller.seek).toHaveBeenCalledWith(12_250)
 })
 
 test('clamps before-start and after-end snapshots without changing absolute slider bounds', () => {

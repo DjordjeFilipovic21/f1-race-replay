@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useRef, useState, useSyncExternalStore } from 'react'
 import type { ReplayController } from '../replay-engine'
 
 const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 2, 4] as const
@@ -12,8 +12,11 @@ export interface ReplayControlsProps {
 /** A presentational adapter over the controller's cached external store. */
 export function ReplayControls({ controller, startMs, endMs }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
+  const seekPreviewRef = useRef<number | null>(null)
   const isReady = snapshot.status === 'ready'
-  const elapsedMs = relativeElapsedMs(snapshot.timeMs, startMs, endMs)
+  const displayedTimeMs = seekPreviewMs ?? snapshot.timeMs
+  const elapsedMs = relativeElapsedMs(displayedTimeMs, startMs, endMs)
   const durationMs = relativeElapsedMs(endMs, startMs, endMs)
   const driver = snapshot.replay === null
     ? null
@@ -24,8 +27,18 @@ export function ReplayControls({ controller, startMs, endMs }: ReplayControlsPro
     else controller.start()
   }
 
-  const handleSeek = (event: React.FormEvent<HTMLInputElement>) => {
-    controller.seek(event.currentTarget.valueAsNumber)
+  const handleSeekPreview = (event: React.FormEvent<HTMLInputElement>) => {
+    const value = event.currentTarget.valueAsNumber
+    seekPreviewRef.current = value
+    setSeekPreviewMs(value)
+  }
+
+  const commitSeek = () => {
+    const value = seekPreviewRef.current
+    if (value === null) return
+    seekPreviewRef.current = null
+    setSeekPreviewMs(null)
+    controller.seek(value)
   }
 
   const handleSpeedChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -62,10 +75,13 @@ export function ReplayControls({ controller, startMs, endMs }: ReplayControlsPro
             min={startMs}
             max={endMs}
             step="1"
-            value={snapshot.timeMs}
+            value={displayedTimeMs}
             aria-valuetext={formatTime(elapsedMs)}
             disabled={!isReady}
-            onInput={handleSeek}
+            onInput={handleSeekPreview}
+            onPointerUp={commitSeek}
+            onKeyUp={commitSeek}
+            onBlur={commitSeek}
           />
         </label>
 
