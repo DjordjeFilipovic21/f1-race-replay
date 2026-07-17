@@ -52,9 +52,10 @@ def build_browser_delivery(
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
         native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
-        timeline = _delivery_timeline(snapshot, native_drivers)
+        race_start_ms = _race_start_time_ms(snapshot)
+        timeline = _delivery_timeline(snapshot, native_drivers, race_start_ms)
         if not timeline:
-            raise ValueError("a browser delivery requires at least one canonical timestamp")
+            raise ValueError("a browser delivery requires a canonical timestamp at or after the Lap 1 start")
         drivers = {
             driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
             for driver_id in driver_ids
@@ -65,7 +66,7 @@ def build_browser_delivery(
             drivers,
             globals_,
             events,
-            start_ms=timeline[0],
+            start_ms=race_start_ms,
             end_ms=timeline[-1] + 1,
             chunk_duration_ms=chunk_duration_ms,
             overlap_ms=overlap_ms,
@@ -80,7 +81,20 @@ def build_browser_delivery(
     return BrowserDeliveryBuild(snapshot, manifest, track_assets, chunks)
 
 
-def _delivery_timeline(snapshot, native_drivers) -> tuple[int, ...]:
+def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
+    laps = snapshot.frames["laps"]
+    lap_one_starts = (
+        laps
+        .filter((laps["lap_number"] == 1) & laps["lap_start_time_ms"].is_not_null())
+        .get_column("lap_start_time_ms")
+        .to_list()
+    )
+    if not lap_one_starts:
+        raise ValueError("a browser delivery requires a non-null Lap 1 start time")
+    return min(lap_one_starts)
+
+
+def _delivery_timeline(snapshot, native_drivers, race_start_ms: int) -> tuple[int, ...]:
     values = {time_ms for driver in native_drivers for time_ms in driver.time_ms}
     values.update(snapshot.frames["weather"].get_column("session_time_ms").drop_nulls().to_list())
     values.update(snapshot.frames["track_status_intervals"].get_column("start_time_ms").drop_nulls().to_list())
@@ -88,7 +102,7 @@ def _delivery_timeline(snapshot, native_drivers) -> tuple[int, ...]:
     laps = snapshot.frames["laps"]
     for column in ("lap_start_time_ms", "pit_in_time_ms", "pit_out_time_ms"):
         values.update(laps.get_column(column).drop_nulls().to_list())
-    return tuple(sorted(values))
+    return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
 
 
 def _global_fields(snapshot, timeline, driver_ids) -> BrowserGlobalFields:
