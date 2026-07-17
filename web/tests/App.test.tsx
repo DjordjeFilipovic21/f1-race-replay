@@ -24,7 +24,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 const index = {
-  manifest: { chunks: [{ startMs: 0, endMs: 3000 }] },
+  manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] },
 } as unknown as ReplayIndex
 
 function createController(): ReplayController {

@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 from referencing import Registry, Resource
 
+import f1_replay_pipeline.browser_delivery_orchestration as delivery_orchestration
 from f1_replay_pipeline.browser_chunk_builder import CONTINUOUS_FIELD_SEMANTICS, PREVIOUS_VALUE_FIELD_SEMANTICS
 from f1_replay_pipeline.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
@@ -27,6 +28,7 @@ from f1_replay_pipeline.canonical_schema import CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 from f1_replay_pipeline.validators import CanonicalValidationError
+from f1_replay_pipeline.live_position_quality import ProjectionQualityAssessment, QUALITY_GATE_VERSION
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -216,6 +218,69 @@ def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compati
     }
 
 
+def test_passing_quality_assessment_derives_dynamic_positions_gaps_and_overlap_without_new_timestamps(tmp_path: Path, monkeypatch) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _live_frames()
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+    snapshot = read_validated_canonical_generation(canonical_parent)
+    calls = 0
+    original_rank_timeline = delivery_orchestration.rank_timeline
+
+    def counted_rank_timeline(ranking_frames):
+        nonlocal calls
+        calls += 1
+        return original_rank_timeline(ranking_frames)
+
+    monkeypatch.setattr(delivery_orchestration, "rank_timeline", counted_rank_timeline)
+
+    delivery = build_browser_delivery(
+        snapshot, _square_track_assets(), chunk_duration_ms=1_000, overlap_ms=500,
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    first, second = delivery.chunks[:2]
+    assert first.leaderboard_order[:2] == (("HAM", "RUS"), ("RUS", "HAM"))
+    assert first.drivers["HAM"].position[:2] == (1, 2)
+    assert first.drivers["RUS"].position[:2] == (2, 1)
+    assert first.drivers["HAM"].gap_to_leader_ms[0] == 0.0
+    assert first.drivers["RUS"].gap_to_leader_ms[1] == 0.0
+    assert all(value is None or value >= 0 for value in first.drivers["HAM"].gap_to_leader_ms)
+    assert calls == 1
+    overlap_index = second.time_ms.index(500)
+    assert second.drivers["HAM"].track_distance_meters[overlap_index] == first.drivers["HAM"].track_distance_meters[1]
+    assert second.leaderboard_order[overlap_index] == first.leaderboard_order[1]
+    assert {time_ms for chunk in delivery.chunks for time_ms in chunk.time_ms} == _delivery_source_times(snapshot)
+    assert snapshot.frames["position_telemetry"].equals(frames["position_telemetry"])
+
+
+def test_failed_quality_assessment_preserves_null_derived_fields_and_classified_fallback(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(frames=_live_frames(), target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(False),
+    )
+
+    assert all(value is None for fields in delivery.chunks[0].drivers.values() for value in fields.track_distance_meters + fields.gap_to_leader_ms + fields.position)
+    assert delivery.chunks[0].leaderboard_order[0] == ("HAM", "RUS")
+    assert delivery.projection_quality_assessment == _assessment(False)
+
+
+def test_terminal_results_and_stale_active_coordinates_have_distinct_live_progress(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _live_frames(result_statuses={"HAM": "Retired", "RUS": "Finished"})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _driver_value(delivery, "HAM", "track_distance_meters", 1_500) == _driver_value(delivery, "HAM", "track_distance_meters", 500)
+    assert _driver_value(delivery, "RUS", "track_distance_meters", 1_500) is None
+
+
 def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
@@ -312,6 +377,68 @@ def _track_assets() -> dict[str, object]:
     assets = _load_json(FIXTURE_ROOT / "track-assets.json")
     assets["fixtureId"] = "synthetic-race"
     return assets
+
+
+def _square_track_assets() -> dict[str, object]:
+    assets = _track_assets()
+    line = [
+        {"x": 0.0, "y": 0.0}, {"x": 100.0, "y": 0.0}, {"x": 100.0, "y": 100.0},
+        {"x": 0.0, "y": 100.0}, {"x": 0.0, "y": 0.0},
+    ]
+    assets.update({"circuitLengthMeters": 400.0, "centerLine": line, "innerBoundary": line, "outerBoundary": line})
+    return assets
+
+
+def _assessment(passed: bool) -> ProjectionQualityAssessment:
+    return ProjectionQualityAssessment(
+        QUALITY_GATE_VERSION, passed, () if passed else ("insufficient independent holdout laps",), "HAM", 1,
+        20 if passed else 0, 500 if passed else 0, 0.0 if passed else None, 0.0 if passed else None,
+        0, 0, 0, 0, None, None,
+    )
+
+
+def _live_frames(*, result_statuses: dict[str, str] | None = None) -> dict[str, pl.DataFrame]:
+    frames = _canonical_frames(lap_one_rows=(("HAM", 0), ("RUS", 0)))
+    positions = []
+    for driver, samples in {
+        "HAM": ((0, 100.0, 0.0), (500, 150.0, 0.0), (1_500, None, None)),
+        "RUS": ((0, 80.0, 0.0), (500, 200.0, 0.0), (1_500, None, None)),
+    }.items():
+        positions.extend(_row("position_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time, x=x, y=y, status="OffTrack") for time, x, y in samples)
+    frames["position_telemetry"] = pl.DataFrame(sorted(positions, key=lambda row: (row["driver_id"], row["session_time_ms"])), schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
+    laps = [
+        _row("laps", driver_id=driver, lap_number=1, lap_start_time_ms=0, lap_end_time_ms=2_000, compound="MEDIUM")
+        for driver in ("HAM", "RUS")
+    ]
+    frames["laps"] = pl.DataFrame(laps, schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    if result_statuses:
+        results = [
+            _row("results", driver_id=driver, classified_position=str(index + 1), status=result_statuses.get(driver))
+            for index, driver in enumerate(("HAM", "RUS"))
+        ]
+        frames["results"] = pl.DataFrame(results, schema=dict(CANONICAL_TABLE_SCHEMAS["results"]), strict=True)
+    return frames
+
+
+def _driver_value(delivery, driver_id, field, time_ms):
+    chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= time_ms < chunk.end_ms)
+    return getattr(chunk.drivers[driver_id], field)[chunk.time_ms.index(time_ms)]
+
+
+def _delivery_source_times(snapshot) -> set[int]:
+    values = set()
+    for frame, column in (
+        (snapshot.frames["car_telemetry"], "session_time_ms"),
+        (snapshot.frames["position_telemetry"], "session_time_ms"),
+        (snapshot.frames["weather"], "session_time_ms"),
+        (snapshot.frames["track_status_intervals"], "start_time_ms"),
+        (snapshot.frames["race_control_messages"], "session_time_ms"),
+        (snapshot.frames["laps"], "lap_start_time_ms"),
+        (snapshot.frames["laps"], "pit_in_time_ms"),
+        (snapshot.frames["laps"], "pit_out_time_ms"),
+    ):
+        values.update(value for value in frame.get_column(column).drop_nulls().to_list() if value >= 0)
+    return values
 
 
 def _artifact_bytes(result: object) -> tuple[bytes, ...]:

@@ -10,6 +10,7 @@ from f1_replay_pipeline.browser_delivery_models import CanonicalGenerationSnapsh
 from f1_replay_pipeline.track_assets_generator import (
     TrackAssetsGenerationError,
     generate_track_assets,
+    select_reference_lap,
 )
 
 
@@ -42,6 +43,13 @@ def test_generator_converts_fastf1_decimetres_to_metres_and_offsets_visual_bound
         (inner["x"], inner["y"]),
         (outer["x"], outer["y"]),
     ) == pytest.approx(20.0)
+
+
+def test_reference_lap_selector_matches_the_generator_source_policy():
+    reference = select_reference_lap(_snapshot())
+
+    assert (reference.driver_id, reference.lap_number) == ("BBB", 2)
+    assert reference.points_meters[0] == reference.points_meters[-1]
 
 
 def test_generator_rejects_degenerate_position_geometry():

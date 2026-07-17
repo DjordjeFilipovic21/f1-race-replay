@@ -164,6 +164,14 @@
         "$ref": "#/$defs/nullableNumber"
       }
     },
+    "nullableNonNegativeNumber": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "nullableNonNegativeNumberColumn": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/nullableNonNegativeNumber"}
+    },
     "driverColumns": {
       "type": "object",
       "additionalProperties": false,
@@ -191,7 +199,7 @@
           "$ref": "#/$defs/nullableNumberColumn"
         },
         "trackDistanceMeters": {
-          "$ref": "#/$defs/nullableNumberColumn"
+          "$ref": "#/$defs/nullableNonNegativeNumberColumn"
         },
         "speed": {
           "$ref": "#/$defs/nullableNumberColumn"
@@ -203,7 +211,7 @@
           "$ref": "#/$defs/nullableNumberColumn"
         },
         "gapToLeaderMs": {
-          "$ref": "#/$defs/nullableNumberColumn"
+          "$ref": "#/$defs/nullableNonNegativeNumberColumn"
         },
         "lap": {
           "type": "array",

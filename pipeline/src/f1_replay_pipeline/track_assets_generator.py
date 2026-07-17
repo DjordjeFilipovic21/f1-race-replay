@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import cast
 
 from f1_replay_pipeline.browser_delivery_models import (
@@ -23,6 +24,17 @@ class TrackAssetsGenerationError(ValueError):
     """Raised when canonical data cannot produce trustworthy visual geometry."""
 
 
+@dataclass(frozen=True)
+class ReferenceLap:
+    """The deterministic canonical lap and points used to build track geometry."""
+
+    driver_id: str
+    lap_number: int
+    lap_start_time_ms: int
+    lap_duration_ms: int
+    points_meters: tuple[tuple[float, float], ...]
+
+
 def generate_track_assets(
     snapshot: CanonicalGenerationSnapshot,
     *,
@@ -38,8 +50,8 @@ def generate_track_assets(
     resolved_track_id = track_id or f"{fixture_id}-telemetry-layout-v1"
     if not _SAFE_ID.fullmatch(resolved_track_id):
         raise TrackAssetsGenerationError("track_id must be a lowercase kebab-case identifier")
-    reference = _reference_lap_points(snapshot)
-    centerline = _resample_closed_polyline(reference, centerline_points)
+    reference = select_reference_lap(snapshot)
+    centerline = _resample_closed_polyline(reference.points_meters, centerline_points)
     inner, outer = _offset_boundaries(centerline, visual_track_width_m / 2.0)
     length_m = _polyline_length(centerline)
     return {
@@ -65,10 +77,11 @@ def generate_track_assets(
     }
 
 
-def _reference_lap_points(snapshot: CanonicalGenerationSnapshot) -> tuple[tuple[float, float], ...]:
+def select_reference_lap(snapshot: CanonicalGenerationSnapshot) -> ReferenceLap:
+    """Return the same deterministic usable lap consumed by asset generation."""
     laps = snapshot.frames["laps"].to_dicts()
     candidates = sorted(
-        (row for row in laps if _eligible_lap(row)),
+        (row for row in laps if is_eligible_track_lap(row)),
         key=lambda row: (
             row["lap_duration_ms"], row["driver_id"], row["lap_number"],
             row["lap_start_time_ms"],
@@ -83,11 +96,17 @@ def _reference_lap_points(snapshot: CanonicalGenerationSnapshot) -> tuple[tuple[
         ).sort("session_time_ms").to_dicts()
         points = _clean_points(rows)
         if len(points) >= 4 and _is_spatially_valid(points):
-            return _close(points)
+            return ReferenceLap(
+                driver_id=cast(str, lap["driver_id"]),
+                lap_number=cast(int, lap["lap_number"]),
+                lap_start_time_ms=cast(int, lap["lap_start_time_ms"]),
+                lap_duration_ms=cast(int, lap["lap_duration_ms"]),
+                points_meters=_close(points),
+            )
     raise TrackAssetsGenerationError("no deterministic valid lap has usable position telemetry")
 
 
-def _eligible_lap(row: Mapping[str, object]) -> bool:
+def is_eligible_track_lap(row: Mapping[str, object]) -> bool:
     return (
         row["deleted"] is False
         and row["is_accurate"] is True
@@ -200,5 +219,6 @@ def _validate_options(width, points, rotation):
 
 __all__ = [
     "DEFAULT_CENTERLINE_POINTS", "DEFAULT_TRACK_WIDTH_M", "RAW_POSITION_UNITS_PER_METER",
-    "TrackAssetsGenerationError", "generate_track_assets",
+    "ReferenceLap", "TrackAssetsGenerationError", "generate_track_assets",
+    "is_eligible_track_lap", "select_reference_lap",
 ]

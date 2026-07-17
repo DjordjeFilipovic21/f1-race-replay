@@ -229,6 +229,12 @@ def resolve_snapshot(bundle, snapshot):
 
             resolved["drivers"][driver_id] = resolved_driver
 
+    leaderboard_order = resolved["leaderboardOrder"]
+    if leaderboard_order:
+        leader = resolved["drivers"].get(leaderboard_order[0])
+        if leader is not None and leader.get("position") == 1:
+            leader["gapToLeaderMs"] = 0
+
     resolved["events"] = copy.deepcopy(event_lookup(bundle).get(snapshot["sessionTimeMs"], []))
     return resolved
 
@@ -566,6 +572,20 @@ def test_replay_contract_continuous_fields_use_linear_interpolation(contract_bun
         field: actual["drivers"]["HAM"][field]
         for field in CONTINUOUS_DRIVER_FIELDS
     } == pytest.approx(expected)
+
+
+def test_replay_contract_sampled_current_leader_gap_is_normalized_to_zero(contract_bundle):
+    snapshot = next(
+        item
+        for item in contract_bundle["golden"]["snapshots"]
+        if item["id"] == "interpolated-sparse-event-at-2600"
+    )
+
+    actual = resolve_snapshot(contract_bundle, snapshot)
+
+    assert actual["leaderboardOrder"][0] == "HAM"
+    assert actual["drivers"]["HAM"]["position"] == 1
+    assert actual["drivers"]["HAM"]["gapToLeaderMs"] == 0
 
 
 def test_replay_contract_cross_boundary_interpolation_uses_authoritative_bounds(contract_bundle):

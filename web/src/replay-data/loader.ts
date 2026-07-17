@@ -68,7 +68,7 @@ function validateChunk(manifest: ReplayManifest, reference: ChunkReference, chun
   if (chunk.authoritativeStartIndex >= chunk.timeMs.length) throw new Error('Chunk authority is invalid')
   if (chunk.timeMs.slice(0, chunk.authoritativeStartIndex).some((time) => time >= chunk.startMs) || chunk.timeMs.slice(chunk.authoritativeStartIndex).some((time) => time < chunk.startMs || time >= chunk.endMs)) throw new Error('Chunk ownership is invalid')
   if (new Set(Object.keys(chunk.drivers)).size !== driverIds.size || Object.keys(chunk.drivers).some((id) => !driverIds.has(id))) throw new Error('Chunk drivers disagree with manifest')
-  for (const row of chunk.leaderboardOrder) if (row && (row.length !== driverIds.size || row.some((id) => !driverIds.has(id)))) throw new Error('Leaderboard drivers disagree with manifest')
+  for (const row of chunk.leaderboardOrder) if (row && row.some((id) => !driverIds.has(id))) throw new Error('Leaderboard drivers disagree with manifest')
   if (chunk.events.some((event) => event.sessionTimeMs < chunk.startMs || event.sessionTimeMs >= chunk.endMs || (event.driverId != null && !driverIds.has(event.driverId)))) throw new Error('Chunk events are invalid')
   if (index === 0) { if (chunk.overlap.kind !== 'none' || reference.overlapWithPreviousMs !== 0) throw new Error('First chunk overlap is invalid'); return }
   const previousReference = manifest.chunks[index - 1]

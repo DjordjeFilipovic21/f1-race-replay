@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { loadReplayIndex } from './replay-data/loader'
 import { createFetchSource } from './replay-data/source'
 import { createReplayController, type ReplayController } from './replay-engine'
+import type { DriverMetadata } from './replay-data/types'
 import { ReplayControls } from './replay-ui/ReplayControls'
 
 interface ReadyReplay {
   readonly controller: ReplayController
   readonly startMs: number
   readonly endMs: number
+  readonly drivers: readonly DriverMetadata[]
 }
 
 export default function App() {
@@ -27,7 +29,7 @@ export default function App() {
         if (stale) return
         controller = createReplayController({ index })
         const chunks = index.manifest.chunks
-        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs })
+        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers })
       },
       (loadError: unknown) => {
         if (!stale) setError(loadError)

@@ -70,6 +70,53 @@ describe('replay-data v1 loader', () => {
     await expect(loadReplayData({ source })).rejects.toThrow('not aligned to timeMs')
   })
 
+  test('accepts legacy null-only derived fields', async () => {
+    const source = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      const value = chunk as { drivers: Record<string, { trackDistanceMeters: null[]; gapToLeaderMs: null[]; position: null[] }>; leaderboardOrder: null[] }
+      value.leaderboardOrder = [null, null, null]
+      for (const driver of Object.values(value.drivers)) {
+        driver.trackDistanceMeters = [null, null, null]; driver.gapToLeaderMs = [null, null, null]; driver.position = [null, null, null]
+      }
+    })
+    await expect((await loadReplayIndex({ source })).loadChunk(1)).resolves.toBeDefined()
+  })
+
+  test('accepts a valid partial dynamic leaderboard and still rejects duplicate IDs', async () => {
+    const partial = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      const value = chunk as {
+        drivers: { RUS: { gapToLeaderMs: Array<number | null>; position: Array<number | null> } }
+        leaderboardOrder: string[][]
+      }
+      value.leaderboardOrder[0] = ['HAM']
+      value.drivers.RUS.position[0] = null
+      value.drivers.RUS.gapToLeaderMs[0] = null
+    })
+    await expect(loadReplayData({ source: partial })).resolves.toBeDefined()
+
+    const duplicate = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      ;(chunk as { leaderboardOrder: string[][] }).leaderboardOrder[0] = ['HAM', 'HAM']
+    })
+    await expect(loadReplayData({ source: duplicate })).rejects.toThrow('leaderboard row is invalid')
+  })
+
+  test('rejects populated position and leaderboard disagreement', async () => {
+    const source = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      ;(chunk as { leaderboardOrder: string[][] }).leaderboardOrder[0] = ['RUS', 'HAM']
+    })
+    await expect(loadReplayData({ source })).rejects.toThrow('Leaderboard order disagrees')
+  })
+
+  test('rejects duplicate positions and a nonzero leader gap', async () => {
+    const duplicate = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      ;(chunk as { drivers: { RUS: { position: number[] } } }).drivers.RUS.position[0] = 1
+    })
+    await expect(loadReplayData({ source: duplicate })).rejects.toThrow('Positions must be unique consecutive')
+    const leaderGap = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      ;(chunk as { drivers: { HAM: { gapToLeaderMs: number[] } } }).drivers.HAM.gapToLeaderMs[0] = 1
+    })
+    await expect(loadReplayData({ source: leaderGap })).rejects.toThrow('Leader gap must be zero')
+  })
+
   test('rejects a typed column with the wrong value domain', async () => {
     const source = mutateFixture('chunks/chunk-001.json', (chunk) => {
       ;(chunk as { drivers: { HAM: { gear: unknown[] } } }).drivers.HAM.gear[0] = 'eight'

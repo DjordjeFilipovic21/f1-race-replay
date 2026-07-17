@@ -58,6 +58,8 @@ class BrowserGlobalFields:
             raise ValueError("every global field must be aligned to time_ms")
         if any(value is not None and not isinstance(value, tuple) for value in self.leaderboard_order):
             raise TypeError("leaderboard entries must be immutable tuples or null")
+        if any(value is not None and (not value or len(set(value)) != len(value) or any(not isinstance(driver_id, str) or not driver_id for driver_id in value)) for value in self.leaderboard_order):
+            raise ValueError("leaderboard entries must be non-empty unique driver IDs or null")
         if any(value is not None and (type(value) is not int or value < 0) for value in self.track_status_code):
             raise TypeError("track status values must be non-negative integers or null")
         if any(value is not None and not isinstance(value, str) for value in self.weather_state):
@@ -157,6 +159,7 @@ class BrowserChunk:
             raise ValueError("driver fields must be aligned to the shared time_ms")
         if any(driver_id != fields.driver_id for driver_id, fields in self.drivers.items()):
             raise ValueError("driver keys must match driver_id")
+        _validate_live_leaderboard_rows(self.drivers, self.leaderboard_order)
         if any(not time_ms < self.start_ms for time_ms in self.time_ms[:self.authoritative_start_index]):
             raise ValueError("overlap samples must precede chunk authority")
         if self.sequence == 1 and self.overlap.kind != "none":
@@ -168,6 +171,35 @@ class BrowserChunk:
         if any(not self.start_ms <= event.session_time_ms < self.end_ms for event in self.events):
             raise ValueError("events must belong to the authoritative half-open interval")
         object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+
+def _validate_live_leaderboard_rows(
+    drivers: Mapping[str, BrowserDriverFields], leaderboard_order: tuple[tuple[str, ...] | None, ...],
+) -> None:
+    """Reject partial live rankings while retaining legacy null-only derived rows."""
+    for index, order in enumerate(leaderboard_order):
+        positioned = tuple(
+            (driver_id, fields.position[index], fields.gap_to_leader_ms[index])
+            for driver_id, fields in drivers.items()
+            if fields.position[index] is not None
+        )
+        if not positioned:
+            continue
+        if order is None or tuple(driver_id for driver_id, _, _ in sorted(positioned, key=_position_index)) != order:
+            raise ValueError("live leaderboard order must exactly match positioned drivers")
+        positions = tuple(position for _, position, _ in positioned)
+        if set(positions) != set(range(1, len(positioned) + 1)):
+            raise ValueError("live positions must be unique consecutive values")
+        leader_id = order[0]
+        leader = next(item for item in positioned if item[0] == leader_id)
+        if leader[1] != 1 or leader[2] != 0.0:
+            raise ValueError("the live leaderboard leader must have position 1 and zero gap")
+
+
+def _position_index(item: tuple[str, int | None, float | None]) -> int:
+    position = item[1]
+    assert position is not None
+    return position
 
 
 def build_browser_chunks(
@@ -236,8 +268,8 @@ def _align_driver(fields: BrowserDriverFields, timeline: tuple[int, ...]) -> Bro
         drs=_align(fields.time_ms, fields.drs, timeline), status=_align(fields.time_ms, fields.status, timeline),
         lap=_align(fields.time_ms, fields.lap, timeline), tyre_compound=_align(fields.time_ms, fields.tyre_compound, timeline),
         is_in_pit_lane=_align(fields.time_ms, fields.is_in_pit_lane, timeline),
-        track_distance_meters=(None,) * len(timeline), gap_to_leader_ms=(None,) * len(timeline),
-        position=(None,) * len(timeline),
+        track_distance_meters=_align(fields.time_ms, fields.track_distance_meters, timeline), gap_to_leader_ms=_align(fields.time_ms, fields.gap_to_leader_ms, timeline),
+        position=_align(fields.time_ms, fields.position, timeline),
     )
 
 

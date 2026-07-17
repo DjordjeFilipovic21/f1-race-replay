@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from dataclasses import replace
 
 import f1_replay_pipeline.browser_chunk_builder as chunk_builder
 
@@ -98,7 +99,7 @@ def test_alignment_is_performed_once_per_field_not_once_per_chunk(monkeypatch) -
     )
 
     assert len(chunks) == 5
-    assert calls == 14
+    assert calls == 17
 
 
 def test_empty_nominal_interval_is_merged_without_emitting_an_empty_chunk() -> None:
@@ -112,6 +113,22 @@ def test_empty_nominal_interval_is_merged_without_emitting_an_empty_chunk() -> N
     )
 
     assert tuple((chunk.start_ms, chunk.end_ms) for chunk in chunks) == ((0, 4_000), (4_000, 6_000))
+
+
+@pytest.mark.parametrize(("order", "positions", "gaps"), [
+    (("RUS", "HAM"), (1, 2), (0.0, 1.0)),
+    (("HAM", "RUS"), (1, 1), (0.0, 1.0)),
+    (("HAM", "RUS"), (1, 2), (1.0, 1.0)),
+])
+def test_chunk_rejects_malformed_live_leaderboard_semantics(order, positions, gaps) -> None:
+    ham = replace(_driver("HAM", (0,), (1.0,)), position=(positions[0],), gap_to_leader_ms=(gaps[0],))
+    rus = replace(_driver("RUS", (0,), (2.0,)), position=(positions[1],), gap_to_leader_ms=(gaps[1],))
+
+    with pytest.raises(ValueError, match="live leaderboard|live positions|leader"):
+        chunk_builder.BrowserChunk(
+            "chunk-001", 1, 0, 1, chunk_builder.BrowserOverlap("none", None, None, None, None),
+            (0,), 0, {"HAM": ham, "RUS": rus}, (order,), (1,), ("clear",), (),
+        )
 
 
 def _drivers() -> dict[str, BrowserDriverFields]:

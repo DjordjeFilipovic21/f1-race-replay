@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import cast
 
@@ -18,6 +18,18 @@ from f1_replay_pipeline.browser_delivery_models import (
     deep_freeze_json,
 )
 from f1_replay_pipeline.browser_delivery_reader import derive_browser_driver_fields
+from f1_replay_pipeline.live_position_progress import ProgressMode, ProgressState, advance_progress
+from f1_replay_pipeline.live_position_projection import ProjectionGeometry, ProjectionGeometryError, project_meters
+from f1_replay_pipeline.live_position_quality import (
+    QUALITY_GATE_VERSION,
+    ProjectionQualityAssessment,
+    assess_projection_quality,
+)
+from f1_replay_pipeline.live_position_ranking import DriverProgressInput, RankingTimelineFrame, rank_timeline
+from f1_replay_pipeline.track_assets_generator import TrackAssetsGenerationError
+
+
+ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], ProjectionQualityAssessment]
 
 
 @dataclass(frozen=True)
@@ -28,10 +40,13 @@ class BrowserDeliveryBuild:
     manifest: BrowserManifest
     track_assets: Mapping[str, object]
     chunks: tuple[BrowserChunk, ...]
+    projection_quality_assessment: ProjectionQualityAssessment | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
         object.__setattr__(self, "chunks", tuple(self.chunks))
+        if self.projection_quality_assessment is not None and not isinstance(self.projection_quality_assessment, ProjectionQualityAssessment):
+            raise TypeError("projection_quality_assessment must be a ProjectionQualityAssessment or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -44,6 +59,7 @@ def build_browser_delivery(
     *,
     chunk_duration_ms: int = 10_000,
     overlap_ms: int = 1_000,
+    quality_assessor: ProjectionQualityAssessor = assess_projection_quality,
 ) -> BrowserDeliveryBuild:
     """Derive all contract fields without rereading or mutating canonical data."""
     try:
@@ -60,7 +76,12 @@ def build_browser_delivery(
             driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
             for driver_id in driver_ids
         }
-        globals_ = _global_fields(snapshot, timeline, driver_ids)
+        assessment = _assess_quality(snapshot, track_assets, quality_assessor)
+        if assessment.passed:
+            drivers, dynamic_orders = _derive_live_fields(snapshot, track_assets, drivers, timeline)
+        else:
+            dynamic_orders = None
+        globals_ = _global_fields(snapshot, timeline, driver_ids, dynamic_orders)
         events = _events(snapshot)
         chunks = build_browser_chunks(
             drivers,
@@ -78,7 +99,7 @@ def build_browser_delivery(
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
-    return BrowserDeliveryBuild(snapshot, manifest, track_assets, chunks)
+    return BrowserDeliveryBuild(snapshot, manifest, track_assets, chunks, assessment)
 
 
 def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
@@ -105,14 +126,14 @@ def _delivery_timeline(snapshot, native_drivers, race_start_ms: int) -> tuple[in
     return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
 
 
-def _global_fields(snapshot, timeline, driver_ids) -> BrowserGlobalFields:
+def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[str, ...] | None, ...] | None = None) -> BrowserGlobalFields:
     results = snapshot.frames["results"].to_dicts()
     ranked = sorted(driver_ids, key=lambda driver_id: (_result_rank(results, driver_id), driver_id))
     statuses = snapshot.frames["track_status_intervals"].to_dicts()
     weather = snapshot.frames["weather"].to_dicts()
     return BrowserGlobalFields(
         timeline,
-        (tuple(ranked),) * len(timeline),
+        (tuple(ranked),) * len(timeline) if dynamic_orders is None else dynamic_orders,
         tuple(_track_status(statuses, time_ms) for time_ms in timeline),
         tuple(_weather_state(weather, time_ms) for time_ms in timeline),
     )
@@ -181,4 +202,107 @@ def _validate_track_assets(track_assets: Mapping[str, object], fixture_id: str) 
         raise ValueError("track assets must be v1 and match the canonical session_id")
 
 
-__all__ = ["BrowserDeliveryBuild", "BrowserDeliveryBuildError", "build_browser_delivery"]
+def _assess_quality(snapshot, track_assets, assessor: ProjectionQualityAssessor) -> ProjectionQualityAssessment:
+    if not callable(assessor):
+        raise TypeError("quality_assessor must be callable")
+    try:
+        assessment = assessor(snapshot, track_assets)
+    except (ProjectionGeometryError, TrackAssetsGenerationError):
+        return ProjectionQualityAssessment(
+            QUALITY_GATE_VERSION, False, ("insufficient projection quality evidence",), "", 0,
+            0, 0, None, None, 0, 0, 0, 0, None, None,
+        )
+    if not isinstance(assessment, ProjectionQualityAssessment):
+        raise TypeError("quality_assessor must return ProjectionQualityAssessment")
+    return assessment
+
+
+def _derive_live_fields(snapshot, track_assets, drivers, timeline):
+    geometry = _projection_geometry(track_assets)
+    result_statuses = {row["driver_id"]: row["status"] for row in snapshot.frames["results"].to_dicts()}
+    last_positions = _last_valid_position_times(snapshot)
+    states = {driver_id: ProgressState() for driver_id in drivers}
+    distances = {driver_id: [] for driver_id in drivers}
+    gaps = {driver_id: [] for driver_id in drivers}
+    positions = {driver_id: [] for driver_id in drivers}
+    ranking_frames = []
+    for index, time_ms in enumerate(timeline):
+        inputs = []
+        for driver_id, fields in drivers.items():
+            lap = fields.lap[index]
+            mode = _progress_mode(fields.is_in_pit_lane[index], result_statuses.get(driver_id), last_positions.get(driver_id), time_ms)
+            effective_lap = lap
+            if effective_lap is None and mode in (ProgressMode.RETIRED, ProgressMode.OUT):
+                effective_lap = states[driver_id].last_lap_number
+            if effective_lap is None:
+                update = None
+            else:
+                projection = project_meters(fields.x[index], fields.y[index], geometry, previous_track_distance_meters=states[driver_id].last_track_distance_meters)
+                update = advance_progress(states[driver_id], session_time_ms=time_ms, lap_number=effective_lap, circuit_length_meters=geometry.circuit_length_meters, projection=projection, mode=mode)
+                states[driver_id] = update.state
+            inputs.append(DriverProgressInput(driver_id, None if update is None else update.race_progress_meters, mode))
+            frozen_distance = states[driver_id].last_track_distance_meters if update is not None and update.race_progress_meters is not None else None
+            distance = None if update is None else update.track_distance_meters if update.track_distance_meters is not None else frozen_distance
+            distances[driver_id].append(distance)
+        ranking_frames.append(RankingTimelineFrame(time_ms, tuple(inputs)))
+    ranked_frames = rank_timeline(tuple(ranking_frames))
+    orders = []
+    for ranking in ranked_frames:
+        for entry in ranking.drivers:
+            gaps[entry.driver_id].append(entry.gap_to_leader_ms)
+            positions[entry.driver_id].append(entry.position)
+        orders.append(ranking.leaderboard_order or None)
+    return {
+        driver_id: _with_derived_fields(fields, distances[driver_id], gaps[driver_id], positions[driver_id])
+        for driver_id, fields in drivers.items()
+    }, tuple(orders)
+
+
+def _projection_geometry(track_assets: Mapping[str, object]) -> ProjectionGeometry:
+    centerline = track_assets.get("centerLine")
+    if not isinstance(centerline, (list, tuple)):
+        raise ProjectionGeometryError("track assets centerLine must be a sequence")
+    points = tuple(
+        cast(tuple[float, float], (point.get("x"), point.get("y")))
+        for point in centerline
+        if isinstance(point, Mapping)
+    )
+    return ProjectionGeometry(points, cast(float, track_assets.get("circuitLengthMeters")))
+
+
+def _last_valid_position_times(snapshot) -> dict[str, int]:
+    values = {}
+    for row in snapshot.frames["position_telemetry"].to_dicts():
+        if type(row["x"]) in (int, float) and type(row["y"]) in (int, float):
+            values[row["driver_id"]] = row["session_time_ms"]
+    return values
+
+
+def _progress_mode(in_pit, result_status, last_position_time, time_ms) -> ProgressMode:
+    if in_pit is True:
+        return ProgressMode.PIT
+    if last_position_time is None or time_ms > last_position_time:
+        normalized = "" if not isinstance(result_status, str) else "".join(character for character in result_status.lower() if character.isalnum())
+        if normalized in {"disqualified", "excluded", "didnotstart", "dns"}:
+            return ProgressMode.OUT
+        if normalized not in {"", "finished", "lapped", "completed", "lapsdown"} and normalized in _KNOWN_NON_COMPLETION_STATUSES:
+            return ProgressMode.RETIRED
+    return ProgressMode.ACTIVE
+
+
+_KNOWN_NON_COMPLETION_STATUSES = frozenset({
+    "retired", "accident", "collision", "engine", "gearbox", "transmission", "clutch",
+    "hydraulics", "electrical", "brakes", "suspension", "damage", "mechanical", "fuel",
+    "tyre", "wheel", "overheating", "withdrawn",
+})
+
+
+def _with_derived_fields(fields, distances, gaps, positions):
+    return type(fields)(
+        fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
+        fields.brake, fields.gear, fields.drs, fields.status, fields.lap, fields.tyre_compound,
+        fields.is_in_pit_lane, tuple(distances), tuple(gaps), tuple(positions),
+    )
+
+
+__all__ = ["BrowserDeliveryBuild", "BrowserDeliveryBuildError", "ProjectionQualityAssessor", "build_browser_delivery"]

@@ -221,7 +221,7 @@
           "gear": 6,
           "drs": 0,
           "tyreCompound": "MEDIUM",
-          "status": "yellow"
+          "status": "pit"
         },
         "RUS": {
           "x": 530,
@@ -275,14 +275,14 @@
         "HAM": {
           "x": 698,
           "y": 108.8,
-          "trackDistanceMeters": 1576,
+          "trackDistanceMeters": 1450,
           "speed": 205.2,
-          "gapToLeaderMs": 21,
+          "gapToLeaderMs": 0,
           "position": 1,
           "gear": 6,
           "drs": 0,
           "tyreCompound": "MEDIUM",
-          "status": "yellow"
+          "status": "pit"
         },
         "RUS": {
           "x": 698,
@@ -318,14 +318,14 @@
         "HAM": {
           "x": 790,
           "y": 118,
-          "trackDistanceMeters": 1660,
+          "trackDistanceMeters": 1450,
           "speed": 202,
           "gapToLeaderMs": 35,
           "position": 2,
           "gear": 6,
           "drs": 0,
           "tyreCompound": "MEDIUM",
-          "status": "defend"
+          "status": "out"
         },
         "RUS": {
           "x": 810,

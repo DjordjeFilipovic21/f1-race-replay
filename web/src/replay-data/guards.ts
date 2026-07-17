@@ -103,6 +103,7 @@ export function parseChunk(value: unknown): ReplayChunk {
   const weatherState = freeze(array(item.weatherState, 'weather').map((entry) => nullable(entry, (value) => string(value, 'weather state'))))
   if ([leaderboardOrder, trackStatusCode, weatherState].some((column) => column.length !== timeMs.length)) throw new Error('chunk global columns are not aligned')
   const fixtureId = string(item.fixtureId, 'chunk fixture id'); if (!FIXTURE_ID.test(fixtureId)) throw new Error('chunk fixture ID is invalid')
+  validateDerivedFields(drivers, leaderboardOrder)
   return freeze({ contractVersion: 'v1', fixtureId, chunkId: string(item.chunkId, 'chunk id'), sequence: integer(item.sequence, 'chunk sequence', 1), startMs: integer(item.startMs, 'chunk start'), endMs: integer(item.endMs, 'chunk end'), overlap: parseOverlap(item.overlap), timeMs, authoritativeStartIndex: integer(item.authoritativeStartIndex, 'chunk authoritative index'), drivers, leaderboardOrder, trackStatusCode, weatherState, events: freeze(array(item.events, 'events').map(parseEvent)) })
 }
 
@@ -125,7 +126,27 @@ function parseColumns(value: unknown, length: number, label: string): DriverColu
   const numberColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => finite(value, field)))
   const integerColumn = (field: string, min: number, max = Number.MAX_SAFE_INTEGER) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => integer(value, field, min, max)))
   const stringColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => string(value, field)))
-  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: numberColumn('trackDistanceMeters'), speed: numberColumn('speed'), throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: numberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })) })
+  const nonNegativeNumberColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => { const parsed = finite(value, field); if (parsed < 0) throw new Error(`${field} must be non-negative`); return parsed }))
+  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })) })
+}
+
+function validateDerivedFields(drivers: ReplayChunk['drivers'], order: ReplayChunk['leaderboardOrder']): void {
+  const driverIds = new Set(Object.keys(drivers))
+  for (let index = 0; index < order.length; index += 1) {
+    const row = order[index]
+    if (row !== null && row.some((driverId) => !driverIds.has(driverId))) throw new Error('Leaderboard drivers disagree')
+    const participants = Object.entries(drivers).filter(([, columns]) => columns.position[index] !== null)
+    if (!participants.length) continue
+    if (row === null) throw new Error('Populated positions require leaderboard order')
+    const ranked = [...participants].sort((left, right) => left[1].position[index]! - right[1].position[index]!)
+    if (ranked.some(([, columns], position) => columns.position[index] !== position + 1)) throw new Error('Positions must be unique consecutive values')
+    if (row.length !== ranked.length || row.some((driverId, position) => driverId !== ranked[position][0])) throw new Error('Leaderboard order disagrees with positions')
+    for (const [driverId, columns] of Object.entries(drivers)) {
+      const position = columns.position[index]; const gap = columns.gapToLeaderMs[index]
+      if (position === null && gap !== null) throw new Error(`Driver ${driverId} has gap without position`)
+      if (position === 1 && gap !== 0) throw new Error('Leader gap must be zero')
+    }
+  }
 }
 
 function parseColumn<T>(raw: unknown, length: number, label: string, parse: (entry: unknown) => T): readonly T[] { const values = array(raw, label); if (values.length !== length) throw new Error(`driver ${label} is not aligned to timeMs`); return freeze(values.map(parse)) }
