@@ -139,7 +139,7 @@ function updateMarkerPositions(markers: ReadonlyMap<string, SVGGElement>, snapsh
   if (snapshot === null) return
   markers.forEach((element, id) => {
     const sampled = snapshot.drivers[id]
-    const point = sampled === undefined || sampled.x === null || sampled.y === null
+    const point = sampled === undefined || isTerminalStatus(sampled.status) || sampled.x === null || sampled.y === null
       ? null
       : toMapPoint({ x: sampled.x, y: sampled.y }, rotationDegrees)
     if (point === null) {
@@ -170,6 +170,10 @@ function formatCoordinate(value: number): string {
 
 function isFinitePoint(point: TrackPoint): boolean {
   return Number.isFinite(point.x) && Number.isFinite(point.y)
+}
+
+function isTerminalStatus(status: string | null): boolean {
+  return typeof status === 'string' && status.trim().toUpperCase() === 'OUT'
 }
 
 function isColorHex(color: string | undefined): color is string {

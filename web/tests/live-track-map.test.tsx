@@ -132,3 +132,16 @@ test('keeps manifest marker nodes mounted while notifications update transforms 
   expect(controller.subscribe).toHaveBeenCalledOnce()
   expect(getUnsubscribeCalls()).toBe(1)
 })
+
+test('hides only markers sampled with terminal OUT status', () => {
+  const replay = snapshot()
+  const { controller, setReplay } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
+  const marker = screen.getByRole('img', { name: 'Max Verstappen (VER)' })
+
+  setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OUT' } } })
+  expect(marker.getAttribute('visibility')).toBe('hidden')
+
+  setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OffTrack' } } })
+  expect(marker.getAttribute('visibility')).toBe('visible')
+})
