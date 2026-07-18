@@ -45,6 +45,25 @@ def test_generator_converts_fastf1_decimetres_to_metres_and_offsets_visual_bound
     ) == pytest.approx(20.0)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_generator_rotates_clockwise_and_anticlockwise_tracks_to_landscape_without_reflection(reverse):
+    portrait = ((0.0, 0.0), (100.0, 0.0), (100.0, 400.0), (0.0, 400.0))
+    points = tuple(reversed(portrait)) if reverse else portrait
+
+    asset = generate_track_assets(_snapshot(points=points), centerline_points=8)
+    centerline = tuple((point["x"], point["y"]) for point in asset["centerLine"])
+    display_width, display_height = _display_extents(centerline, asset["rotationDegrees"])
+
+    assert display_width >= display_height
+    assert math.copysign(1, _signed_area(centerline)) == math.copysign(1, _signed_area(points))
+
+
+def test_generator_preserves_explicit_display_rotation_override():
+    asset = generate_track_assets(_snapshot(), rotation_degrees=-37.5)
+
+    assert asset["rotationDegrees"] == -37.5
+
+
 def test_reference_lap_selector_matches_the_generator_source_policy():
     reference = select_reference_lap(_snapshot())
 
@@ -104,3 +123,24 @@ def _lap(driver, number, start, end, duration, *, pit_in_time_ms=None):
         "deleted": False,
         "is_accurate": True,
     }
+
+
+def _display_extents(points, rotation_degrees):
+    radians = math.radians(rotation_degrees)
+    rotated = tuple(
+        (
+            x * math.cos(radians) + y * math.sin(radians),
+            x * math.sin(radians) - y * math.cos(radians),
+        )
+        for x, y in points
+    )
+    xs, ys = zip(*rotated, strict=True)
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
+def _signed_area(points):
+    closed = points if points[0] == points[-1] else points + (points[0],)
+    return sum(
+        current[0] * following[1] - following[0] * current[1]
+        for current, following in zip(closed[:-1], closed[1:], strict=True)
+    )

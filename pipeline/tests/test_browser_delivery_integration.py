@@ -267,9 +267,9 @@ def test_failed_quality_assessment_preserves_null_derived_fields_and_classified_
     assert delivery.projection_quality_assessment == _assessment(False)
 
 
-def test_terminal_results_and_stale_active_coordinates_have_distinct_live_progress(tmp_path: Path) -> None:
+def test_retired_and_disqualified_drivers_become_out_after_their_last_genuine_activity(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
-    frames = _live_frames(result_statuses={"HAM": "Retired", "RUS": "Finished"})
+    frames = _terminal_live_frames({"HAM": "Retired", "RUS": "Disqualified"})
     publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
 
     delivery = build_browser_delivery(
@@ -277,8 +277,26 @@ def test_terminal_results_and_stale_active_coordinates_have_distinct_live_progre
         quality_assessor=lambda *_: _assessment(True),
     )
 
-    assert _driver_value(delivery, "HAM", "track_distance_meters", 1_500) == _driver_value(delivery, "HAM", "track_distance_meters", 500)
-    assert _driver_value(delivery, "RUS", "track_distance_meters", 1_500) is None
+    assert _driver_value(delivery, "HAM", "status", 850) == "OffTrack"
+    assert _driver_value(delivery, "HAM", "status", 900) == "OffTrack"
+    assert _driver_value(delivery, "RUS", "status", 900) == "OffTrack"
+    assert _driver_value(delivery, "HAM", "status", 1_000) == "OUT"
+    assert _driver_value(delivery, "RUS", "status", 1_000) == "OUT"
+    assert _driver_value(delivery, "HAM", "track_distance_meters", 1_000) == _driver_value(delivery, "HAM", "track_distance_meters", 500)
+
+
+def test_dns_is_out_from_race_start_while_finished_offtrack_driver_remains_active(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _terminal_live_frames({"HAM": "Did not start", "RUS": "Finished"})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _driver_value(delivery, "HAM", "status", 0) == "OUT"
+    assert _driver_value(delivery, "RUS", "status", 1_000) == "OffTrack"
 
 
 def _canonical_frames(
@@ -417,6 +435,25 @@ def _live_frames(*, result_statuses: dict[str, str] | None = None) -> dict[str, 
             for index, driver in enumerate(("HAM", "RUS"))
         ]
         frames["results"] = pl.DataFrame(results, schema=dict(CANONICAL_TABLE_SCHEMAS["results"]), strict=True)
+    return frames
+
+
+def _terminal_live_frames(result_statuses: dict[str, str]) -> dict[str, pl.DataFrame]:
+    frames = _live_frames(result_statuses=result_statuses)
+    frames["car_telemetry"] = pl.DataFrame([
+        _row("car_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time, speed_kph=speed)
+        for driver in ("HAM", "RUS")
+        for time, speed in ((0, 100.0), (900, 10.0), (1_000, 0.0))
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)
+    frames["position_telemetry"] = pl.DataFrame([
+        _row("position_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time, x=x, y=0.0, status="OffTrack")
+        for driver in ("HAM", "RUS")
+        for time, x in ((0, 0.0), (500, 50.0), (850, 50.0), (900, 50.0), (1_000, 50.0))
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
+    frames["laps"] = pl.DataFrame([
+        _row("laps", driver_id=driver, lap_number=1, lap_start_time_ms=0, lap_end_time_ms=800, compound="MEDIUM")
+        for driver in ("HAM", "RUS")
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
     return frames
 
 

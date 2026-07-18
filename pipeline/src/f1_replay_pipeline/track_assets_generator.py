@@ -41,9 +41,9 @@ def generate_track_assets(
     track_id: str | None = None,
     visual_track_width_m: float = DEFAULT_TRACK_WIDTH_M,
     centerline_points: int = DEFAULT_CENTERLINE_POINTS,
-    rotation_degrees: float = 0.0,
+    rotation_degrees: float | None = None,
 ) -> Mapping[str, object]:
-    """Build a closed centerline and synthetic fixed-width visual boundaries."""
+    """Build a closed centerline and landscape-oriented visual metadata."""
     _validate_options(visual_track_width_m, centerline_points, rotation_degrees)
     session = snapshot.frames["session_metadata"].row(0, named=True)
     fixture_id = cast(str, session["session_id"])
@@ -54,6 +54,11 @@ def generate_track_assets(
     centerline = _resample_closed_polyline(reference.points_meters, centerline_points)
     inner, outer = _offset_boundaries(centerline, visual_track_width_m / 2.0)
     length_m = _polyline_length(centerline)
+    display_rotation = (
+        _landscape_rotation_degrees(centerline)
+        if rotation_degrees is None
+        else float(rotation_degrees)
+    )
     return {
         "contractVersion": "v1",
         "fixtureId": fixture_id,
@@ -64,7 +69,7 @@ def generate_track_assets(
             "origin": "FastF1 position telemetry local coordinates",
         },
         "circuitLengthMeters": _round(length_m),
-        "rotationDegrees": _round(rotation_degrees),
+        "rotationDegrees": _round(display_rotation),
         "startFinish": {
             "center": _point(centerline[0]),
             "inner": _point(inner[0]),
@@ -200,6 +205,35 @@ def _polyline_length(points):
     )
 
 
+def _landscape_rotation_degrees(points):
+    """Align the principal axis horizontally without reflecting or reversing points."""
+    unique = points[:-1]
+    center_x = sum(point[0] for point in unique) / len(unique)
+    center_y = sum(point[1] for point in unique) / len(unique)
+    centered = tuple((x - center_x, y - center_y) for x, y in unique)
+    covariance_xx = sum(x * x for x, _ in centered)
+    covariance_yy = sum(y * y for _, y in centered)
+    covariance_xy = sum(x * y for x, y in centered)
+    rotation = math.degrees(
+        0.5 * math.atan2(2.0 * covariance_xy, covariance_xx - covariance_yy)
+    )
+    width, height = _display_extents(centered, rotation)
+    if height > width:
+        rotation += 90.0
+    return ((rotation + 180.0) % 360.0) - 180.0
+
+
+def _display_extents(points, rotation_degrees):
+    radians = math.radians(rotation_degrees)
+    cosine, sine = math.cos(radians), math.sin(radians)
+    rotated = tuple(
+        (x * cosine + y * sine, x * sine - y * cosine)
+        for x, y in points
+    )
+    xs, ys = zip(*rotated, strict=True)
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
 def _point(value):
     return {"x": _round(value[0]), "y": _round(value[1])}
 
@@ -213,7 +247,9 @@ def _validate_options(width, points, rotation):
         raise TrackAssetsGenerationError("visual_track_width_m must be positive and finite")
     if type(points) is not int or points < 4:
         raise TrackAssetsGenerationError("centerline_points must be an integer of at least four")
-    if not isinstance(rotation, (int, float)) or not math.isfinite(rotation):
+    if rotation is not None and (
+        not isinstance(rotation, (int, float)) or not math.isfinite(rotation)
+    ):
         raise TrackAssetsGenerationError("rotation_degrees must be finite")
 
 

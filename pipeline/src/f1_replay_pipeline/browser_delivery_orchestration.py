@@ -67,8 +67,8 @@ def build_browser_delivery(
         fixture_id = cast(str, session["session_id"])
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
-        native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
         race_start_ms = _race_start_time_ms(snapshot)
+        native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
         timeline = _delivery_timeline(snapshot, native_drivers, race_start_ms)
         if not timeline:
             raise ValueError("a browser delivery requires a canonical timestamp at or after the Lap 1 start")
@@ -76,9 +76,16 @@ def build_browser_delivery(
             driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
             for driver_id in driver_ids
         }
+        terminal_end_times = _terminal_end_times(snapshot, race_start_ms)
+        drivers = {
+            driver_id: _with_terminal_status(fields, terminal_end_times.get(driver_id))
+            for driver_id, fields in drivers.items()
+        }
         assessment = _assess_quality(snapshot, track_assets, quality_assessor)
         if assessment.passed:
-            drivers, dynamic_orders = _derive_live_fields(snapshot, track_assets, drivers, timeline)
+            drivers, dynamic_orders = _derive_live_fields(
+                snapshot, track_assets, drivers, timeline, terminal_end_times,
+            )
         else:
             dynamic_orders = None
         globals_ = _global_fields(snapshot, timeline, driver_ids, dynamic_orders)
@@ -217,10 +224,9 @@ def _assess_quality(snapshot, track_assets, assessor: ProjectionQualityAssessor)
     return assessment
 
 
-def _derive_live_fields(snapshot, track_assets, drivers, timeline):
+def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_times):
     geometry = _projection_geometry(track_assets)
     result_statuses = {row["driver_id"]: row["status"] for row in snapshot.frames["results"].to_dicts()}
-    last_positions = _last_valid_position_times(snapshot)
     states = {driver_id: ProgressState() for driver_id in drivers}
     distances = {driver_id: [] for driver_id in drivers}
     gaps = {driver_id: [] for driver_id in drivers}
@@ -230,7 +236,10 @@ def _derive_live_fields(snapshot, track_assets, drivers, timeline):
         inputs = []
         for driver_id, fields in drivers.items():
             lap = fields.lap[index]
-            mode = _progress_mode(fields.is_in_pit_lane[index], result_statuses.get(driver_id), last_positions.get(driver_id), time_ms)
+            mode = _progress_mode(
+                fields.is_in_pit_lane[index], result_statuses.get(driver_id),
+                terminal_end_times.get(driver_id), time_ms,
+            )
             effective_lap = lap
             if effective_lap is None and mode in (ProgressMode.RETIRED, ProgressMode.OUT):
                 effective_lap = states[driver_id].last_lap_number
@@ -270,24 +279,58 @@ def _projection_geometry(track_assets: Mapping[str, object]) -> ProjectionGeomet
     return ProjectionGeometry(points, cast(float, track_assets.get("circuitLengthMeters")))
 
 
-def _last_valid_position_times(snapshot) -> dict[str, int]:
+def _terminal_end_times(snapshot, race_start_ms: int) -> dict[str, int]:
+    lap_ends = _last_lap_end_times(snapshot)
+    car_activity = _last_car_activity_times(snapshot)
     values = {}
-    for row in snapshot.frames["position_telemetry"].to_dicts():
-        if type(row["x"]) in (int, float) and type(row["y"]) in (int, float):
-            values[row["driver_id"]] = row["session_time_ms"]
+    for result in snapshot.frames["results"].to_dicts():
+        mode = _terminal_mode(result["status"])
+        if mode is None:
+            continue
+        driver_id = result["driver_id"]
+        if mode is ProgressMode.OUT and _normalized_status(result["status"]) in {"didnotstart", "dns"}:
+            values[driver_id] = race_start_ms - 1
+            continue
+        values[driver_id] = max(race_start_ms, lap_ends.get(driver_id, race_start_ms), car_activity.get(driver_id, race_start_ms))
     return values
 
 
-def _progress_mode(in_pit, result_status, last_position_time, time_ms) -> ProgressMode:
-    if in_pit is True:
-        return ProgressMode.PIT
-    if last_position_time is None or time_ms > last_position_time:
-        normalized = "" if not isinstance(result_status, str) else "".join(character for character in result_status.lower() if character.isalnum())
-        if normalized in {"disqualified", "excluded", "didnotstart", "dns"}:
-            return ProgressMode.OUT
-        if normalized not in {"", "finished", "lapped", "completed", "lapsdown"} and normalized in _KNOWN_NON_COMPLETION_STATUSES:
-            return ProgressMode.RETIRED
-    return ProgressMode.ACTIVE
+def _last_lap_end_times(snapshot) -> dict[str, int]:
+    return _last_times(snapshot.frames["laps"].to_dicts(), "lap_end_time_ms", lambda _: True)
+
+
+def _last_car_activity_times(snapshot) -> dict[str, int]:
+    return _last_times(
+        snapshot.frames["car_telemetry"].to_dicts(), "session_time_ms",
+        lambda row: isinstance(row["speed_kph"], (int, float)) and row["speed_kph"] > 5,
+    )
+
+
+def _last_times(rows, time_key, predicate) -> dict[str, int]:
+    values = {}
+    for row in rows:
+        time_ms = row[time_key]
+        if predicate(row) and type(time_ms) is int:
+            values[row["driver_id"]] = max(values.get(row["driver_id"], time_ms), time_ms)
+    return values
+
+
+def _progress_mode(in_pit, result_status, terminal_end_time, time_ms) -> ProgressMode:
+    terminal_mode = _terminal_mode(result_status)
+    if terminal_mode is not None and terminal_end_time is not None and time_ms > terminal_end_time:
+        return terminal_mode
+    return ProgressMode.PIT if in_pit is True else ProgressMode.ACTIVE
+
+
+def _terminal_mode(result_status) -> ProgressMode | None:
+    normalized = _normalized_status(result_status)
+    if normalized in {"disqualified", "excluded", "didnotstart", "dns"}:
+        return ProgressMode.OUT
+    return ProgressMode.RETIRED if normalized in _KNOWN_NON_COMPLETION_STATUSES else None
+
+
+def _normalized_status(value) -> str:
+    return "" if not isinstance(value, str) else "".join(character for character in value.lower() if character.isalnum())
 
 
 _KNOWN_NON_COMPLETION_STATUSES = frozenset({
@@ -295,6 +338,18 @@ _KNOWN_NON_COMPLETION_STATUSES = frozenset({
     "hydraulics", "electrical", "brakes", "suspension", "damage", "mechanical", "fuel",
     "tyre", "wheel", "overheating", "withdrawn",
 })
+
+
+def _with_terminal_status(fields, terminal_end_time):
+    statuses = tuple(
+        "OUT" if terminal_end_time is not None and time_ms > terminal_end_time else status
+        for time_ms, status in zip(fields.time_ms, fields.status, strict=True)
+    )
+    return type(fields)(
+        fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
+        fields.brake, fields.gear, fields.drs, statuses, fields.lap, fields.tyre_compound,
+        fields.is_in_pit_lane, fields.track_distance_meters, fields.gap_to_leader_ms, fields.position,
+    )
 
 
 def _with_derived_fields(fields, distances, gaps, positions):

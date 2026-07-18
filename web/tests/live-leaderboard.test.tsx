@@ -46,6 +46,21 @@ test('uses exact raw status and unavailable text without fabricating a retired s
   expect(screen.queryByText('OUT')).toBeNull()
 })
 
+test('shows OUT in the position and status cells for a terminal sampled driver', () => {
+  render(<LiveLeaderboard snapshot={snapshot({ drivers: { VER: { ...snapshot().drivers.VER, position: null, status: 'OUT', isInPitLane: true }, NOR: snapshot().drivers.NOR } })} drivers={drivers} />)
+
+  const cells = within(screen.getAllByRole('row')[1]).getAllByRole('cell')
+  expect(cells[0].textContent).toBe('OUT')
+  expect(cells[2].textContent).toBe('OUT')
+  expect(cells[4].textContent).toBe('—')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
+
+  const rows = screen.getAllByRole('row')
+  expect(within(rows[1]).getAllByRole('cell')[4].textContent).toBe('—')
+  expect(within(rows[2]).getAllByRole('cell')[4].textContent).toBe('—')
+})
+
 test('keeps legacy null-only rows in immutable manifest order with unavailable values', () => {
   const legacy = snapshot({ leaderboardOrder: null, drivers: {} })
   render(<LiveLeaderboard snapshot={legacy} drivers={drivers} />)

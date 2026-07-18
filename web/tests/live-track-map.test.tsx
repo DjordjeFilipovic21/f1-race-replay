@@ -3,7 +3,7 @@
  */
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { createPaddedViewBox, LiveTrackMap, toMapPoint } from '../src/replay-ui/LiveTrackMap'
+import { createPaddedViewBox, createTrackMapGeometry, LiveTrackMap, toMapPoint } from '../src/replay-ui/LiveTrackMap'
 import type { ReplayController, ReplayControllerSnapshot } from '../src/replay-engine'
 import type { ReplaySnapshot } from '../src/replay-engine/types'
 
@@ -63,6 +63,21 @@ test('rotates coordinates and derives a finite padded viewBox deterministically'
   expect(createPaddedViewBox([{ x: Number.NaN, y: 0 }])).toBeNull()
 })
 
+test.each([90, -90])('renders portrait geometry in landscape using a %s degree rotation', (rotationDegrees) => {
+  const portraitAssets = {
+    ...trackAssets,
+    rotationDegrees,
+    centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 40 }, { x: 0, y: 40 }],
+    innerBoundary: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 9, y: 39 }, { x: 1, y: 39 }],
+    outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 40 }, { x: 0, y: 40 }],
+  } as const
+
+  const geometry = createTrackMapGeometry(portraitAssets)
+
+  expect(geometry).not.toBeNull()
+  expect(geometry?.viewBox.width).toBeGreaterThan(geometry?.viewBox.height ?? Number.POSITIVE_INFINITY)
+})
+
 test('renders labelled track geometry and only finite sampled driver markers', () => {
   const { controller } = createController(snapshot())
   render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
@@ -116,4 +131,17 @@ test('keeps manifest marker nodes mounted while notifications update transforms 
   unmount()
   expect(controller.subscribe).toHaveBeenCalledOnce()
   expect(getUnsubscribeCalls()).toBe(1)
+})
+
+test('hides only markers sampled with terminal OUT status', () => {
+  const replay = snapshot()
+  const { controller, setReplay } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
+  const marker = screen.getByRole('img', { name: 'Max Verstappen (VER)' })
+
+  setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OUT' } } })
+  expect(marker.getAttribute('visibility')).toBe('hidden')
+
+  setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OffTrack' } } })
+  expect(marker.getAttribute('visibility')).toBe('visible')
 })

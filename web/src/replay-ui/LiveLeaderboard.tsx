@@ -60,12 +60,12 @@ function LeaderboardTableRow({ row, ahead, gapMode }: { readonly row: Leaderboar
   const code = row.metadata?.id ?? row.id
   return (
     <tr>
-      <td className="live-leaderboard__position">{formatPosition(row.position)}</td>
+      <td className="live-leaderboard__position">{formatPosition(row.position, row.status)}</td>
       <th scope="row"><span className="live-leaderboard__driver-name">{identity}</span><span className="live-leaderboard__driver-code">{code}</span></th>
       <td className="live-leaderboard__team">{row.metadata?.teamName || '—'}</td>
       <td>{formatStatus(row.status, row.isInPitLane)}</td>
       <td>{row.tyreCompound ?? '—'}</td>
-      <td className="live-leaderboard__gap">{gapMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs) : formatIntervalGap(row, ahead)}</td>
+      <td className="live-leaderboard__gap">{gapMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs, row.status) : formatIntervalGap(row, ahead)}</td>
     </tr>
   )
 }
@@ -94,13 +94,15 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
   }
 }
 
-export function formatGap(position: number | null, gapToLeaderMs: number | null): string {
+export function formatGap(position: number | null, gapToLeaderMs: number | null, status: string | null = null): string {
+  if (isTerminalStatus(status)) return '—'
   if (position === 1) return 'Leader'
   if (gapToLeaderMs === null || !Number.isFinite(gapToLeaderMs)) return '—'
   return formatGapMilliseconds(gapToLeaderMs)
 }
 
 function formatIntervalGap(row: LeaderboardRow, ahead: LeaderboardRow | null): string {
+  if (isTerminalStatus(row.status) || isTerminalStatus(ahead?.status ?? null)) return '—'
   if (row.position === 1) return 'Leader'
   if (
     row.position === null
@@ -114,10 +116,15 @@ function formatIntervalGap(row: LeaderboardRow, ahead: LeaderboardRow | null): s
 
 function formatGapMilliseconds(gapMs: number): string { return `+${(gapMs / 1000).toFixed(3)}` }
 
-function formatPosition(position: number | null): string {
+function formatPosition(position: number | null, status: string | null): string {
+  if (isTerminalStatus(status)) return 'OUT'
   return position === null || !Number.isFinite(position) ? '—' : String(position)
 }
 
 export function formatStatus(status: string | null, isInPitLane: boolean | null): string {
-  return isInPitLane === true ? 'PIT' : (status ?? '—')
+  return isTerminalStatus(status) ? 'OUT' : (isInPitLane === true ? 'PIT' : (status ?? '—'))
+}
+
+function isTerminalStatus(status: string | null): boolean {
+  return typeof status === 'string' && status.trim().toUpperCase() === 'OUT'
 }
