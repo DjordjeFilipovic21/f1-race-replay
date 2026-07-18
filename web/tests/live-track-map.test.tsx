@@ -3,7 +3,7 @@
  */
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { createPaddedViewBox, LiveTrackMap, toMapPoint } from '../src/replay-ui/LiveTrackMap'
+import { createPaddedViewBox, createTrackMapGeometry, LiveTrackMap, toMapPoint } from '../src/replay-ui/LiveTrackMap'
 import type { ReplayController, ReplayControllerSnapshot } from '../src/replay-engine'
 import type { ReplaySnapshot } from '../src/replay-engine/types'
 
@@ -61,6 +61,21 @@ test('rotates coordinates and derives a finite padded viewBox deterministically'
   expect(toMapPoint({ x: 10, y: 0 }, 90)).toEqual({ x: expect.closeTo(0), y: 10 })
   expect(createPaddedViewBox([{ x: 0, y: 0 }, { x: 10, y: 5 }])).toEqual({ minX: -0.8, minY: -0.8, width: 11.6, height: 6.6 })
   expect(createPaddedViewBox([{ x: Number.NaN, y: 0 }])).toBeNull()
+})
+
+test.each([90, -90])('renders portrait geometry in landscape using a %s degree rotation', (rotationDegrees) => {
+  const portraitAssets = {
+    ...trackAssets,
+    rotationDegrees,
+    centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 40 }, { x: 0, y: 40 }],
+    innerBoundary: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 9, y: 39 }, { x: 1, y: 39 }],
+    outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 40 }, { x: 0, y: 40 }],
+  } as const
+
+  const geometry = createTrackMapGeometry(portraitAssets)
+
+  expect(geometry).not.toBeNull()
+  expect(geometry?.viewBox.width).toBeGreaterThan(geometry?.viewBox.height ?? Number.POSITIVE_INFINITY)
 })
 
 test('renders labelled track geometry and only finite sampled driver markers', () => {
