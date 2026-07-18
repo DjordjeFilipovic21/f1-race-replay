@@ -30,6 +30,7 @@ h2 { font-size: 1rem; }
 .replay-time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .replay-metrics { align-items: end; display: grid; gap: .25rem; justify-items: end; }
 .replay-fps { color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.trajectory-mode { color: var(--accent); font-size: .72rem; font-weight: 700; }
 .control-button, .retry-button { border: 1px solid var(--accent); background: var(--accent); color: #17110e; cursor: pointer; font-weight: 700; padding: .5rem 1rem; }
 .retry-button { background: transparent; color: var(--accent); }
 button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .55; }

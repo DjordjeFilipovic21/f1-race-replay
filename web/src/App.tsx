@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { loadReplayIndex } from './replay-data/loader'
 import { createFetchSource } from './replay-data/source'
-import { createReplayController, type ReplayController } from './replay-engine'
+import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from './replay-engine'
 import type { DriverMetadata, TrackAssets } from './replay-data/types'
 import { ReplayControls } from './replay-ui/ReplayControls'
 
@@ -11,6 +11,7 @@ interface ReadyReplay {
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
   readonly trackAssets: TrackAssets
+  readonly coordinateInterpolation: CoordinateInterpolationStrategy
 }
 
 export default function App() {
@@ -25,12 +26,14 @@ export default function App() {
     setError(null)
 
     const baseUrl = import.meta.env.VITE_REPLAY_DATA_BASE_URL ?? '/replay-data/'
+    const requestedTrajectory = new URLSearchParams(globalThis.location.search).get('trajectory')
+    const coordinateInterpolation: CoordinateInterpolationStrategy = requestedTrajectory === 'linear' ? 'linear' : 'smooth'
     void loadReplayIndex({ source: createFetchSource(baseUrl), pointerPath: 'browser-current.json' }).then(
       (index) => {
         if (stale) return
-        controller = createReplayController({ index })
+        controller = createReplayController({ index, coordinateInterpolation })
         const chunks = index.manifest.chunks
-        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, trackAssets: index.trackAssets })
+        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, trackAssets: index.trackAssets, coordinateInterpolation })
       },
       (loadError: unknown) => {
         if (!stale) setError(loadError)

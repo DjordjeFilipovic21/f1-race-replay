@@ -2,11 +2,11 @@ import type { ReplayChunk, ReplayData, ReplayEvent, ReplayIndex } from '../repla
 import { createChunkCache, type ChunkCacheStatus, type ChunkWindow } from './chunk-cache'
 import { createPlaybackClock, type PlaybackScheduler, type PlaybackSpeed } from './clock'
 import { forwardEventCrossings } from './events'
-import { prepareReplaySampler, samplePreparedReplayAt, type PreparedReplaySampler } from './sampler'
+import { prepareReplaySampler, samplePreparedReplayAt, type CoordinateInterpolationStrategy, type PreparedReplaySampler } from './sampler'
 import { createReplayStore, type StoreListener } from './store'
 import type { ReplaySnapshot } from './types'
 
-export interface ReplayControllerOptions { readonly index: ReplayIndex; readonly scheduler?: PlaybackScheduler; readonly initialTimeMs?: number; readonly initialSpeed?: PlaybackSpeed }
+export interface ReplayControllerOptions { readonly index: ReplayIndex; readonly scheduler?: PlaybackScheduler; readonly initialTimeMs?: number; readonly initialSpeed?: PlaybackSpeed; readonly coordinateInterpolation?: CoordinateInterpolationStrategy }
 export interface ReplayControllerSnapshot {
   readonly status: ChunkCacheStatus; readonly timeMs: number; readonly speed: PlaybackSpeed; readonly isPlaying: boolean
   readonly replay: ReplaySnapshot | null; readonly crossedEvents: readonly ReplayEvent[]; readonly error: unknown | null
@@ -51,7 +51,7 @@ export function createReplayController(options: ReplayControllerOptions): Replay
       (window) => {
         if (disposed || loadGeneration !== generation || clock.getSnapshot().timeMs !== timeMs) return
         readyWindow = window
-        readySampler = prepareReplaySampler(composeWindowReplayData(options.index, window))
+        readySampler = prepareReplaySampler(composeWindowReplayData(options.index, window), undefined, options.coordinateInterpolation)
         const retainedCrossings = pendingCrossings
         pendingCrossings = Object.freeze([])
         publish('ready', samplePreparedReplayAt(readySampler, timeMs), retainedCrossings, null)

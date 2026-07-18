@@ -72,6 +72,34 @@ describe('replay-engine sampler', () => {
     expect(snapshots).toEqual([10, 15, 20])
   })
 
+  test('offers a bounded smooth coordinate filter without changing the linear default', () => {
+    const replay = syntheticReplay([0, 10, 0, 10, 0], [0, 250, 500, 750, 1_000])
+    const linear = samplePreparedReplayAt(prepareReplaySampler(replay), 500)
+    const filtered = samplePreparedReplayAt(prepareReplaySampler(replay, undefined, 'smooth'), 500)
+
+    expect(linear.drivers.HAM.x).toBe(0)
+    expect(filtered.drivers.HAM.x).not.toBe(0)
+    expect(filtered.drivers.HAM.x).toBeGreaterThanOrEqual(-10)
+    expect(filtered.drivers.HAM.x).toBeLessThanOrEqual(10)
+  })
+
+  test('does not let the smooth filter borrow evidence across a long telemetry gap', () => {
+    const replay = syntheticReplay([0, 10, null, null, 100, 110], [0, 250, 1_000, 1_500, 2_000, 2_250])
+    const filtered = prepareReplaySampler(replay, undefined, 'smooth')
+
+    expect(samplePreparedReplayAt(filtered, 1_125).drivers.HAM.x).toBeNull()
+  })
+
+  test.each([
+    ['pit lane', { isInPitLane: [false, false, true, false, false] }],
+    ['off track', { status: ['OnTrack', 'OnTrack', 'OffTrack', 'OnTrack', 'OnTrack'] }],
+  ])('does not move an exact source coordinate while the driver is %s', (_label, overrides) => {
+    const replay = syntheticReplay([0, 10, 0, 10, 0], [0, 250, 500, 750, 1_000], overrides as Partial<DriverColumns>)
+    const filtered = prepareReplaySampler(replay, undefined, 'smooth')
+
+    expect(samplePreparedReplayAt(filtered, 500).drivers.HAM.x).toBe(0)
+  })
+
   test('samples populated derived distance and gap fields at exact and interpolated times', () => {
     const replay = derivedReplay({ trackDistanceMeters: [100, 200], gapToLeaderMs: [0, 20] })
 
@@ -114,12 +142,13 @@ describe('replay-engine sampler', () => {
   })
 })
 
-function syntheticReplay(x: readonly (number | null)[], timeMs = [0, 100, 200, 300]): ReplayData {
+function syntheticReplay(x: readonly (number | null)[], timeMs = [0, 100, 200, 300], overrides: Partial<DriverColumns> = {}): ReplayData {
   const nulls = timeMs.map(() => null)
+  const driver: DriverColumns = { x, y: nulls, trackDistanceMeters: nulls, speed: nulls, throttle: nulls, brake: nulls, gapToLeaderMs: nulls, lap: nulls, position: nulls, gear: nulls, drs: nulls, tyreCompound: nulls, status: nulls, isInPitLane: nulls, ...overrides }
   const chunk: ReplayChunk = {
     contractVersion: 'v1', fixtureId: 'synthetic', chunkId: 'chunk-001', sequence: 1, startMs: 0, endMs: 2_000,
     overlap: { kind: 'none', previousChunkPath: null, range: null, authoritativeFromMs: null }, timeMs, authoritativeStartIndex: 0,
-    drivers: { HAM: { x, y: nulls, trackDistanceMeters: nulls, speed: nulls, throttle: nulls, brake: nulls, gapToLeaderMs: nulls, lap: nulls, position: nulls, gear: nulls, drs: nulls, tyreCompound: nulls, status: nulls, isInPitLane: nulls } },
+    drivers: { HAM: driver },
     leaderboardOrder: nulls, trackStatusCode: nulls, weatherState: nulls, events: [],
   }
   return { manifest: { contractVersion: 'v1', fixtureId: 'synthetic', fixtureName: 'Synthetic', schemas: { manifest: '', chunk: '', trackAssets: '' }, trackAssets: { path: '', schemaId: '' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] }, trackAssets: {} as ReplayData['trackAssets'], chunks: [chunk] }
