@@ -67,9 +67,10 @@ leader gap is zero; gaps are null when leader history is insufficient.
 
 ## Runtime interpretation
 
-Continuous fields (`x`, `y`, `trackDistanceMeters`, `speed`, `throttle`,
-`brake`, `gapToLeaderMs`) interpolate only between valid same-driver bounds
-within 1,000 ms. Track distance uses circular interpolation across an approved
+Continuous fields interpolate only between valid same-driver bounds. Display
+coordinates (`x`, `y`) permit bounds up to 1,500 ms to bridge bounded global
+position-telemetry gaps; `trackDistanceMeters`, speed, throttle, brake, and gap
+retain the 1,000 ms cap. Track distance uses circular interpolation across an approved
 wrap; an invalid large backward jump returns null. Position, order, lap,
 status, pit state, tyre, and other discrete/categorical fields use previous
 semantics. The sampled current leader is normalized to zero gap. Direct sample,

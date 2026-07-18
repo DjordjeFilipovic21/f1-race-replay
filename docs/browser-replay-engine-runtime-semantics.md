@@ -16,16 +16,17 @@ samples do not create duplicate authority.
 The sampler searches valid values for the requested field, not merely adjacent
 shared-timeline rows:
 
-- continuous values (`x`, `y`, `trackDistanceMeters`, `speed`, `throttle`,
-  `brake`, `gapToLeaderMs`) interpolate only between same-driver valid bounds;
-- the bound interval must be `<= 1,000 ms`; otherwise the result is `null`;
+- continuous values interpolate only between same-driver valid bounds. Display
+  coordinates (`x`, `y`) permit a bound interval up to 1,500 ms to bridge
+  bounded global position-telemetry gaps; other continuous fields retain the
+  1,000 ms limit. Longer intervals produce `null`;
 - position, lap, status, pit state, tyre, and other discrete/categorical fields
   use previous-value semantics; no forward fill or invention occurs;
 - sparse events are exact-time records.
 
 Example: a null coordinate at `12,000` ms is not bridged from `10,000` to
-`12,001` ms, because that field's valid bound interval exceeds the 1,000 ms
-cap.
+`12,001` ms for a non-coordinate continuous field, because that field's valid
+bound interval exceeds its 1,000 ms cap.
 
 ## Circular track-distance sampling
 

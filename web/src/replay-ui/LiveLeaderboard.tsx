@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { DriverMetadata } from '../replay-data/types'
 import type { ReplaySnapshot } from '../replay-engine/types'
 
@@ -20,7 +20,7 @@ interface LeaderboardRow {
 }
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
-export function LiveLeaderboard({ snapshot, drivers }: LiveLeaderboardProps) {
+export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers }: LiveLeaderboardProps) {
   const [gapMode, setGapMode] = useState<GapMode>('leader')
   const rows = createLeaderboardRows(snapshot, drivers)
 
@@ -53,7 +53,7 @@ export function LiveLeaderboard({ snapshot, drivers }: LiveLeaderboardProps) {
       )}
     </section>
   )
-}
+})
 
 function LeaderboardTableRow({ row, ahead, gapMode }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly gapMode: GapMode }) {
   const identity = row.metadata?.displayName ?? row.id

@@ -5,6 +5,7 @@ import type { AuthoritativeTimeline, DriverSnapshot, ReplaySnapshot } from './ty
 const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs'] as const
 const STEP_FIELDS = ['lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const MAX_INTERPOLATION_INTERVAL_MS = 1_000
+const MAX_POSITION_INTERPOLATION_INTERVAL_MS = 1_500
 
 type ContinuousField = (typeof CONTINUOUS_FIELDS)[number]
 type StepField = (typeof STEP_FIELDS)[number]
@@ -94,16 +95,16 @@ function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeter
   const continuous = (field: ContinuousField) => interpolate(driver.continuous[field], timeMs)
   const step = <T,>(field: StepField): T | null => previousValue(driver.step[field], timeMs) as T | null
   return Object.freeze({
-    x: continuous('x'), y: continuous('y'), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
+    x: interpolate(driver.continuous.x, timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS), y: interpolate(driver.continuous.y, timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
     lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'),
   })
 }
 
-function interpolate(values: PreparedValues<number>, timeMs: number): number | null {
+function interpolate(values: PreparedValues<number>, timeMs: number, maxIntervalMs = MAX_INTERPOLATION_INTERVAL_MS): number | null {
   const upperIndex = findTimeIndex(values.times, timeMs)
   const lowerIndex = upperIndex < values.times.length && values.times[upperIndex] === timeMs ? upperIndex : upperIndex - 1
   if (lowerIndex === upperIndex) return values.values[lowerIndex]
-  if (lowerIndex < 0 || upperIndex === values.times.length || values.times[upperIndex] - values.times[lowerIndex] > MAX_INTERPOLATION_INTERVAL_MS) return null
+  if (lowerIndex < 0 || upperIndex === values.times.length || values.times[upperIndex] - values.times[lowerIndex] > maxIntervalMs) return null
   return values.values[lowerIndex] + (values.values[upperIndex] - values.values[lowerIndex]) * ((timeMs - values.times[lowerIndex]) / (values.times[upperIndex] - values.times[lowerIndex]))
 }
 
