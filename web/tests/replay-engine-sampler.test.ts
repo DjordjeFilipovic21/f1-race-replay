@@ -43,8 +43,14 @@ describe('replay-engine sampler', () => {
     expect(snapshot.drivers.HAM.x).toBe(15)
   })
 
-  test('returns null rather than interpolate across a gap longer than one second', () => {
-    const replay = syntheticReplay([0, null, null, 30], [0, 500, 1000, 1500])
+  test('bridges a bounded global position-telemetry gap', () => {
+    const replay = syntheticReplay([0, null, null, 30], [0, 500, 1000, 1300])
+
+    expect(sampleReplayAt(replay, 650).drivers.HAM.x).toBe(15)
+  })
+
+  test('returns null rather than interpolate coordinates across a gap longer than 1.5 seconds', () => {
+    const replay = syntheticReplay([0, null, null, 30], [0, 500, 1000, 1600])
 
     const snapshot = sampleReplayAt(replay, 750)
 

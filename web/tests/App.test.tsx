@@ -7,7 +7,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { loadReplayIndex } from '../src/replay-data/loader'
 import { createReplayController, type ReplayController, type ReplayControllerSnapshot } from '../src/replay-engine'
-import type { ReplayIndex } from '../src/replay-data/types'
+import type { ReplayIndex, TrackAssets } from '../src/replay-data/types'
 
 vi.mock('../src/replay-data/loader', () => ({ loadReplayIndex: vi.fn() }))
 vi.mock('../src/replay-engine', () => ({ createReplayController: vi.fn() }))
@@ -23,8 +23,18 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve }
 }
 
+const trackAssets: TrackAssets = {
+  contractVersion: 'v1', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
+  coordinateSpace: { units: 'meters', origin: 'test origin' }, circuitLengthMeters: 1000, rotationDegrees: 0,
+  startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
+  centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+  innerBoundary: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 9, y: 9 }, { x: 1, y: 9 }],
+  outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+}
+
 const index = {
   manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] },
+  trackAssets,
 } as unknown as ReplayIndex
 
 function createController(): ReplayController {

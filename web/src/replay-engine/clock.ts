@@ -1,5 +1,7 @@
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 2, 4] as const
 export const MAX_FRAME_ELAPSED_MS = 1_000
+export const TARGET_PLAYBACK_FPS = 24
+const MIN_PLAYBACK_FRAME_MS = 1_000 / TARGET_PLAYBACK_FPS
 
 export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number]
 
@@ -44,6 +46,7 @@ export function createPlaybackClock(options: PlaybackClockOptions): PlaybackCloc
   let isDisposed = false
   let frameHandle: number | null = null
   let previousFrameAt = scheduler.now()
+  let nextFrameAt = previousFrameAt + MIN_PLAYBACK_FRAME_MS
   let snapshot = createSnapshot(timeMs, speed, isPlaying)
   const listeners = new Set<() => void>()
 
@@ -61,8 +64,13 @@ export function createPlaybackClock(options: PlaybackClockOptions): PlaybackCloc
   const onFrame: FrameRequestCallback = (frameAt) => {
     frameHandle = null
     if (!isPlaying || isDisposed) return
+    if (frameAt < nextFrameAt) {
+      scheduleFrame()
+      return
+    }
     const elapsedMs = clampElapsed(frameAt - previousFrameAt)
     previousFrameAt = frameAt
+    nextFrameAt += (Math.floor((frameAt - nextFrameAt) / MIN_PLAYBACK_FRAME_MS) + 1) * MIN_PLAYBACK_FRAME_MS
     replayTimeMs = clampReplayTime(replayTimeMs + elapsedMs * speed, options.startMs, options.endMs)
     timeMs = Math.floor(replayTimeMs)
     if (replayTimeMs === options.endMs) isPlaying = false
@@ -87,6 +95,7 @@ export function createPlaybackClock(options: PlaybackClockOptions): PlaybackCloc
       if (isDisposed || isPlaying || timeMs === options.endMs) return
       isPlaying = true
       previousFrameAt = scheduler.now()
+      nextFrameAt = previousFrameAt + MIN_PLAYBACK_FRAME_MS
       publish()
       scheduleFrame()
     },
@@ -103,6 +112,7 @@ export function createPlaybackClock(options: PlaybackClockOptions): PlaybackCloc
       timeMs = nextTimeMs
       replayTimeMs = nextTimeMs
       previousFrameAt = scheduler.now()
+      nextFrameAt = previousFrameAt + MIN_PLAYBACK_FRAME_MS
       if (timeMs === options.endMs) {
         isPlaying = false
         cancelFrame()
@@ -115,6 +125,7 @@ export function createPlaybackClock(options: PlaybackClockOptions): PlaybackCloc
       if (speed === nextSpeed) return
       speed = nextSpeed
       previousFrameAt = scheduler.now()
+      nextFrameAt = previousFrameAt + MIN_PLAYBACK_FRAME_MS
       publish()
     },
     dispose: () => {

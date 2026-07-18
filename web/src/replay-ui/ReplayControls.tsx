@@ -1,7 +1,9 @@
 import { useRef, useState, useSyncExternalStore } from 'react'
-import type { DriverMetadata } from '../replay-data/types'
+import type { DriverMetadata, TrackAssets } from '../replay-data/types'
 import type { ReplayController } from '../replay-engine'
-import { LiveLeaderboard } from './LiveLeaderboard'
+import { LiveLeaderboardPanel } from './LiveLeaderboardPanel'
+import { LiveTrackMap } from './LiveTrackMap'
+import { ReplayFpsIndicator } from './ReplayFpsIndicator'
 
 const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 2, 4] as const
 
@@ -10,12 +12,14 @@ export interface ReplayControlsProps {
   readonly startMs: number
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
+  readonly trackAssets: TrackAssets
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, trackAssets }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
+  const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
   const seekPreviewRef = useRef<number | null>(null)
   const isReady = snapshot.status === 'ready'
   const displayedTimeMs = seekPreviewMs ?? snapshot.timeMs
@@ -39,6 +43,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers }: ReplayCo
     seekPreviewRef.current = null
     setSeekPreviewMs(null)
     controller.seek(value)
+    setLeaderboardRefreshKey((revision) => revision + 1)
   }
 
   const handleSpeedChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -52,9 +57,10 @@ export function ReplayControls({ controller, startMs, endMs, drivers }: ReplayCo
           <p className="eyebrow">Diagnostic playback</p>
           <h1 id="replay-panel-title">F1 Race Replay</h1>
         </div>
-        <output className="replay-time" aria-label="Replay time">
-          {formatTime(elapsedMs)} / {formatTime(durationMs)}
-        </output>
+        <div className="replay-metrics">
+          <output className="replay-time" aria-label="Replay time">{formatTime(elapsedMs)} / {formatTime(durationMs)}</output>
+          <ReplayFpsIndicator controller={controller} />
+        </div>
       </header>
 
       <div className="replay-workspace">
@@ -87,7 +93,8 @@ export function ReplayControls({ controller, startMs, endMs, drivers }: ReplayCo
           {snapshot.status === 'error' && <div className="replay-message replay-message--error" role="alert"><p>Replay data could not be loaded: {errorMessage(snapshot.error)}</p><button className="retry-button" type="button" onClick={() => void controller.retry()}>Retry loading</button></div>}
           {isReady && <p className="replay-message" role="status" aria-label="Replay status">Replay samples ready.</p>}
         </div>
-        <LiveLeaderboard snapshot={snapshot.replay} drivers={drivers} />
+        <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />
+        <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} />
       </div>
     </section>
   )
