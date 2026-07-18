@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react'
 import type { DriverMetadata, TrackAssets } from '../replay-data/types'
-import type { ReplayController } from '../replay-engine'
+import type { CoordinateInterpolationStrategy, ReplayController } from '../replay-engine'
 import { LiveLeaderboardPanel } from './LiveLeaderboardPanel'
 import { LiveTrackMap } from './LiveTrackMap'
 import { ReplayFpsIndicator } from './ReplayFpsIndicator'
@@ -13,10 +13,11 @@ export interface ReplayControlsProps {
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
   readonly trackAssets: TrackAssets
+  readonly coordinateInterpolation?: CoordinateInterpolationStrategy
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, trackAssets }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, trackAssets, coordinateInterpolation = 'linear' }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -60,6 +61,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, trackAsset
         <div className="replay-metrics">
           <output className="replay-time" aria-label="Replay time">{formatTime(elapsedMs)} / {formatTime(durationMs)}</output>
           <ReplayFpsIndicator controller={controller} />
+          <span className="trajectory-mode">Trajectory: {trajectoryLabel(coordinateInterpolation)}</span>
         </div>
       </header>
 
@@ -98,6 +100,11 @@ export function ReplayControls({ controller, startMs, endMs, drivers, trackAsset
       </div>
     </section>
   )
+}
+
+function trajectoryLabel(strategy: CoordinateInterpolationStrategy): string {
+  if (strategy === 'smooth') return 'Smooth filter experimental'
+  return 'Linear baseline'
 }
 
 function formatTime(timeMs: number): string {

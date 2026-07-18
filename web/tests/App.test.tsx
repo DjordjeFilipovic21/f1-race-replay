@@ -66,6 +66,7 @@ test('does not create a controller for StrictMode’s stale index resolution and
 
   await act(async () => { activeLoad.resolve(index) })
   expect(createReplayControllerMock).toHaveBeenCalledOnce()
+  expect(createReplayControllerMock).toHaveBeenCalledWith({ index, coordinateInterpolation: 'smooth' })
 
   unmount()
   expect(activeController.dispose).toHaveBeenCalledOnce()

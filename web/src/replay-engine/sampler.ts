@@ -6,14 +6,18 @@ const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle',
 const STEP_FIELDS = ['lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const MAX_INTERPOLATION_INTERVAL_MS = 1_000
 const MAX_POSITION_INTERPOLATION_INTERVAL_MS = 1_500
+const SMOOTH_FILTER_WINDOW_MS = 750
+const MAX_SMOOTH_FILTER_DISPLACEMENT_METERS = 10
 
 type ContinuousField = (typeof CONTINUOUS_FIELDS)[number]
 type StepField = (typeof STEP_FIELDS)[number]
 type GlobalField = 'leaderboardOrder' | 'trackStatusCode' | 'weatherState'
+export type CoordinateInterpolationStrategy = 'linear' | 'smooth'
 
 interface PreparedValues<T> { readonly times: readonly number[]; readonly values: readonly T[] }
 interface PreparedDriver {
   readonly continuous: Readonly<Record<ContinuousField, PreparedValues<number>>>
+  readonly filteredCoordinates: Readonly<{ readonly x: PreparedValues<number>; readonly y: PreparedValues<number> }>
   readonly step: Readonly<Record<StepField, PreparedValues<number | string | boolean>>>
 }
 
@@ -24,10 +28,12 @@ export interface PreparedReplaySampler {
   readonly trackStatusCode: PreparedValues<number>
   readonly weatherState: PreparedValues<string>
   readonly events: readonly ReplayEvent[]
+  readonly coordinateInterpolation: CoordinateInterpolationStrategy
 }
 
 /** Prepares immutable, valid-value indexes once for repeated samples of one chunk window. */
-export function prepareReplaySampler(replay: ReplayData, timeline = createAuthoritativeTimeline(replay.chunks)): PreparedReplaySampler {
+export function prepareReplaySampler(replay: ReplayData, timeline = createAuthoritativeTimeline(replay.chunks), coordinateInterpolation: CoordinateInterpolationStrategy = 'linear'): PreparedReplaySampler {
+  if (coordinateInterpolation !== 'linear' && coordinateInterpolation !== 'smooth') throw new RangeError('Unsupported coordinate interpolation strategy')
   const driverValues = Object.fromEntries(replay.manifest.drivers.map(({ id }) => [id, prepareDriver(replay, timeline, id)]))
   return Object.freeze({
     drivers: Object.freeze(driverValues),
@@ -36,6 +42,7 @@ export function prepareReplaySampler(replay: ReplayData, timeline = createAuthor
     trackStatusCode: prepareGlobal(replay, timeline, 'trackStatusCode'),
     weatherState: prepareGlobal(replay, timeline, 'weatherState'),
     events: Object.freeze(replay.chunks.flatMap((chunk) => chunk.events.filter((event) => event.sessionTimeMs >= chunk.startMs && event.sessionTimeMs < chunk.endMs)).sort(byEventTime)),
+    coordinateInterpolation,
   })
 }
 
@@ -46,7 +53,7 @@ export function sampleReplayAt(replay: ReplayData, sessionTimeMs: number, timeli
 
 export function samplePreparedReplayAt(prepared: PreparedReplaySampler, sessionTimeMs: number): ReplaySnapshot {
   if (!Number.isSafeInteger(sessionTimeMs)) throw new RangeError('Replay time must be an integer millisecond')
-  const sampledDrivers = Object.fromEntries(Object.entries(prepared.drivers).map(([id, driver]) => [id, sampleDriver(driver, sessionTimeMs, prepared.circuitLengthMeters)]))
+  const sampledDrivers = Object.fromEntries(Object.entries(prepared.drivers).map(([id, driver]) => [id, sampleDriver(driver, sessionTimeMs, prepared.circuitLengthMeters, prepared.coordinateInterpolation)]))
   const leaderboardOrder = copyStepArray(previousValue(prepared.leaderboardOrder, sessionTimeMs))
   const drivers = setSampledLeaderGapToZero(sampledDrivers, leaderboardOrder)
   return Object.freeze({
@@ -72,9 +79,12 @@ function prepareDriver(replay: ReplayData, timeline: AuthoritativeTimeline, driv
     }
     return Object.freeze({ times: Object.freeze(times), values: Object.freeze(values) })
   }
+  const continuous = Object.freeze(Object.fromEntries(CONTINUOUS_FIELDS.map((field) => [field, prepare(field)])) as Record<ContinuousField, PreparedValues<number>>)
+  const step = Object.freeze(Object.fromEntries(STEP_FIELDS.map((field) => [field, prepare(field)])) as Record<StepField, PreparedValues<number | string | boolean>>)
   return Object.freeze({
-    continuous: Object.freeze(Object.fromEntries(CONTINUOUS_FIELDS.map((field) => [field, prepare(field)])) as Record<ContinuousField, PreparedValues<number>>),
-    step: Object.freeze(Object.fromEntries(STEP_FIELDS.map((field) => [field, prepare(field)])) as Record<StepField, PreparedValues<number | string | boolean>>),
+    continuous,
+    filteredCoordinates: Object.freeze({ x: preparePositionFilteredValues(continuous.x, step), y: preparePositionFilteredValues(continuous.y, step) }),
+    step,
   })
 }
 
@@ -91,13 +101,50 @@ function prepareGlobal<T extends GlobalField>(replay: ReplayData, timeline: Auth
   return Object.freeze({ times: Object.freeze(times), values: Object.freeze(values) })
 }
 
-function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeters: number): DriverSnapshot {
+function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeters: number, coordinateInterpolation: CoordinateInterpolationStrategy): DriverSnapshot {
   const continuous = (field: ContinuousField) => interpolate(driver.continuous[field], timeMs)
   const step = <T,>(field: StepField): T | null => previousValue(driver.step[field], timeMs) as T | null
   return Object.freeze({
-    x: interpolate(driver.continuous.x, timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS), y: interpolate(driver.continuous.y, timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
+    x: interpolateCoordinate(driver, 'x', timeMs, coordinateInterpolation), y: interpolateCoordinate(driver, 'y', timeMs, coordinateInterpolation), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
     lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'),
   })
+}
+
+function interpolateCoordinate(driver: PreparedDriver, field: 'x' | 'y', timeMs: number, strategy: CoordinateInterpolationStrategy): number | null {
+  if (strategy === 'smooth') return interpolate(driver.filteredCoordinates[field], timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS)
+  return interpolate(driver.continuous[field], timeMs, MAX_POSITION_INTERPOLATION_INTERVAL_MS)
+}
+
+function preparePositionFilteredValues(values: PreparedValues<number>, step: PreparedDriver['step']): PreparedValues<number> {
+  if (values.values.length <= 2) return values
+  const filtered = values.values.map((value, index) => {
+    if (index === 0 || index === values.values.length - 1 || !isPositionFilterEligible(step, values.times[index])) return value
+    let weightedTotal = 0
+    let totalWeight = 0
+    for (let candidate = index; candidate >= 0; candidate -= 1) {
+      const distanceMs = values.times[index] - values.times[candidate]
+      if (distanceMs > SMOOTH_FILTER_WINDOW_MS || !isPositionFilterEligible(step, values.times[candidate])) break
+      const weight = 1 - distanceMs / SMOOTH_FILTER_WINDOW_MS
+      weightedTotal += values.values[candidate] * weight
+      totalWeight += weight
+    }
+    for (let candidate = index + 1; candidate < values.values.length; candidate += 1) {
+      const distanceMs = values.times[candidate] - values.times[index]
+      if (distanceMs > SMOOTH_FILTER_WINDOW_MS || !isPositionFilterEligible(step, values.times[candidate])) break
+      const weight = 1 - distanceMs / SMOOTH_FILTER_WINDOW_MS
+      weightedTotal += values.values[candidate] * weight
+      totalWeight += weight
+    }
+    const candidate = weightedTotal / totalWeight
+    return Math.min(Math.max(candidate, value - MAX_SMOOTH_FILTER_DISPLACEMENT_METERS), value + MAX_SMOOTH_FILTER_DISPLACEMENT_METERS)
+  })
+  return Object.freeze({ times: values.times, values: Object.freeze(filtered) })
+}
+
+function isPositionFilterEligible(step: PreparedDriver['step'], timeMs: number): boolean {
+  if (previousValue(step.isInPitLane, timeMs) === true) return false
+  const status = previousValue(step.status, timeMs)
+  return typeof status !== 'string' || status.toLowerCase().replace(/[^a-z]/g, '') !== 'offtrack'
 }
 
 function interpolate(values: PreparedValues<number>, timeMs: number, maxIntervalMs = MAX_INTERPOLATION_INTERVAL_MS): number | null {
