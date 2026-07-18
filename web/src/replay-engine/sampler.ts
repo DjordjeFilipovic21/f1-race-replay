@@ -6,8 +6,8 @@ const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle',
 const STEP_FIELDS = ['lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const MAX_INTERPOLATION_INTERVAL_MS = 1_000
 const MAX_POSITION_INTERPOLATION_INTERVAL_MS = 1_500
-const SMOOTH_FILTER_WINDOW_MS = 750
-const MAX_SMOOTH_FILTER_DISPLACEMENT_METERS = 10
+const SMOOTH_FILTER_WINDOW_MS = 1_250
+const MAX_SMOOTH_FILTER_DISPLACEMENT_METERS = 12
 
 type ContinuousField = (typeof CONTINUOUS_FIELDS)[number]
 type StepField = (typeof STEP_FIELDS)[number]

@@ -73,14 +73,19 @@ describe('replay-engine sampler', () => {
   })
 
   test('offers a bounded smooth coordinate filter without changing the linear default', () => {
-    const replay = syntheticReplay([0, 10, 0, 10, 0], [0, 250, 500, 750, 1_000])
+    const replay = syntheticReplay([1_000, 0, 1_000], [0, 500, 1_000])
     const linear = samplePreparedReplayAt(prepareReplaySampler(replay), 500)
     const filtered = samplePreparedReplayAt(prepareReplaySampler(replay, undefined, 'smooth'), 500)
 
     expect(linear.drivers.HAM.x).toBe(0)
-    expect(filtered.drivers.HAM.x).not.toBe(0)
-    expect(filtered.drivers.HAM.x).toBeGreaterThanOrEqual(-10)
-    expect(filtered.drivers.HAM.x).toBeLessThanOrEqual(10)
+    expect(filtered.drivers.HAM.x).toBe(12)
+  })
+
+  test('uses smooth evidence up to 1.25 seconds from the source coordinate', () => {
+    const replay = syntheticReplay([0, 0, 0, 120], [0, 250, 500, 1_500])
+    const filtered = prepareReplaySampler(replay, undefined, 'smooth')
+
+    expect(samplePreparedReplayAt(filtered, 500).drivers.HAM.x).toBeGreaterThan(0)
   })
 
   test('does not let the smooth filter borrow evidence across a long telemetry gap', () => {
