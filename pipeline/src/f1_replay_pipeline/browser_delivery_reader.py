@@ -92,7 +92,11 @@ def derive_browser_driver_fields(
     car_by_time = _rows_by_time(car)
     position_by_time = _rows_by_time(position)
     pit_intervals = _pit_intervals(laps)
-    values = tuple(_field_values(time_ms, car_by_time, position_by_time, laps, pit_intervals) for time_ms in timestamps)
+    active_laps = _active_lap_rows(timestamps, laps)
+    values = tuple(
+        _field_values(time_ms, car_by_time, position_by_time, lap_row, pit_intervals)
+        for time_ms, lap_row in zip(timestamps, active_laps, strict=True)
+    )
     count = len(timestamps)
     return BrowserDriverFields(
         driver_id=driver_id, time_ms=timestamps,
@@ -141,10 +145,9 @@ def _rows_by_time(rows: tuple[dict[str, object], ...]) -> dict[int, dict[str, ob
 
 def _field_values(
     time_ms: int, car: dict[int, dict[str, object]], position: dict[int, dict[str, object]],
-    laps: tuple[dict[str, object], ...], pit_intervals: tuple[tuple[int, int | None], ...],
+    lap_row: dict[str, object] | None, pit_intervals: tuple[tuple[int, int | None], ...],
 ) -> tuple[float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, bool | None]:
     car_row, position_row = car.get(time_ms), position.get(time_ms)
-    lap_row = next((row for row in laps if _contains(row, time_ms)), None)
     brake = None if car_row is None or car_row["brake"] is None else int(cast(bool, car_row["brake"]))
     return (
         _browser_coordinate(None if position_row is None else position_row["x"]),
@@ -158,6 +161,28 @@ def _field_values(
         None if lap_row is None else cast(str | None, lap_row["compound"]),
         _pit_state(lap_row, pit_intervals, time_ms),
     )
+
+
+def _active_lap_rows(
+    timestamps: tuple[int, ...], laps: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object] | None, ...]:
+    """Sweep sorted canonical laps once; advancing only at an end preserves `[start, end)`."""
+    starts = tuple(cast(int, row["lap_start_time_ms"]) for row in laps)
+    if any(following < current for current, following in zip(starts, starts[1:], strict=False)):
+        return tuple(next((row for row in laps if _contains(row, time_ms)), None) for time_ms in timestamps)
+    rows: list[dict[str, object] | None] = []
+    lap_index = 0
+    for time_ms in timestamps:
+        while lap_index < len(laps) and _lap_ended(laps[lap_index], time_ms):
+            lap_index += 1
+        lap_row = laps[lap_index] if lap_index < len(laps) and _contains(laps[lap_index], time_ms) else None
+        rows.append(lap_row)
+    return tuple(rows)
+
+
+def _lap_ended(row: dict[str, object], time_ms: int) -> bool:
+    end = row["lap_end_time_ms"]
+    return end is not None and time_ms >= cast(int, end)
 
 
 def _contains(row: dict[str, object], time_ms: int) -> bool:

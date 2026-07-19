@@ -11,10 +11,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import cast
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
-from referencing import Registry, Resource
+import jsonschema_rs
 
 from f1_replay_pipeline.browser_chunk_builder import BrowserChunk, BrowserEvent
 from f1_replay_pipeline.browser_delivery_models import BrowserDriverFields
@@ -40,9 +39,20 @@ _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CHUNK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:chunk"
 _TRACK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
 
+_make_contract_validator = jsonschema_rs.Draft202012Validator
+
 
 class BrowserDeliveryPublicationError(RuntimeError):
     """Raised when browser artifacts cannot be safely validated or published."""
+
+
+@dataclass(frozen=True)
+class PreparedArtifact:
+    """Validated deterministic bytes and their one authoritative digest."""
+
+    path: str
+    payload: bytes
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -68,80 +78,94 @@ def publish_browser_delivery(
     if not isinstance(delivery, BrowserDeliveryBuild):
         raise TypeError("delivery must be a BrowserDeliveryBuild")
     version = _safe_delivery_version(delivery_version)
-    payloads = _artifact_payloads(version, delivery)
     schemas, registry = _load_contract_schemas(schema_root)
-    _validate_delivery_payloads(payloads, delivery, schemas, registry)
-    return _publish_payloads(browser_parent, version, payloads)
+    validators = _contract_validators(schemas, registry)
+    artifacts = _prepared_artifacts(version, delivery, validators)
+    return _publish_payloads(browser_parent, version, artifacts)
 
 
-def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[tuple[str, bytes], ...]:
+def _prepared_artifacts(version: str, delivery: BrowserDeliveryBuild, validators) -> tuple[PreparedArtifact, ...]:
     chunks = delivery.chunks
     _validate_chunks(chunks)
     fixture_id = delivery.manifest.fixture_id
-    track_payload = _serialize_json(delivery.track_assets)
-    chunk_payloads = tuple(
-        (f"chunks/{chunk.chunk_id}.json", _serialize_json(_chunk_dict(chunk, fixture_id)))
-        for chunk in chunks
-    )
-    digests = {
-        path: hashlib.sha256(payload).hexdigest()
-        for path, payload in (("track-assets.json", track_payload), *chunk_payloads)
-    }
+    manifest = delivery.manifest.as_dict()
+    schema_track_assets = _schema_compatible_value(delivery.track_assets)
+    _validate_track_contract(schema_track_assets, manifest)
+    _validate_schema_instance(validators["track-assets"], schema_track_assets, "track assets")
+    track = _prepare_artifact("track-assets.json", delivery.track_assets)
+
+    previous = None
+    chunk_artifacts = []
+    references = []
+    driver_ids = {driver["id"] for driver in cast(list[Mapping[str, str]], manifest["drivers"])}
+    for chunk in chunks:
+        contract = _chunk_dict(chunk, fixture_id)
+        reference = _chunk_reference(chunk, "")
+        _validate_chunk_contract(contract, reference, driver_ids, previous)
+        _validate_schema_instance(validators["chunk"], contract, "chunk")
+        artifact = _prepare_artifact(f"chunks/{chunk.chunk_id}.json", contract)
+        reference = _chunk_reference(chunk, artifact.sha256)
+        chunk_artifacts.append(artifact)
+        references.append(reference)
+        previous = reference
+
     manifest = delivery.manifest.as_dict()
     manifest.update({
         "formatVersion": _FORMAT_VERSION,
         "deliveryVersion": version,
         "sourceGenerationId": delivery.source.generation_id,
         "sourceManifestSha256": delivery.source.manifest_sha256,
-        "trackAssets": {"path": "track-assets.json", "schemaId": _TRACK_SCHEMA, "sha256": digests["track-assets.json"]},
-        "chunks": [_chunk_reference(chunk, digests[f"chunks/{chunk.chunk_id}.json"]) for chunk in chunks],
+        "trackAssets": {"path": "track-assets.json", "schemaId": _TRACK_SCHEMA, "sha256": track.sha256},
+        "chunks": references,
     })
-    return (("manifest.json", _serialize_json(manifest)), ("track-assets.json", track_payload), *chunk_payloads)
+    _validate_manifest_contract(manifest, delivery, references)
+    _validate_schema_instance(validators["manifest"], manifest, "manifest")
+    return (_prepare_artifact("manifest.json", manifest), track, *chunk_artifacts)
 
 
-def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schemas=None, registry=None) -> None:
-    encoded = dict(payloads)
+def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[PreparedArtifact, ...]:
+    """Prepare fully validated artifacts for focused tests."""
+    schemas, registry = _load_contract_schemas(Path(__file__).parents[3] / "contracts" / "replay-data" / "v1" / "schemas")
+    return _prepared_artifacts(version, delivery, _contract_validators(schemas, registry))
+
+
+def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schemas=None, registry=None) -> None:
+    """Verify prepared bytes remain bound to their preparation digest.
+
+    Production validation occurs before serialization on direct immutable contract
+    objects; this focused helper protects mutation tests without reparsing JSON.
+    """
+    encoded = {artifact.path: artifact for artifact in artifacts}
     try:
-        manifest = json.loads(encoded["manifest.json"])
-        track = json.loads(encoded["track-assets.json"])
-    except (KeyError, json.JSONDecodeError) as error:
+        manifest = encoded["manifest.json"]
+        track = encoded["track-assets.json"]
+    except KeyError as error:
         raise BrowserDeliveryPublicationError("delivery metadata is incomplete") from error
+    if hashlib.sha256(manifest.payload).hexdigest() != manifest.sha256 or hashlib.sha256(track.payload).hexdigest() != track.sha256:
+        raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
+    expected_paths = {"manifest.json", "track-assets.json", *(f"chunks/{chunk.chunk_id}.json" for chunk in delivery.chunks)}
+    if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
+        raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
+
+
+def _validate_manifest_contract(manifest, delivery: BrowserDeliveryBuild, refs) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
-    track_required = {"contractVersion", "fixtureId", "trackId", "trackName", "coordinateSpace", "circuitLengthMeters", "rotationDegrees", "startFinish", "centerLine", "innerBoundary", "outerBoundary"}
-    if not track_required <= set(track) or track.get("contractVersion") != "v1" or track.get("fixtureId") != manifest["fixtureId"]:
-        raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
-    if hashlib.sha256(encoded["track-assets.json"]).hexdigest() != manifest["trackAssets"]["sha256"]:
-        raise BrowserDeliveryPublicationError("track asset digest disagrees")
-    refs = manifest["chunks"]
     if len(refs) != len(delivery.chunks):
         raise BrowserDeliveryPublicationError("manifest chunk count disagrees")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
-    previous = None
-    driver_ids = {driver["id"] for driver in manifest["drivers"]}
-    expected_paths = {"manifest.json", "track-assets.json"}
-    chunk_instances = []
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
-        expected_paths.add(path)
         if ref["sequence"] != sequence or path != f"chunks/chunk-{sequence:03d}.json" or ref["schemaId"] != _CHUNK_SCHEMA:
             raise BrowserDeliveryPublicationError("chunk references are not deterministic and contiguous")
-        payload = encoded.get(path)
-        if payload is None or hashlib.sha256(payload).hexdigest() != ref["sha256"]:
-            raise BrowserDeliveryPublicationError("chunk digest disagrees")
-        chunk = json.loads(payload)
-        chunk_instances.append(chunk)
-        _validate_chunk_contract(chunk, ref, driver_ids, previous)
-        if chunk["chunkId"] != expected_chunk.chunk_id:
+        if ref["path"] != f"chunks/{expected_chunk.chunk_id}.json":
             raise BrowserDeliveryPublicationError("chunk payload disagrees with its immutable model")
-        previous = ref
-    if set(encoded) != expected_paths:
-        raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
-    if schemas is not None and registry is not None:
-        _validate_schema_instance(schemas["manifest"], manifest, registry, "manifest")
-        _validate_schema_instance(schemas["track-assets"], track, registry, "track assets")
-        for chunk in chunk_instances:
-            _validate_schema_instance(schemas["chunk"], chunk, registry, "chunk")
+
+
+def _validate_track_contract(track, manifest) -> None:
+    required = {"contractVersion", "fixtureId", "trackId", "trackName", "coordinateSpace", "circuitLengthMeters", "rotationDegrees", "startFinish", "centerLine", "innerBoundary", "outerBoundary"}
+    if not required <= set(track) or track.get("contractVersion") != "v1" or track.get("fixtureId") != manifest["fixtureId"]:
+        raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
 
 
 def _validate_lap_starts(markers, refs) -> None:
@@ -154,33 +178,53 @@ def _validate_lap_starts(markers, refs) -> None:
         raise BrowserDeliveryPublicationError("manifest lap starts must be within replay bounds")
 
 
-def _load_contract_schemas(schema_root: Path):
+def _load_contract_schemas(
+    schema_root: Path,
+) -> tuple[dict[str, Mapping[str, object]], jsonschema_rs.Registry]:
     if not isinstance(schema_root, Path):
         raise TypeError("schema_root must be a pathlib.Path")
-    schemas = {}
-    registry = Registry()
+    schemas: dict[str, Mapping[str, object]] = {}
     try:
         for name in ("manifest", "chunk", "track-assets"):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
             )
-            schema = json.loads(guarded.data)
-            Draft202012Validator.check_schema(schema)
+            schema = cast(Mapping[str, object], json.loads(guarded.data))
             schemas[name] = schema
-            registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
-    except (GenerationPublicationError, KeyError, json.JSONDecodeError, SchemaError, ValueError) as error:
+        registry = jsonschema_rs.Registry(
+            [(cast(str, schema["$id"]), dict(schema)) for schema in schemas.values()],
+            draft=jsonschema_rs.Draft202012,
+        )
+    except (
+        GenerationPublicationError, KeyError, json.JSONDecodeError,
+        jsonschema_rs.ValidationError, jsonschema_rs.ReferencingError, ValueError, TypeError,
+    ) as error:
         raise BrowserDeliveryPublicationError("invalid local replay contract schema registry") from error
     return schemas, registry
 
 
-def _validate_schema_instance(schema, instance, registry, label: str) -> None:
+def _contract_validators(
+    schemas: Mapping[str, Mapping[str, object]], registry: jsonschema_rs.Registry,
+) -> dict[str, jsonschema_rs.Draft202012Validator]:
+    """Compile one local-only Rust validator per artifact type for a publication."""
     try:
-        Draft202012Validator(
-            schema,
-            registry=registry,
-            format_checker=Draft202012Validator.FORMAT_CHECKER,
-        ).validate(instance)
-    except (ValidationError, SchemaError) as error:
+        return {
+            name: _make_contract_validator(
+                dict(schema), registry=registry, validate_formats=True,
+                ignore_unknown_formats=False,
+            )
+            for name, schema in schemas.items()
+        }
+    except (jsonschema_rs.ValidationError, jsonschema_rs.ReferencingError, ValueError, TypeError) as error:
+        raise BrowserDeliveryPublicationError("invalid local replay contract schema registry") from error
+
+
+def _validate_schema_instance(
+    validator: jsonschema_rs.Draft202012Validator, instance: object, label: str,
+) -> None:
+    try:
+        validator.validate(instance)
+    except (jsonschema_rs.ValidationError, jsonschema_rs.ReferencingError, ValueError, TypeError) as error:
         raise BrowserDeliveryPublicationError(
             f"{label} fails replay-data v1 schema validation"
         ) from error
@@ -193,7 +237,7 @@ def _validate_chunk_contract(chunk, ref, driver_ids, previous) -> None:
     if (chunk["sequence"], chunk["startMs"], chunk["endMs"]) != (ref["sequence"], ref["startMs"], ref["endMs"]):
         raise BrowserDeliveryPublicationError("chunk metadata disagrees with its reference")
     times, index = chunk["timeMs"], chunk["authoritativeStartIndex"]
-    if not times or times != sorted(set(times)) or not 0 <= index < len(times):
+    if not times or tuple(times) != tuple(sorted(set(times))) or not 0 <= index < len(times):
         raise BrowserDeliveryPublicationError("chunk timeline or authority index is invalid")
     if any(not chunk["startMs"] <= value < chunk["endMs"] for value in times[index:]) or any(value >= chunk["startMs"] for value in times[:index]):
         raise BrowserDeliveryPublicationError("chunk ownership is invalid")
@@ -213,7 +257,7 @@ def _validate_chunk_contract(chunk, ref, driver_ids, previous) -> None:
         raise BrowserDeliveryPublicationError("event is outside its owning chunk")
 
 
-def _publish_payloads(browser_parent: Path, version: str, payloads) -> PublishedBrowserDelivery:
+def _publish_payloads(browser_parent: Path, version: str, artifacts: tuple[PreparedArtifact, ...]) -> PublishedBrowserDelivery:
     root = Path(os.path.abspath(browser_parent))
     try:
         _require_safe_existing_ancestors(root, "browser publication root")
@@ -251,20 +295,21 @@ def _publish_payloads(browser_parent: Path, version: str, payloads) -> Published
         os.mkdir("chunks", mode=0o700, dir_fd=staging_fd)
         chunks_fd = os.open("chunks", os.O_RDONLY | _DIRECTORY | _NO_FOLLOW, dir_fd=staging_fd)
         try:
-            for relative, payload in payloads:
+            for artifact in artifacts:
+                relative, payload = artifact.path, artifact.payload
                 parent, name = (chunks_fd, relative.split("/", 1)[1]) if relative.startswith("chunks/") else (staging_fd, relative)
                 _write_at(parent, name, payload)
-            _validate_staged(staging_fd, chunks_fd, payloads)
+            _validate_staged(staging_fd, chunks_fd, artifacts)
         finally:
             os.close(chunks_fd)
         os.replace(staging_name, version, src_dir_fd=root_fd, dst_dir_fd=generations_fd)
         published = True
-        manifest_payload = dict(payloads)["manifest.json"]
+        manifest = next(artifact for artifact in artifacts if artifact.path == "manifest.json")
         pointer = _serialize_json({
             "formatVersion": _FORMAT_VERSION,
             "deliveryVersion": version,
             "manifestPath": f"generations/{version}/manifest.json",
-            "manifestSha256": hashlib.sha256(manifest_payload).hexdigest(),
+            "manifestSha256": manifest.sha256,
         })
         pointer_fd = os.open(pointer_temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o600, dir_fd=root_fd)
         try:
@@ -299,8 +344,8 @@ def _publish_payloads(browser_parent: Path, version: str, payloads) -> Published
         lease.release()
         os.close(root_fd)
     generation = root / "generations" / version
-    digests = {path: hashlib.sha256(payload).hexdigest() for path, payload in payloads}
-    chunk_paths = tuple(generation / path for path, _ in payloads if path.startswith("chunks/"))
+    digests = {artifact.path: artifact.sha256 for artifact in artifacts}
+    chunk_paths = tuple(generation / artifact.path for artifact in artifacts if artifact.path.startswith("chunks/"))
     return PublishedBrowserDelivery(version, generation, generation / "manifest.json", root / "browser-current.json", generation / "track-assets.json", chunk_paths, digests)
 
 
@@ -322,14 +367,25 @@ def _write_open(descriptor: int, payload: bytes) -> None:
     os.fsync(descriptor)
 
 
-def _validate_staged(staging_fd: int, chunks_fd: int, payloads) -> None:
-    for relative, expected in payloads:
+def _validate_staged(staging_fd: int, chunks_fd: int, artifacts: tuple[PreparedArtifact, ...]) -> None:
+    for artifact in artifacts:
+        relative = artifact.path
         parent, name = (chunks_fd, relative.split("/", 1)[1]) if relative.startswith("chunks/") else (staging_fd, relative)
         descriptor = os.open(name, os.O_RDONLY | _NO_FOLLOW, dir_fd=parent)
         with os.fdopen(descriptor, "rb") as source:
-            metadata = os.fstat(source.fileno())
-            actual = source.read()
-        if not stat.S_ISREG(metadata.st_mode) or actual != expected:
+            before = os.fstat(source.fileno())
+            digest = hashlib.sha256()
+            while block := source.read(64 * 1024):
+                digest.update(block)
+            after = os.fstat(source.fileno())
+        stable_identity = (
+            before.st_dev, before.st_ino, before.st_mode, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns,
+        ) == (
+            after.st_dev, after.st_ino, after.st_mode, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns,
+        )
+        if not stable_identity or not stat.S_ISREG(after.st_mode) or after.st_size != len(artifact.payload) or digest.hexdigest() != artifact.sha256:
             raise BrowserDeliveryPublicationError("staged artifact differs from its validated bytes")
 
 
@@ -343,6 +399,11 @@ def _chunk_reference(chunk: BrowserChunk, digest: str) -> dict[str, object]:
     return {"sequence": chunk.sequence, "path": f"chunks/{chunk.chunk_id}.json", "schemaId": _CHUNK_SCHEMA, "startMs": chunk.start_ms, "endMs": chunk.end_ms, "overlapWithPreviousMs": overlap_ms, "sha256": digest}
 
 
+def _prepare_artifact(path: str, contract: object) -> PreparedArtifact:
+    payload = _serialize_json(contract)
+    return PreparedArtifact(path, payload, hashlib.sha256(payload).hexdigest())
+
+
 def _chunk_dict(chunk: BrowserChunk, fixture_id: str) -> dict[str, object]:
     return {"contractVersion": "v1", "fixtureId": fixture_id, "chunkId": chunk.chunk_id, "sequence": chunk.sequence, "startMs": chunk.start_ms, "endMs": chunk.end_ms, "overlap": {"kind": chunk.overlap.kind, "previousChunkPath": chunk.overlap.previous_chunk_path, "range": None if chunk.overlap.range_start_ms is None else {"startMs": chunk.overlap.range_start_ms, "endMs": chunk.overlap.range_end_ms}, "authoritativeFromMs": chunk.overlap.authoritative_from_ms}, "timeMs": chunk.time_ms, "authoritativeStartIndex": chunk.authoritative_start_index, "drivers": {driver_id: _driver_dict(fields) for driver_id, fields in chunk.drivers.items()}, "leaderboardOrder": chunk.leaderboard_order, "trackStatusCode": chunk.track_status_code, "weatherState": chunk.weather_state, "events": [_event_dict(event) for event in chunk.events]}
 
@@ -354,7 +415,41 @@ def _driver_dict(fields: BrowserDriverFields) -> dict[str, object]:
 def _event_dict(event: BrowserEvent) -> dict[str, object]:
     value = {"sessionTimeMs": event.session_time_ms, "eventType": event.event_type, "description": event.description, "driverId": event.driver_id}
     if event.payload is not None:
-        value["payload"] = event.payload
+        value["payload"] = _schema_compatible_value(event.payload)
+    return value
+
+
+def _schema_compatible_value(value: object) -> object:
+    """Copy small immutable metadata containers into Rust-supported JSON containers."""
+    if type(value) is dict:
+        converted = None
+        for key, entry in value.items():
+            normalized = _schema_compatible_value(entry)
+            if converted is None and normalized is not entry:
+                converted = dict(value)
+            if converted is not None:
+                converted[key] = normalized
+        return value if converted is None else converted
+    if isinstance(value, Mapping):
+        return {key: _schema_compatible_value(entry) for key, entry in value.items()}
+    if isinstance(value, tuple):
+        converted = None
+        for index, entry in enumerate(value):
+            normalized = _schema_compatible_value(entry)
+            if converted is None and normalized is not entry:
+                converted = list(value[:index])
+            if converted is not None:
+                converted.append(normalized)
+        return value if converted is None else tuple(converted)
+    if isinstance(value, list):
+        converted = None
+        for index, entry in enumerate(value):
+            normalized = _schema_compatible_value(entry)
+            if converted is None and normalized is not entry:
+                converted = value[:index]
+            if converted is not None:
+                converted.append(normalized)
+        return value if converted is None else converted
     return value
 
 

@@ -69,8 +69,7 @@ def build_browser_delivery(
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
         race_start_ms = _race_start_time_ms(snapshot)
-        native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
-        timeline = _delivery_timeline(snapshot, native_drivers, race_start_ms)
+        timeline = _delivery_timeline(snapshot, race_start_ms)
         if not timeline:
             raise ValueError("a browser delivery requires a canonical timestamp at or after the Lap 1 start")
         drivers = {
@@ -125,14 +124,23 @@ def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
     return min(lap_one_starts)
 
 
-def _delivery_timeline(snapshot, native_drivers, race_start_ms: int) -> tuple[int, ...]:
-    values = {time_ms for driver in native_drivers for time_ms in driver.time_ms}
-    values.update(snapshot.frames["weather"].get_column("session_time_ms").drop_nulls().to_list())
-    values.update(snapshot.frames["track_status_intervals"].get_column("start_time_ms").drop_nulls().to_list())
-    values.update(snapshot.frames["race_control_messages"].get_column("session_time_ms").drop_nulls().to_list())
-    laps = snapshot.frames["laps"]
-    for column in ("lap_start_time_ms", "pit_in_time_ms", "pit_out_time_ms"):
-        values.update(laps.get_column(column).drop_nulls().to_list())
+def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int) -> tuple[int, ...]:
+    """Return the sorted unique canonical timestamp union at the race boundary."""
+    timestamp_columns = (
+        ("car_telemetry", "session_time_ms"),
+        ("position_telemetry", "session_time_ms"),
+        ("weather", "session_time_ms"),
+        ("track_status_intervals", "start_time_ms"),
+        ("race_control_messages", "session_time_ms"),
+        ("laps", "lap_start_time_ms"),
+        ("laps", "pit_in_time_ms"),
+        ("laps", "pit_out_time_ms"),
+    )
+    values = {
+        cast(int, time_ms)
+        for table, column in timestamp_columns
+        for time_ms in snapshot.frames[table].get_column(column).drop_nulls().to_list()
+    }
     return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
 
 

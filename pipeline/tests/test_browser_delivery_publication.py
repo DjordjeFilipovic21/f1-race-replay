@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
+import jsonschema_rs
 
 from f1_replay_pipeline.browser_chunk_builder import BrowserChunk, BrowserEvent, BrowserOverlap
 from f1_replay_pipeline.browser_delivery_models import (
     BrowserDriverFields, BrowserLapStart, BrowserManifest, CanonicalGenerationSnapshot,
 )
 from f1_replay_pipeline.browser_delivery_orchestration import BrowserDeliveryBuild
+import f1_replay_pipeline.browser_delivery_publication as publication
 from f1_replay_pipeline.browser_delivery_publication import (
     BrowserDeliveryPublicationError, _artifact_payloads,
-    _load_contract_schemas, _validate_delivery_payloads, publish_browser_delivery,
+    _contract_validators, _load_contract_schemas, _prepared_artifacts,
+    _validate_delivery_payloads, publish_browser_delivery,
 )
 
 
@@ -86,6 +92,22 @@ def test_manifest_references_are_ordered_and_digested(tmp_path: Path) -> None:
         "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk", "sequence": 1,
         "sha256": hashlib.sha256(result.chunk_paths[0].read_bytes()).hexdigest(), "startMs": 0,
     }]
+
+
+def test_prepared_digests_bind_manifest_references_pointer_and_result(tmp_path: Path) -> None:
+    result = _publish(tmp_path / "browser")
+    manifest = json.loads(result.manifest_path.read_bytes())
+    pointer = json.loads(result.pointer_path.read_bytes())
+
+    assert (
+        manifest["trackAssets"]["sha256"],
+        manifest["chunks"][0]["sha256"],
+        pointer["manifestSha256"],
+    ) == (
+        result.artifact_digests["track-assets.json"],
+        result.artifact_digests["chunks/chunk-001.json"],
+        result.artifact_digests["manifest.json"],
+    )
 
 
 def test_manifest_lap_starts_are_immutable_and_validate_order() -> None:
@@ -159,13 +181,12 @@ def test_publication_rejects_a_symlinked_generations_directory(tmp_path: Path) -
 def test_complete_validator_rejects_chunk_bytes_that_disagree_with_manifest_digest() -> None:
     delivery = _delivery()
     payloads = list(_artifact_payloads("delivery-one", delivery))
-    index = next(index for index, (path, _) in enumerate(payloads) if path.startswith("chunks/"))
-    path, payload = payloads[index]
-    payloads[index] = (path, payload.replace(b'"startMs":0', b'"startMs":1'))
+    index = next(index for index, artifact in enumerate(payloads) if artifact.path.startswith("chunks/"))
+    artifact = payloads[index]
+    payloads[index] = replace(artifact, payload=artifact.payload.replace(b'"startMs":0', b'"startMs":1'))
 
-    schemas, registry = _load_contract_schemas(SCHEMA_ROOT)
     with pytest.raises(BrowserDeliveryPublicationError, match="digest"):
-        _validate_delivery_payloads(tuple(payloads), delivery, schemas, registry)
+        _validate_delivery_payloads(tuple(payloads), delivery)
 
 
 def test_publication_rejects_schema_invalid_nested_track_assets_before_staging(tmp_path: Path) -> None:
@@ -207,3 +228,162 @@ def test_publication_round_trips_nested_immutable_event_payload(tmp_path: Path) 
     chunk = json.loads(result.chunk_paths[0].read_bytes())
 
     assert chunk["events"][0]["payload"] == {"metadata": {"flags": ["GREEN", "CLEAR"]}}
+
+
+def test_full_schema_validates_direct_tuple_and_immutable_mapping_contracts() -> None:
+    schemas, registry = _load_contract_schemas(SCHEMA_ROOT)
+
+    artifacts = _prepared_artifacts("delivery-one", _delivery(), _contract_validators(schemas, registry))
+
+    assert tuple(artifact.path for artifact in artifacts) == (
+        "manifest.json", "track-assets.json", "chunks/chunk-001.json",
+    )
+
+
+def test_rust_and_python_schema_engines_agree_on_browser_contracts() -> None:
+    schemas, registry = _load_contract_schemas(SCHEMA_ROOT)
+    artifacts = _prepared_artifacts("delivery-one", _delivery(), _contract_validators(schemas, registry))
+    instances = {
+        "manifest": json.loads(next(item.payload for item in artifacts if item.path == "manifest.json")),
+        "track-assets": json.loads(next(item.payload for item in artifacts if item.path == "track-assets.json")),
+        "chunk": json.loads(next(item.payload for item in artifacts if item.path.startswith("chunks/"))),
+    }
+    rust_validators = _contract_validators(schemas, registry)
+    python_registry = _python_registry(schemas)
+    python_validators = {
+        name: Draft202012Validator(
+            schema, registry=python_registry, format_checker=Draft202012Validator.FORMAT_CHECKER,
+        )
+        for name, schema in schemas.items()
+    }
+
+    assert all(_accepts(rust_validators[name], instance) for name, instance in instances.items())
+    assert all(_accepts(python_validators[name], instance) for name, instance in instances.items())
+
+    invalid = {
+        "track-assets": {
+            **instances["track-assets"],
+            "coordinateSpace": {"units": "feet", "origin": "test"},
+        },
+        "chunk": {**instances["chunk"], "timeMs": ["not-an-integer"]},
+        "manifest": {**instances["manifest"], "createdAt": "not-a-date-time"},
+        "manifest-reference": {
+            **instances["manifest"],
+            "trackAssets": {
+                **instances["manifest"]["trackAssets"],
+                "path": "not-track-assets.json",
+            },
+        },
+    }
+
+    assert not _accepts(rust_validators["track-assets"], invalid["track-assets"])
+    assert not _accepts(python_validators["track-assets"], invalid["track-assets"])
+    assert not _accepts(rust_validators["chunk"], invalid["chunk"])
+    assert not _accepts(python_validators["chunk"], invalid["chunk"])
+    assert not _accepts(rust_validators["manifest"], invalid["manifest"])
+    assert not _accepts(python_validators["manifest"], invalid["manifest"])
+    assert not _accepts(rust_validators["manifest"], invalid["manifest-reference"])
+    assert not _accepts(python_validators["manifest"], invalid["manifest-reference"])
+
+
+def _python_registry(schemas: Mapping[str, Mapping[str, object]]):
+    from referencing import Registry, Resource
+
+    registry = Registry()
+    for schema in schemas.values():
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+    return registry
+
+
+def _accepts(
+    validator: Draft202012Validator | jsonschema_rs.Draft202012Validator, instance: object,
+) -> bool:
+    try:
+        validator.validate(instance)
+    except (ValidationError, jsonschema_rs.ValidationError):
+        return False
+    return True
+
+
+def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_path: Path, monkeypatch) -> None:
+    calls = 0
+    original = publication._make_contract_validator
+
+    def counted_validator(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(publication, "_make_contract_validator", counted_validator)
+
+    _publish(tmp_path / "browser")
+
+    assert calls == 3
+
+
+def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:
+    original = publication._write_open
+
+    def truncate_after_write(descriptor: int, payload: bytes) -> None:
+        original(descriptor, payload)
+        os.ftruncate(descriptor, max(0, len(payload) - 1))
+
+    monkeypatch.setattr(publication, "_write_open", truncate_after_write)
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="staged artifact differs"):
+        _publish(tmp_path / "browser")
+
+
+def test_publication_rejects_staged_same_size_corruption(tmp_path: Path, monkeypatch) -> None:
+    original = publication._write_open
+
+    def corrupt_after_write(descriptor: int, payload: bytes) -> None:
+        original(descriptor, payload)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.write(descriptor, b"X")
+        os.fsync(descriptor)
+
+    monkeypatch.setattr(publication, "_write_open", corrupt_after_write)
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="staged artifact differs"):
+        _publish(tmp_path / "browser")
+
+
+def test_staged_validation_rejects_a_file_changed_during_verification(tmp_path: Path, monkeypatch) -> None:
+    staging = tmp_path / "staging"
+    chunks = staging / "chunks"
+    chunks.mkdir(parents=True)
+    path = staging / "manifest.json"
+    payload = b'{}\n'
+    path.write_bytes(payload)
+    artifact = publication.PreparedArtifact("manifest.json", payload, hashlib.sha256(payload).hexdigest())
+    target_inode = path.stat().st_ino
+    target_fstats = 0
+    real_fstat = os.fstat
+
+    def mutate_before_second_target_fstat(descriptor: int):
+        nonlocal target_fstats
+        metadata = real_fstat(descriptor)
+        if metadata.st_ino == target_inode:
+            target_fstats += 1
+            if target_fstats == 2:
+                with path.open("ab") as destination:
+                    destination.write(b"x")
+                metadata = real_fstat(descriptor)
+        return metadata
+
+    monkeypatch.setattr(publication.os, "fstat", mutate_before_second_target_fstat)
+    staging_fd = os.open(staging, os.O_RDONLY)
+    chunks_fd = os.open(chunks, os.O_RDONLY)
+    try:
+        with pytest.raises(BrowserDeliveryPublicationError, match="staged artifact differs"):
+            publication._validate_staged(staging_fd, chunks_fd, (artifact,))
+    finally:
+        os.close(chunks_fd)
+        os.close(staging_fd)
+
+
+def test_schema_normalization_preserves_large_scalar_sequences() -> None:
+    values = tuple(range(10_000))
+
+    assert publication._schema_compatible_value(values) is values

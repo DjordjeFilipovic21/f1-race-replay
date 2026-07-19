@@ -104,6 +104,13 @@ shared exact-union timeline. Samples before `authoritativeStartIndex` are
 overlap references only; they do not become authoritative again at a handoff.
 Manifest order, deterministic JSON, finite values, and immutable build-to-source
 binding remain unchanged. Publication never edits canonical `current.json`.
+Before staging, publication validates direct immutable contract objects with
+reused, local-only `jsonschema-rs` Draft 2020-12 validators, then serializes and
+hashes each artifact once. Format validation is enabled and unknown formats are
+rejected at validator construction; Python `jsonschema` remains the differential
+test oracle rather than a publication hot-path dependency.
+Staged descriptors are verified by size and streaming SHA-256 without retaining
+a second full-file byte copy.
 
 See [Replay Data Contract](replay-data-contract.md) and
 [runtime semantics](browser-replay-engine-runtime-semantics.md).

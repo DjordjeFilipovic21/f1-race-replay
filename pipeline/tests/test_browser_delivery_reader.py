@@ -133,6 +133,47 @@ def test_field_mapping_keeps_pit_state_through_a_red_flag_gap_between_laps() -> 
     assert fields.is_in_pit_lane == (None, False, True, True, True, True, True, False)
 
 
+def test_field_mapping_sweeps_lap_boundaries_gaps_and_an_open_final_lap() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([
+        _lap(1, 1000, 1100),
+        _lap(2, 1200, 1300),
+        _lap(3, 1400, None),
+    ])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(999, 1000, 1099, 1100, 1199, 1200, 1299, 1300, 1399, 1400, 9999),
+    )
+
+    assert fields.lap == (None, 1, 1, None, None, 2, 2, None, None, 3, 3)
+    assert fields.is_in_pit_lane == (None, False, False, None, None, False, False, None, None, False, False)
+
+
+def test_field_mapping_preserves_first_match_for_overlapping_laps() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([_lap(1, 1000, 1200), _lap(2, 1100, 1300)])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1099, 1100, 1199, 1200, 1299),
+    )
+
+    assert fields.lap == (1, 1, 1, 2, 2)
+
+
+def test_field_mapping_falls_back_for_nonchronological_canonical_laps() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([_lap(1, 1200, 1300), _lap(2, 1000, 1100)])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1000, 1099, 1100, 1199, 1200, 1299),
+    )
+
+    assert fields.lap == (2, 2, None, None, 1, 1)
+
+
 @pytest.mark.parametrize(("raw_gear", "expected"), [(-1, None), (0, 0), (8, 8), (9, None)])
 def test_field_mapping_enforces_browser_gear_domain(raw_gear: int, expected: int | None) -> None:
     frames = _frames()
