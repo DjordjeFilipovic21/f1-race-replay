@@ -142,6 +142,34 @@ describe('replay-data v1 loader', () => {
     await expect(loadReplayIndex({ source: metadataSource })).rejects.toThrow('sourceManifestSha256 is invalid')
   })
 
+  test('accepts frozen optional lap navigation metadata and rejects malformed order', async () => {
+    const valid = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { lapStarts?: unknown }).lapStarts = [{ lap: 1, startMs: 0 }, { lap: 3, startMs: 2_000 }]
+    })
+    const index = await loadReplayIndex({ source: valid })
+    expect(index.manifest.lapStarts).toEqual([{ lap: 1, startMs: 0 }, { lap: 3, startMs: 2_000 }])
+    expect(Object.isFrozen(index.manifest.lapStarts)).toBe(true)
+    const malformed = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { lapStarts?: unknown }).lapStarts = [{ lap: 2, startMs: 2_000 }, { lap: 1, startMs: 3_000 }]
+    })
+    await expect(loadReplayIndex({ source: malformed })).rejects.toThrow('lapStarts must be ordered')
+  })
+
+  test('rejects lap navigation markers outside replay bounds', async () => {
+    const beforeStart = mutateFixture('manifest.json', (manifest) => {
+      const value = manifest as { chunks: Array<{ startMs: number }>; lapStarts?: unknown }
+      value.chunks[0].startMs = 1
+      value.lapStarts = [{ lap: 1, startMs: 0 }]
+    })
+    await expect(loadReplayIndex({ source: beforeStart })).rejects.toThrow('lapStarts must be within replay bounds')
+
+    const atEnd = mutateFixture('manifest.json', (manifest) => {
+      const value = manifest as { chunks: Array<{ endMs: number }>; lapStarts?: unknown }
+      value.lapStarts = [{ lap: 1, startMs: value.chunks[value.chunks.length - 1].endMs }]
+    })
+    await expect(loadReplayIndex({ source: atEnd })).rejects.toThrow('lapStarts must be within replay bounds')
+  })
+
   test('rejects an incomplete handoff overlap', async () => {
     const source = mutateFixture('chunks/chunk-002.json', (chunk) => {
       ;(chunk as { overlap: { range: null } }).overlap.range = null

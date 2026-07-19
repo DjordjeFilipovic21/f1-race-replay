@@ -1,4 +1,5 @@
 fastf1
+jsonschema-rs>=0.48,<0.49
 pandas
 matplotlib
 numpy

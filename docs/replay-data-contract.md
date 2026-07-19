@@ -33,6 +33,16 @@ generations remain valid and replayable. `null` means unavailable; consumers
 must not replace it with zero, a previous value, a categorical guess, or a
 fabricated retirement.
 
+`lapStarts` is optional manifest navigation metadata. Each `{lap, startMs}`
+entry is immutable, has a positive lap and non-negative absolute timestamp,
+and is ordered by strictly increasing lap and nondecreasing timestamp. The
+pipeline records the first shared-timeline timestamp at which the displayed
+leader enters each indexed lap, so leader changes follow the same dynamic order
+used by the browser replay. Consumers must continue to accept manifests without
+this index. The JSON Schema validates each marker's structure; the pipeline
+manifest/publication models and browser guard enforce cross-entry ordering and
+require every timestamp to fall inside the half-open replay interval.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

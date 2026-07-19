@@ -35,6 +35,11 @@ export interface DriverMetadata {
   readonly carNumber: string
 }
 
+export interface LapStart {
+  readonly lap: number
+  readonly startMs: number
+}
+
 export interface ReplayManifest {
   readonly contractVersion: 'v1'
   readonly fixtureId: string
@@ -43,6 +48,7 @@ export interface ReplayManifest {
   readonly trackAssets: ArtifactReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
+  readonly lapStarts?: readonly LapStart[]
   readonly description?: string
   readonly formatVersion?: 'browser-delivery-v1'
   readonly deliveryVersion?: string

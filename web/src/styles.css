@@ -28,6 +28,14 @@ h1, h2, p { margin: 0; }
 h1 { font-size: 1.35rem; }
 h2 { font-size: 1rem; }
 .replay-time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.replay-time-editor, .replay-lap-editor { align-items: center; display: flex; flex-wrap: wrap; gap: .2rem; justify-content: end; }
+.replay-time-fields { align-items: center; display: inline-flex; gap: .1rem; }
+.replay-time-editor input, .replay-lap-editor input { background: var(--surface-muted); border: 1px solid var(--border); color: inherit; min-height: 2rem; padding: .15rem .25rem; text-align: center; }
+.replay-time-editor input { width: 2.4rem; }
+.replay-time-editor input[aria-label='Milliseconds'] { width: 3.2rem; }
+.replay-lap-editor input { width: 3.5rem; }
+.replay-inline-error { color: var(--danger); flex-basis: 100%; font-size: .72rem; }
+.replay-inline-help { color: var(--text-muted); flex-basis: 100%; font-size: .7rem; }
 .replay-metrics { align-items: end; display: grid; gap: .25rem; justify-items: end; }
 .replay-fps { color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
 .trajectory-mode { color: var(--accent); font-size: .72rem; font-weight: 700; }
@@ -51,6 +59,8 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-leaderboard__table thead { color: var(--text-muted); font-size: .72rem; text-transform: uppercase; }
 .live-leaderboard__table tbody th { font-weight: 700; }
 .live-leaderboard__position, .live-leaderboard__gap { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-leaderboard__table .live-leaderboard__tyre { text-align: center; }
+.live-leaderboard__tyre-icon { display: block; height: 2rem; margin: 0 auto; object-fit: contain; width: 2rem; }
 .live-leaderboard__driver-name, .live-leaderboard__driver-code { display: block; }
 .live-leaderboard__driver-code { color: var(--text-muted); font-size: .75rem; font-weight: 600; letter-spacing: .04em; }
 .live-leaderboard__empty { color: var(--text-muted); font-size: .9rem; }

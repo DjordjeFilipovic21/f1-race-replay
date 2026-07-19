@@ -14,6 +14,7 @@ from f1_replay_pipeline.browser_chunk_builder import (
 )
 from f1_replay_pipeline.browser_delivery_models import (
     BrowserManifest,
+    BrowserLapStart,
     CanonicalGenerationSnapshot,
     deep_freeze_json,
 )
@@ -68,8 +69,7 @@ def build_browser_delivery(
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
         race_start_ms = _race_start_time_ms(snapshot)
-        native_drivers = tuple(derive_browser_driver_fields(snapshot, driver_id) for driver_id in driver_ids)
-        timeline = _delivery_timeline(snapshot, native_drivers, race_start_ms)
+        timeline = _delivery_timeline(snapshot, race_start_ms)
         if not timeline:
             raise ValueError("a browser delivery requires a canonical timestamp at or after the Lap 1 start")
         drivers = {
@@ -89,6 +89,7 @@ def build_browser_delivery(
         else:
             dynamic_orders = None
         globals_ = _global_fields(snapshot, timeline, driver_ids, dynamic_orders)
+        lap_starts = _leader_lap_starts(timeline, drivers, globals_.leaderboard_order)
         events = _events(snapshot)
         chunks = build_browser_chunks(
             drivers,
@@ -103,6 +104,7 @@ def build_browser_delivery(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
             _driver_metadata(snapshot),
+            lap_starts,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
@@ -122,14 +124,23 @@ def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
     return min(lap_one_starts)
 
 
-def _delivery_timeline(snapshot, native_drivers, race_start_ms: int) -> tuple[int, ...]:
-    values = {time_ms for driver in native_drivers for time_ms in driver.time_ms}
-    values.update(snapshot.frames["weather"].get_column("session_time_ms").drop_nulls().to_list())
-    values.update(snapshot.frames["track_status_intervals"].get_column("start_time_ms").drop_nulls().to_list())
-    values.update(snapshot.frames["race_control_messages"].get_column("session_time_ms").drop_nulls().to_list())
-    laps = snapshot.frames["laps"]
-    for column in ("lap_start_time_ms", "pit_in_time_ms", "pit_out_time_ms"):
-        values.update(laps.get_column(column).drop_nulls().to_list())
+def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int) -> tuple[int, ...]:
+    """Return the sorted unique canonical timestamp union at the race boundary."""
+    timestamp_columns = (
+        ("car_telemetry", "session_time_ms"),
+        ("position_telemetry", "session_time_ms"),
+        ("weather", "session_time_ms"),
+        ("track_status_intervals", "start_time_ms"),
+        ("race_control_messages", "session_time_ms"),
+        ("laps", "lap_start_time_ms"),
+        ("laps", "pit_in_time_ms"),
+        ("laps", "pit_out_time_ms"),
+    )
+    values = {
+        cast(int, time_ms)
+        for table, column in timestamp_columns
+        for time_ms in snapshot.frames[table].get_column(column).drop_nulls().to_list()
+    }
     return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
 
 
@@ -144,6 +155,20 @@ def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[s
         tuple(_track_status(statuses, time_ms) for time_ms in timeline),
         tuple(_weather_state(weather, time_ms) for time_ms in timeline),
     )
+
+
+def _leader_lap_starts(timeline, drivers, leaderboard_orders) -> tuple[BrowserLapStart, ...]:
+    """Index first timestamps for increasing laps of the displayed leader."""
+    markers = []
+    last_lap = 0
+    for index, (time_ms, order) in enumerate(zip(timeline, leaderboard_orders, strict=True)):
+        if not order:
+            continue
+        lap = drivers[order[0]].lap[index]
+        if type(lap) is int and lap > last_lap:
+            markers.append(BrowserLapStart(lap, time_ms))
+            last_lap = lap
+    return tuple(markers)
 
 
 def _result_rank(rows, driver_id: str) -> int:

@@ -89,6 +89,13 @@ rows from live `leaderboardOrder` when available, displays `PIT` from the pit
 flag, otherwise displays the raw exact status, and uses unavailable markers for
 null position, gap, tyre, or status. It must not fabricate `OUT`.
 
+Exact elapsed-time input uses `H:MM:SS.mmm`, is relative to the delivery start,
+and rejects malformed or out-of-window values rather than clamping them. It
+seeks the controller at `startMs + elapsedMs`. When optional manifest
+`lapStarts` metadata is present, the lap control seeks its absolute timestamp;
+without it, the lap control is disabled with an explanatory message while exact
+time and range seeking remain available.
+
 ## Current limitations
 
 The one-race Bahrain calibration is provisional pending a multi-circuit corpus.

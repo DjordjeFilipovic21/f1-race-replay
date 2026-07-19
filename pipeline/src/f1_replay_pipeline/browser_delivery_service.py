@@ -10,6 +10,7 @@ from f1_replay_pipeline.browser_delivery_models import CanonicalGenerationSnapsh
 from f1_replay_pipeline.browser_delivery_orchestration import BrowserDeliveryBuild, build_browser_delivery
 from f1_replay_pipeline.browser_delivery_orchestration import BrowserDeliveryBuildError
 from f1_replay_pipeline.browser_delivery_publication import (
+    BrowserValidationProgress,
     BrowserDeliveryPublicationError,
     PublishedBrowserDelivery,
     publish_browser_delivery,
@@ -32,6 +33,7 @@ Reader = Callable[[Path], CanonicalGenerationSnapshot]
 AssetGenerator = Callable[[CanonicalGenerationSnapshot], Mapping[str, object]]
 Builder = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], BrowserDeliveryBuild]
 Publisher = Callable[..., PublishedBrowserDelivery]
+ProgressCallback = Callable[[str | BrowserValidationProgress], None]
 
 
 @dataclass(frozen=True)
@@ -46,22 +48,46 @@ def publish_browser_delivery_from_canonical(
     request: BrowserPublishRequest,
     *,
     dependencies: BrowserDeliveryDependencies = BrowserDeliveryDependencies(),
+    progress: ProgressCallback | None = None,
 ) -> BrowserPublishResult:
     """Resolve, derive, and publish one browser generation without network access."""
     _validate_request(request)
+    emit = progress or (lambda _stage: None)
     try:
+        emit("canonical_snapshot_reading")
         snapshot = dependencies.reader(request.canonical_parent)
+        emit("track_assets_generating")
         assets = dependencies.asset_generator(snapshot)
+        emit("browser_building")
         delivery = dependencies.builder(snapshot, assets)
-        publication = dependencies.publisher(
+        publication = _publish_delivery(request, delivery, dependencies.publisher, emit)
+    except (BrowserDeliveryReadError, BrowserDeliveryBuildError, TrackAssetsGenerationError, BrowserDeliveryPublicationError) as error:
+        raise BrowserDeliveryServiceError(str(error)) from error
+    return BrowserPublishResult(request, publication.delivery_version, publication)
+
+
+def _publish_delivery(
+    request: BrowserPublishRequest,
+    delivery: BrowserDeliveryBuild,
+    publisher: Publisher,
+    emit: ProgressCallback,
+) -> PublishedBrowserDelivery:
+    """Expose publication boundaries only for the callback-aware default publisher."""
+    if publisher is publish_browser_delivery:
+        return publisher(
             browser_parent=request.browser_parent,
             delivery_version=request.delivery_version,
             delivery=delivery,
             schema_root=request.schema_root,
+            progress=emit,
         )
-    except (BrowserDeliveryReadError, BrowserDeliveryBuildError, TrackAssetsGenerationError, BrowserDeliveryPublicationError) as error:
-        raise BrowserDeliveryServiceError(str(error)) from error
-    return BrowserPublishResult(request, publication.delivery_version, publication)
+    emit("browser_publishing")
+    return publisher(
+        browser_parent=request.browser_parent,
+        delivery_version=request.delivery_version,
+        delivery=delivery,
+        schema_root=request.schema_root,
+    )
 
 
 def _validate_request(request: BrowserPublishRequest) -> None:
@@ -81,5 +107,5 @@ def _validate_request(request: BrowserPublishRequest) -> None:
 
 __all__ = [
     "BrowserDeliveryDependencies", "BrowserDeliveryServiceError",
-    "publish_browser_delivery_from_canonical",
+    "ProgressCallback", "publish_browser_delivery_from_canonical",
 ]

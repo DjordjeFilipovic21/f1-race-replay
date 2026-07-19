@@ -12,7 +12,8 @@ From this directory:
 python -m pip install .
 ```
 
-The package requires Python 3.11+ and installs FastF1 3.8.x and Polars 1.x.
+The package requires Python 3.11+ and installs FastF1 3.8.x, Polars 1.x, and
+the local browser-publication schema engine `jsonschema-rs` 0.48.x.
 
 ## Foundation scope
 
@@ -376,9 +377,15 @@ timestamps using the owning chunk, not the overlap copy.
 
 `publish_browser_delivery()` accepts only a `BrowserDeliveryBuild` already bound
 to one immutable canonical snapshot. It validates all manifest/chunk identities,
-hashes, alignment, ownership, overlap, and event invariants, verifies exact
-staged bytes, and validates every artifact against a caller-supplied local v1
-`schema_root` registry without remote retrieval. It then writes a version under:
+hashes, alignment, ownership, overlap, and event invariants against direct
+immutable contract objects with reusable local `jsonschema-rs` Draft 2020-12
+validators. Format validation is enabled, unknown formats are rejected, and no
+schema retriever is configured; Python `jsonschema` remains the differential test
+oracle. It serializes and
+hashes each artifact once, then verifies staged descriptor size and streaming
+SHA-256 against the prepared digest without a second full-file byte copy. It
+validates every artifact against a caller-supplied local v1 `schema_root`
+registry without remote retrieval. It then writes a version under:
 
 ```text
 <browser_parent>/

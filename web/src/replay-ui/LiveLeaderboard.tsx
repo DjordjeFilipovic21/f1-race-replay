@@ -1,8 +1,21 @@
 import { memo, useState } from 'react'
 import type { DriverMetadata } from '../replay-data/types'
 import type { ReplaySnapshot } from '../replay-engine/types'
+import hardTyreIcon from '../assets/tyres/hard.png'
+import intermediateTyreIcon from '../assets/tyres/intermediate.png'
+import mediumTyreIcon from '../assets/tyres/medium.png'
+import softTyreIcon from '../assets/tyres/soft.png'
+import wetTyreIcon from '../assets/tyres/wet.png'
 
 type GapMode = 'leader' | 'interval'
+
+const TYRE_ICONS = Object.freeze({
+  SOFT: { source: softTyreIcon, label: 'Soft tyre' },
+  MEDIUM: { source: mediumTyreIcon, label: 'Medium tyre' },
+  HARD: { source: hardTyreIcon, label: 'Hard tyre' },
+  INTERMEDIATE: { source: intermediateTyreIcon, label: 'Intermediate tyre' },
+  WET: { source: wetTyreIcon, label: 'Wet tyre' },
+})
 
 export interface LiveLeaderboardProps {
   readonly snapshot: ReplaySnapshot | null
@@ -64,7 +77,7 @@ function LeaderboardTableRow({ row, ahead, gapMode }: { readonly row: Leaderboar
       <th scope="row"><span className="live-leaderboard__driver-name">{identity}</span><span className="live-leaderboard__driver-code">{code}</span></th>
       <td className="live-leaderboard__team">{row.metadata?.teamName || '—'}</td>
       <td>{formatStatus(row.status, row.isInPitLane)}</td>
-      <td>{row.tyreCompound ?? '—'}</td>
+      <td className="live-leaderboard__tyre"><TyreIcon compound={row.tyreCompound} /></td>
       <td className="live-leaderboard__gap">{gapMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs, row.status) : formatIntervalGap(row, ahead)}</td>
     </tr>
   )
@@ -122,7 +135,13 @@ function formatPosition(position: number | null, status: string | null): string 
 }
 
 export function formatStatus(status: string | null, isInPitLane: boolean | null): string {
-  return isTerminalStatus(status) ? 'OUT' : (isInPitLane === true ? 'PIT' : (status ?? '—'))
+  return isTerminalStatus(status) ? 'OUT' : (isInPitLane === true ? 'Pitlane' : (status ?? '—'))
+}
+
+function TyreIcon({ compound }: { readonly compound: string | null }) {
+  const normalized = compound?.trim().toUpperCase()
+  const icon = normalized === undefined ? undefined : TYRE_ICONS[normalized as keyof typeof TYRE_ICONS]
+  return icon === undefined ? '—' : <img className="live-leaderboard__tyre-icon" src={icon.source} alt={icon.label} />
 }
 
 function isTerminalStatus(status: string | null): boolean {
