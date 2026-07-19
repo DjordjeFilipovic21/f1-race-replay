@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import import_module
+from collections.abc import Mapping
 from typing import Protocol
+
+from f1_replay_pipeline.batch_generation import ScheduledRace
 
 from f1_replay_pipeline.orchestration import (
     RaceSelection,
@@ -31,9 +35,48 @@ class FastF1Module(Protocol):
         self, year: int, test_number: int, session_number: int, *, backend: str | None = None
     ) -> object: ...
 
+    def get_event_schedule(
+        self, year: int, *, include_testing: bool = True, backend: str | None = None,
+    ) -> object: ...
+
 
 FastF1ModuleFactory = Callable[[], FastF1Module]
 SessionLoader = Callable[..., object]
+
+
+def _import_fastf1() -> FastF1Module:
+    """Import FastF1 only when a default resolver actually resolves a selection."""
+    return import_module("fastf1")  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class FastF1ScheduleProvider:
+    """FastF1 adapter kept outside pure batch orchestration."""
+
+    fastf1_module_factory: FastF1ModuleFactory = _import_fastf1
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+
+    def __call__(self, year: int, *, backend: str | None = None) -> tuple[ScheduledRace, ...]:
+        schedule = self.fastf1_module_factory().get_event_schedule(
+            year, include_testing=False, backend=backend,
+        )
+        records = getattr(schedule, "to_dict")("records")
+        return tuple(
+            ScheduledRace(int(record["RoundNumber"]), str(record["EventName"]), _event_completed(record, self.clock()))
+            for record in records if int(record.get("RoundNumber", 0)) > 0
+        )
+
+
+def _event_completed(record: Mapping[str, object], now: datetime) -> bool:
+    """Fail closed when FastF1 provides no usable race-session time."""
+    value = record.get("Session5Date") or record.get("EventDate")
+    converter = getattr(value, "to_pydatetime", None)
+    if callable(converter):
+        value = converter()
+    if not isinstance(value, datetime):
+        return False
+    return value.astimezone(UTC) <= now.astimezone(UTC)
+
 
 _SUPPORTED_SESSION_IDENTIFIERS = frozenset(
     {
@@ -42,11 +85,6 @@ _SUPPORTED_SESSION_IDENTIFIERS = frozenset(
         "sprint shootout", "sprint qualifying", "race",
     }
 )
-
-
-def _import_fastf1() -> FastF1Module:
-    """Import FastF1 only when a default resolver actually resolves a selection."""
-    return import_module("fastf1")  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
@@ -165,4 +203,7 @@ def _resolve_race_session(fastf1: FastF1Module, selection: RaceSelection) -> obj
     return session
 
 
-__all__ = ["FastF1Module", "FastF1ModuleFactory", "FastF1SessionResolver", "SessionLoader"]
+__all__ = [
+    "FastF1Module", "FastF1ModuleFactory", "FastF1ScheduleProvider", "FastF1SessionResolver",
+    "SessionLoader",
+]

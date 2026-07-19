@@ -16,7 +16,7 @@ from f1_replay_pipeline.browser_delivery_models import (
 )
 from f1_replay_pipeline.browser_delivery_orchestration import BrowserDeliveryBuild
 from f1_replay_pipeline.browser_delivery_publication import (
-    BrowserDeliveryPublicationError, _artifact_payloads,
+    BrowserDeliveryPublicationError, BrowserValidationProgress, _artifact_payloads,
     _load_contract_schemas, _validate_delivery_payloads, publish_browser_delivery,
 )
 
@@ -86,6 +86,24 @@ def test_manifest_references_are_ordered_and_digested(tmp_path: Path) -> None:
         "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk", "sequence": 1,
         "sha256": hashlib.sha256(result.chunk_paths[0].read_bytes()).hexdigest(), "startMs": 0,
     }]
+
+
+def test_publication_reports_completed_validation_boundaries(tmp_path: Path) -> None:
+    progress: list[str | BrowserValidationProgress] = []
+
+    publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(), schema_root=SCHEMA_ROOT, progress=progress.append,
+    )
+
+    assert [update for update in progress if isinstance(update, BrowserValidationProgress)] == [
+        BrowserValidationProgress("browser_schema_artifact_validating", 1, 6, "manifest"),
+        BrowserValidationProgress("browser_schema_artifact_validating", 2, 6, "track assets"),
+        BrowserValidationProgress("browser_schema_artifact_validating", 3, 6, "chunk 1/1"),
+        BrowserValidationProgress("browser_schema_artifact_validating", 4, 6, "manifest schema"),
+        BrowserValidationProgress("browser_schema_artifact_validating", 5, 6, "track assets schema"),
+        BrowserValidationProgress("browser_schema_artifact_validating", 6, 6, "chunk schema 1/1"),
+    ]
 
 
 @pytest.mark.parametrize("version", ["../escape", "bad version", ""])

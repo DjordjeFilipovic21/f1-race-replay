@@ -7,7 +7,7 @@ import json
 import os
 import stat
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -30,6 +30,7 @@ from f1_replay_pipeline.generation_publication import (
     _require_safe_directory,
     _require_safe_existing_ancestors,
     read_regular_file_no_follow,
+    verify_regular_file_identity,
 )
 
 
@@ -43,6 +44,19 @@ _TRACK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
 
 class BrowserDeliveryPublicationError(RuntimeError):
     """Raised when browser artifacts cannot be safely validated or published."""
+
+
+@dataclass(frozen=True)
+class BrowserValidationProgress:
+    """One completed validation unit within browser delivery verification."""
+
+    phase: str
+    completed: int
+    total: int
+    detail: str
+
+
+ProgressCallback = Callable[[str | BrowserValidationProgress], None]
 
 
 @dataclass(frozen=True)
@@ -62,16 +76,129 @@ class PublishedBrowserDelivery:
 
 def publish_browser_delivery(
     *, browser_parent: Path, delivery_version: str, delivery: BrowserDeliveryBuild,
-    schema_root: Path,
+    schema_root: Path, progress: ProgressCallback | None = None,
 ) -> PublishedBrowserDelivery:
     """Validate, stage, and atomically select artifacts from one bound snapshot."""
+    emit = progress or (lambda _stage: None)
     if not isinstance(delivery, BrowserDeliveryBuild):
         raise TypeError("delivery must be a BrowserDeliveryBuild")
     version = _safe_delivery_version(delivery_version)
+    emit("browser_payload_preparing")
     payloads = _artifact_payloads(version, delivery)
+    emit("browser_contract_schema_loading")
     schemas, registry = _load_contract_schemas(schema_root)
-    _validate_delivery_payloads(payloads, delivery, schemas, registry)
-    return _publish_payloads(browser_parent, version, payloads)
+    _validate_delivery_payloads(payloads, delivery, schemas, registry, progress=emit)
+    return _publish_payloads(browser_parent, version, payloads, progress=emit)
+
+
+def validate_complete_browser_delivery(
+    browser_parent: Path,
+    *,
+    expected_generation_id: str,
+    expected_manifest_sha256: str,
+    schema_root: Path,
+    progress: ProgressCallback | None = None,
+) -> None:
+    """Deeply validate the pointer-selected browser delivery and all payloads."""
+    emit = progress or (lambda _stage: None)
+    try:
+        _require_safe_directory(browser_parent, "browser delivery root")
+        pointer_path = browser_parent / "browser-current.json"
+        pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
+        pointer = json.loads(pointer_file.data)
+        version = _safe_delivery_version(pointer.get("deliveryVersion"))
+        if pointer.get("manifestPath") != f"generations/{version}/manifest.json":
+            raise ValueError("browser pointer manifest path disagrees")
+        generation = browser_parent / "generations" / version
+        _require_safe_directory(browser_parent / "generations", "browser generations")
+        _require_safe_directory(generation, "browser selected delivery")
+        manifest_path = generation / "manifest.json"
+        manifest_file = read_regular_file_no_follow(manifest_path, "browser manifest")
+        if pointer.get("manifestSha256") != hashlib.sha256(manifest_file.data).hexdigest():
+            raise ValueError("browser pointer manifest checksum disagrees")
+        manifest = json.loads(manifest_file.data)
+        if (
+            manifest.get("deliveryVersion") != version
+            or manifest.get("sourceGenerationId") != expected_generation_id
+            or manifest.get("sourceManifestSha256") != expected_manifest_sha256
+        ):
+            raise ValueError("browser delivery provenance disagrees with canonical generation")
+        references = (manifest.get("trackAssets"), *(manifest.get("chunks") or ()))
+        payloads = [("manifest.json", manifest_file.data)]
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise ValueError("browser artifact reference must be an object")
+            relative = _safe_delivery_path(reference.get("path"))
+            artifact = _stored_delivery_file(generation, relative)
+            guarded = read_regular_file_no_follow(artifact, f"browser artifact {relative}")
+            if hashlib.sha256(guarded.data).hexdigest() != reference.get("sha256"):
+                raise ValueError(f"browser artifact checksum disagrees for {relative}")
+            verify_regular_file_identity(artifact, guarded, f"browser artifact {relative}")
+            payloads.append((relative, guarded.data))
+        schemas, registry = _load_contract_schemas(schema_root)
+        _validate_stored_delivery_payloads(payloads, schemas, registry, emit)
+        verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
+        verify_regular_file_identity(pointer_path, pointer_file, "browser current pointer")
+    except (GenerationPublicationError, BrowserDeliveryPublicationError, OSError, TypeError, ValueError, KeyError, AttributeError, json.JSONDecodeError) as error:
+        raise BrowserDeliveryPublicationError("browser delivery validation failed") from error
+
+
+def _safe_delivery_path(value: object) -> str:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise ValueError("browser artifact path must be a safe relative POSIX path")
+    parts = value.split("/")
+    if any(not part or part in {".", ".."} for part in parts):
+        raise ValueError("browser artifact path escapes its delivery")
+    for part in parts:
+        _safe_delivery_version(part)
+    return value
+
+
+def _stored_delivery_file(generation: Path, relative: str) -> Path:
+    path = generation
+    _require_safe_directory(path, "browser selected delivery")
+    parts = relative.split("/")
+    for part in parts[:-1]:
+        path /= part
+        _require_safe_directory(path, "browser artifact parent")
+    return path / parts[-1]
+
+
+def _validate_stored_delivery_payloads(payloads, schemas, registry, emit: ProgressCallback) -> None:
+    encoded = dict(payloads)
+    manifest = json.loads(encoded["manifest.json"])
+    track = json.loads(encoded["track-assets.json"])
+    if not isinstance(manifest, dict) or not isinstance(track, dict):
+        raise BrowserDeliveryPublicationError("delivery metadata must be JSON objects")
+    refs = manifest.get("chunks")
+    if not isinstance(refs, list):
+        raise BrowserDeliveryPublicationError("manifest chunks must be an array")
+    track_reference = manifest.get("trackAssets")
+    if not isinstance(track_reference, dict) or track_reference.get("path") != "track-assets.json":
+        raise BrowserDeliveryPublicationError("manifest track asset reference is invalid")
+    if hashlib.sha256(encoded["track-assets.json"]).hexdigest() != track_reference.get("sha256"):
+        raise BrowserDeliveryPublicationError("track asset digest disagrees")
+    track_required = {"contractVersion", "fixtureId", "trackId", "trackName", "coordinateSpace", "circuitLengthMeters", "rotationDegrees", "startFinish", "centerLine", "innerBoundary", "outerBoundary"}
+    if not track_required <= set(track) or track.get("contractVersion") != "v1" or track.get("fixtureId") != manifest.get("fixtureId"):
+        raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
+    driver_ids = {driver["id"] for driver in manifest["drivers"]}
+    expected_paths = {"manifest.json", "track-assets.json"}
+    _validate_schema_instance(schemas["manifest"], manifest, registry, "manifest")
+    _validate_schema_instance(schemas["track-assets"], track, registry, "track assets")
+    previous = None
+    total = len(refs) + 2
+    for sequence, reference in enumerate(refs, start=1):
+        path = reference["path"]
+        expected_paths.add(path)
+        chunk = json.loads(encoded[path])
+        if reference["sequence"] != sequence or path != f"chunks/chunk-{sequence:03d}.json" or reference["schemaId"] != _CHUNK_SCHEMA:
+            raise BrowserDeliveryPublicationError("chunk references are not deterministic and contiguous")
+        _validate_chunk_contract(chunk, reference, driver_ids, previous)
+        _validate_schema_instance(schemas["chunk"], chunk, registry, "chunk")
+        previous = reference
+        _emit_validation_progress(emit, sequence, total, f"chunk {sequence}/{len(refs)}")
+    if set(encoded) != expected_paths:
+        raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
 
 
 def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[tuple[str, bytes], ...]:
@@ -99,7 +226,15 @@ def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[tu
     return (("manifest.json", _serialize_json(manifest)), ("track-assets.json", track_payload), *chunk_payloads)
 
 
-def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schemas=None, registry=None) -> None:
+def _validate_delivery_payloads(
+    payloads,
+    delivery: BrowserDeliveryBuild,
+    schemas=None,
+    registry=None,
+    *,
+    progress: ProgressCallback | None = None,
+) -> None:
+    emit = progress or (lambda _update: None)
     encoded = dict(payloads)
     try:
         manifest = json.loads(encoded["manifest.json"])
@@ -108,11 +243,16 @@ def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schema
         raise BrowserDeliveryPublicationError("delivery metadata is incomplete") from error
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
+    total = 2 * len(delivery.chunks) + 4
+    completed = 1
+    _emit_validation_progress(emit, completed, total, "manifest")
     track_required = {"contractVersion", "fixtureId", "trackId", "trackName", "coordinateSpace", "circuitLengthMeters", "rotationDegrees", "startFinish", "centerLine", "innerBoundary", "outerBoundary"}
     if not track_required <= set(track) or track.get("contractVersion") != "v1" or track.get("fixtureId") != manifest["fixtureId"]:
         raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
     if hashlib.sha256(encoded["track-assets.json"]).hexdigest() != manifest["trackAssets"]["sha256"]:
         raise BrowserDeliveryPublicationError("track asset digest disagrees")
+    completed += 1
+    _emit_validation_progress(emit, completed, total, "track assets")
     refs = manifest["chunks"]
     if len(refs) != len(delivery.chunks):
         raise BrowserDeliveryPublicationError("manifest chunk count disagrees")
@@ -134,13 +274,29 @@ def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schema
         if chunk["chunkId"] != expected_chunk.chunk_id:
             raise BrowserDeliveryPublicationError("chunk payload disagrees with its immutable model")
         previous = ref
+        completed += 1
+        _emit_validation_progress(emit, completed, total, f"chunk {sequence}/{len(refs)}")
     if set(encoded) != expected_paths:
         raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
     if schemas is not None and registry is not None:
         _validate_schema_instance(schemas["manifest"], manifest, registry, "manifest")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "manifest schema")
         _validate_schema_instance(schemas["track-assets"], track, registry, "track assets")
-        for chunk in chunk_instances:
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "track assets schema")
+        for sequence, chunk in enumerate(chunk_instances, start=1):
             _validate_schema_instance(schemas["chunk"], chunk, registry, "chunk")
+            completed += 1
+            _emit_validation_progress(emit, completed, total, f"chunk schema {sequence}/{len(chunk_instances)}")
+
+
+def _emit_validation_progress(
+    emit: ProgressCallback, completed: int, total: int, detail: str,
+) -> None:
+    emit(BrowserValidationProgress(
+        "browser_schema_artifact_validating", completed, total, detail,
+    ))
 
 
 def _load_contract_schemas(schema_root: Path):
@@ -202,7 +358,13 @@ def _validate_chunk_contract(chunk, ref, driver_ids, previous) -> None:
         raise BrowserDeliveryPublicationError("event is outside its owning chunk")
 
 
-def _publish_payloads(browser_parent: Path, version: str, payloads) -> PublishedBrowserDelivery:
+def _publish_payloads(
+    browser_parent: Path,
+    version: str,
+    payloads,
+    *,
+    progress: ProgressCallback,
+) -> PublishedBrowserDelivery:
     root = Path(os.path.abspath(browser_parent))
     try:
         _require_safe_existing_ancestors(root, "browser publication root")
@@ -240,6 +402,7 @@ def _publish_payloads(browser_parent: Path, version: str, payloads) -> Published
         os.mkdir("chunks", mode=0o700, dir_fd=staging_fd)
         chunks_fd = os.open("chunks", os.O_RDONLY | _DIRECTORY | _NO_FOLLOW, dir_fd=staging_fd)
         try:
+            progress("browser_artifacts_staging")
             for relative, payload in payloads:
                 parent, name = (chunks_fd, relative.split("/", 1)[1]) if relative.startswith("chunks/") else (staging_fd, relative)
                 _write_at(parent, name, payload)
@@ -262,6 +425,7 @@ def _publish_payloads(browser_parent: Path, version: str, payloads) -> Published
             _write_open(pointer_fd, pointer)
         finally:
             os.close(pointer_fd)
+        progress("browser_pointer_committing_durability")
         os.replace(pointer_temp, "browser-current.json", src_dir_fd=root_fd, dst_dir_fd=root_fd)
         pointer_identity = None
         os.fsync(generations_fd)
@@ -363,4 +527,7 @@ def _safe_delivery_version(value: object) -> str:
         raise BrowserDeliveryPublicationError(str(error)) from error
 
 
-__all__ = ["BrowserDeliveryPublicationError", "PublishedBrowserDelivery", "publish_browser_delivery"]
+__all__ = [
+    "BrowserDeliveryPublicationError", "BrowserValidationProgress",
+    "PublishedBrowserDelivery", "publish_browser_delivery", "validate_complete_browser_delivery",
+]

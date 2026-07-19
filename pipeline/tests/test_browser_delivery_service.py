@@ -11,11 +11,13 @@ from f1_replay_pipeline.browser_delivery_service import (
     BrowserDeliveryDependencies,
     publish_browser_delivery_from_canonical,
 )
+from f1_replay_pipeline.browser_delivery_publication import BrowserValidationProgress
 from f1_replay_pipeline.track_assets_generator import TrackAssetsGenerationError
 
 
 def test_service_runs_reader_assets_builder_and_publisher_in_order() -> None:
     calls = []
+    progress: list[str | BrowserValidationProgress] = []
     snapshot = object()
     assets = {"fixtureId": "race"}
     delivery = object()
@@ -41,16 +43,52 @@ def test_service_runs_reader_assets_builder_and_publisher_in_order() -> None:
     result = publish_browser_delivery_from_canonical(
         request,
         dependencies=BrowserDeliveryDependencies(reader, generator, builder, publisher),
+        progress=progress.append,
     )
 
     assert result.delivery_version == "delivery-v1"
     assert [call[0] for call in calls] == ["reader", "assets", "builder", "publisher"]
+    assert progress == [
+        "canonical_snapshot_reading", "track_assets_generating", "browser_building", "browser_publishing",
+    ]
     assert calls[-1][1] == {
         "browser_parent": request.browser_parent,
         "delivery_version": request.delivery_version,
         "delivery": delivery,
         "schema_root": request.schema_root,
     }
+
+
+def test_service_forwards_default_publisher_operation_boundaries(monkeypatch) -> None:
+    progress: list[str | BrowserValidationProgress] = []
+    publication = SimpleNamespace(delivery_version="delivery-v1")
+
+    def publisher(*, progress, **_keywords):
+        progress("browser_payload_preparing")
+        progress("browser_contract_schema_loading")
+        progress(BrowserValidationProgress("browser_schema_artifact_validating", 1, 1, "manifest"))
+        progress("browser_artifacts_staging")
+        progress("browser_pointer_committing_durability")
+        return publication
+
+    monkeypatch.setattr("f1_replay_pipeline.browser_delivery_service.publish_browser_delivery", publisher)
+    dependencies = BrowserDeliveryDependencies(
+        reader=lambda _: object(), asset_generator=lambda _: {}, builder=lambda *_: object(),
+        publisher=publisher,
+    )
+
+    publish_browser_delivery_from_canonical(_request(), dependencies=dependencies, progress=progress.append)
+
+    assert progress[:5] == [
+        "canonical_snapshot_reading", "track_assets_generating", "browser_building",
+        "browser_payload_preparing", "browser_contract_schema_loading",
+    ]
+    assert progress[5] == BrowserValidationProgress(
+        "browser_schema_artifact_validating", 1, 1, "manifest",
+    )
+    assert progress[6:] == [
+        "browser_artifacts_staging", "browser_pointer_committing_durability",
+    ]
 
 
 def test_service_stops_after_expected_track_generation_failure() -> None:
