@@ -30,7 +30,7 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
@@ -39,6 +39,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity is unsupported')
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
+  const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
   if (!chunks.length || !drivers.length || new Set(drivers.map(({ id }) => id)).size !== drivers.length) throw new Error('manifest requires chunks and unique drivers')
   chunks.forEach((chunk, index) => {
     if (chunk.schemaId !== CHUNK_SCHEMA || chunk.sequence !== index + 1 || (index > 0 && chunks[index - 1].endMs !== chunk.startMs)) throw new Error('manifest chunk references are invalid')
@@ -50,9 +51,20 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (item.sourceGenerationId !== undefined) string(item.sourceGenerationId, 'manifest.sourceGenerationId')
   if (item.sourceManifestSha256 !== undefined && (typeof item.sourceManifestSha256 !== 'string' || !SHA256.test(item.sourceManifestSha256))) throw new Error('manifest.sourceManifestSha256 is invalid')
   if (item.createdAt !== undefined && (typeof item.createdAt !== 'string' || !DATE_TIME.test(item.createdAt) || Number.isNaN(Date.parse(item.createdAt)))) throw new Error('manifest.createdAt is invalid')
+  if (lapStarts && lapStarts.some((marker, index) => index > 0 && (marker.lap <= lapStarts[index - 1].lap || marker.startMs < lapStarts[index - 1].startMs))) throw new Error('manifest.lapStarts must be ordered')
+  if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, chunks, drivers, ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+}
+
+function parseLapStart(value: unknown, index: number) {
+  const item = object(value, `manifest.lapStarts[${index}]`)
+  exact(item, ['lap', 'startMs'], [], `manifest.lapStarts[${index}]`)
+  const lap = integer(item.lap, `manifest.lapStarts[${index}].lap`)
+  const startMs = integer(item.startMs, `manifest.lapStarts[${index}].startMs`)
+  if (lap < 1 || startMs < 0) throw new Error(`manifest.lapStarts[${index}] is invalid`)
+  return freeze({ lap, startMs })
 }
 
 function parseChunkReference(raw: unknown, index: number): ChunkReference {

@@ -14,6 +14,7 @@ from f1_replay_pipeline.browser_chunk_builder import (
 )
 from f1_replay_pipeline.browser_delivery_models import (
     BrowserManifest,
+    BrowserLapStart,
     CanonicalGenerationSnapshot,
     deep_freeze_json,
 )
@@ -89,6 +90,7 @@ def build_browser_delivery(
         else:
             dynamic_orders = None
         globals_ = _global_fields(snapshot, timeline, driver_ids, dynamic_orders)
+        lap_starts = _leader_lap_starts(timeline, drivers, globals_.leaderboard_order)
         events = _events(snapshot)
         chunks = build_browser_chunks(
             drivers,
@@ -103,6 +105,7 @@ def build_browser_delivery(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
             _driver_metadata(snapshot),
+            lap_starts,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
@@ -144,6 +147,20 @@ def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[s
         tuple(_track_status(statuses, time_ms) for time_ms in timeline),
         tuple(_weather_state(weather, time_ms) for time_ms in timeline),
     )
+
+
+def _leader_lap_starts(timeline, drivers, leaderboard_orders) -> tuple[BrowserLapStart, ...]:
+    """Index first timestamps for increasing laps of the displayed leader."""
+    markers = []
+    last_lap = 0
+    for index, (time_ms, order) in enumerate(zip(timeline, leaderboard_orders, strict=True)):
+        if not order:
+            continue
+        lap = drivers[order[0]].lap[index]
+        if type(lap) is int and lap > last_lap:
+            markers.append(BrowserLapStart(lap, time_ms))
+            last_lap = lap
+    return tuple(markers)
 
 
 def _result_rank(rows, driver_id: str) -> int:

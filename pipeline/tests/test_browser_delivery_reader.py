@@ -67,6 +67,72 @@ def test_field_mapping_preserves_raw_invalid_gear_in_canonical_but_exposes_null(
     assert fields.gear[fields.time_ms.index(1020)] is None
 
 
+def test_field_mapping_pairs_pit_entry_and_exit_across_lap_rows() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([
+        _lap(1, 1000, 1100, pit_in=1050),
+        _lap(2, 1100, 1200, pit_out=1120),
+    ])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1049, 1050, 1119, 1120),
+    )
+
+    assert fields.is_in_pit_lane == (False, True, True, False)
+
+
+def test_field_mapping_keeps_an_unclosed_final_pit_interval_open() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([_lap(1, 1000, None, pit_in=1050)])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1049, 1050, 1200),
+    )
+
+    assert fields.is_in_pit_lane == (False, True, True)
+
+
+def test_field_mapping_ignores_pit_exit_without_a_preceding_entry() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([_lap(1, 1000, 1200, pit_out=1050)])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1049, 1050),
+    )
+
+    assert fields.is_in_pit_lane == (False, False)
+
+
+def test_field_mapping_closes_a_zero_duration_pit_interval() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([_lap(1, 1000, 1200, pit_in=1050, pit_out=1050)])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(1049, 1050, 1100),
+    )
+
+    assert fields.is_in_pit_lane == (False, False, False)
+
+
+def test_field_mapping_keeps_pit_state_through_a_red_flag_gap_between_laps() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([
+        _lap(32, 7000, 7300, pit_in=7200),
+        _lap(33, 8600, 9000, pit_out=8650),
+    ])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(6999, 7199, 7200, 7299, 7300, 8500, 8649, 8650),
+    )
+
+    assert fields.is_in_pit_lane == (None, False, True, True, True, True, True, False)
+
+
 @pytest.mark.parametrize(("raw_gear", "expected"), [(-1, None), (0, 0), (8, 8), (9, None)])
 def test_field_mapping_enforces_browser_gear_domain(raw_gear: int, expected: int | None) -> None:
     frames = _frames()
@@ -95,3 +161,20 @@ def _frames() -> dict[str, pl.DataFrame]:
          "x": 1.0, "y": None, "z": None, "status": None, "source": "pos"},
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
     return frames
+
+
+def _laps(rows: list[dict[str, object]]) -> pl.DataFrame:
+    return pl.DataFrame(rows, schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+
+
+def _lap(
+    number: int, start: int, end: int | None, *, pit_in: int | None = None, pit_out: int | None = None,
+) -> dict[str, object]:
+    return {
+        "session_id": "race", "driver_id": "HAM", "source_driver_key": "44",
+        "lap_number": number, "stint_number": 1, "lap_start_time_ms": start,
+        "lap_end_time_ms": end, "lap_duration_ms": None, "pit_in_time_ms": pit_in,
+        "pit_out_time_ms": pit_out, "compound": "SOFT", "tyre_life": number,
+        "is_fresh_tyre": number == 1, "track_status": "1", "is_accurate": True,
+        "deleted": False, "deleted_reason": None,
+    }

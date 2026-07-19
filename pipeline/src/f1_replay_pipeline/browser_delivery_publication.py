@@ -116,6 +116,7 @@ def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schema
     refs = manifest["chunks"]
     if len(refs) != len(delivery.chunks):
         raise BrowserDeliveryPublicationError("manifest chunk count disagrees")
+    _validate_lap_starts(manifest.get("lapStarts", []), refs)
     previous = None
     driver_ids = {driver["id"] for driver in manifest["drivers"]}
     expected_paths = {"manifest.json", "track-assets.json"}
@@ -141,6 +142,16 @@ def _validate_delivery_payloads(payloads, delivery: BrowserDeliveryBuild, schema
         _validate_schema_instance(schemas["track-assets"], track, registry, "track assets")
         for chunk in chunk_instances:
             _validate_schema_instance(schemas["chunk"], chunk, registry, "chunk")
+
+
+def _validate_lap_starts(markers, refs) -> None:
+    if any(
+        following["lap"] <= current["lap"] or following["startMs"] < current["startMs"]
+        for current, following in zip(markers, markers[1:], strict=False)
+    ):
+        raise BrowserDeliveryPublicationError("manifest lap starts must be ordered")
+    if any(marker["startMs"] < refs[0]["startMs"] or marker["startMs"] >= refs[-1]["endMs"] for marker in markers):
+        raise BrowserDeliveryPublicationError("manifest lap starts must be within replay bounds")
 
 
 def _load_contract_schemas(schema_root: Path):

@@ -91,7 +91,8 @@ def derive_browser_driver_fields(
         raise ValueError("timeline must contain sorted unique non-negative integer milliseconds")
     car_by_time = _rows_by_time(car)
     position_by_time = _rows_by_time(position)
-    values = tuple(_field_values(time_ms, car_by_time, position_by_time, laps) for time_ms in timestamps)
+    pit_intervals = _pit_intervals(laps)
+    values = tuple(_field_values(time_ms, car_by_time, position_by_time, laps, pit_intervals) for time_ms in timestamps)
     count = len(timestamps)
     return BrowserDriverFields(
         driver_id=driver_id, time_ms=timestamps,
@@ -139,7 +140,8 @@ def _rows_by_time(rows: tuple[dict[str, object], ...]) -> dict[int, dict[str, ob
 
 
 def _field_values(
-    time_ms: int, car: dict[int, dict[str, object]], position: dict[int, dict[str, object]], laps: tuple[dict[str, object], ...],
+    time_ms: int, car: dict[int, dict[str, object]], position: dict[int, dict[str, object]],
+    laps: tuple[dict[str, object], ...], pit_intervals: tuple[tuple[int, int | None], ...],
 ) -> tuple[float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, bool | None]:
     car_row, position_row = car.get(time_ms), position.get(time_ms)
     lap_row = next((row for row in laps if _contains(row, time_ms)), None)
@@ -153,7 +155,8 @@ def _field_values(
         None if car_row is None else cast(int | None, car_row["drs"]),
         None if position_row is None else cast(str | None, position_row["status"]),
         None if lap_row is None else cast(int | None, lap_row["lap_number"]),
-        None if lap_row is None else cast(str | None, lap_row["compound"]), _pit_state(lap_row, time_ms),
+        None if lap_row is None else cast(str | None, lap_row["compound"]),
+        _pit_state(lap_row, pit_intervals, time_ms),
     )
 
 
@@ -162,15 +165,36 @@ def _contains(row: dict[str, object], time_ms: int) -> bool:
     return time_ms >= start and (end is None or time_ms < cast(int, end))
 
 
-def _pit_state(row: dict[str, object] | None, time_ms: int) -> bool | None:
+def _pit_intervals(laps: tuple[dict[str, object], ...]) -> tuple[tuple[int, int | None], ...]:
+    events = sorted(
+        (cast(int, time_ms), kind)
+        for row in laps
+        for kind, time_ms in (("in", row["pit_in_time_ms"]), ("out", row["pit_out_time_ms"]))
+        if time_ms is not None
+    )
+    intervals: list[tuple[int, int | None]] = []
+    pit_in: int | None = None
+    for time_ms, kind in events:
+        if kind == "in":
+            if pit_in is None:
+                pit_in = time_ms
+        elif pit_in is not None:
+            if time_ms > pit_in:
+                intervals.append((pit_in, time_ms))
+            pit_in = None
+    if pit_in is not None:
+        intervals.append((pit_in, None))
+    return tuple(intervals)
+
+
+def _pit_state(
+    row: dict[str, object] | None, intervals: tuple[tuple[int, int | None], ...], time_ms: int,
+) -> bool | None:
+    if any(start <= time_ms and (end is None or time_ms < end) for start, end in intervals):
+        return True
     if row is None:
         return None
-    pit_in, pit_out = row["pit_in_time_ms"], row["pit_out_time_ms"]
-    if pit_in is None and pit_out is None:
-        return False
-    if pit_in is None or pit_out is None:
-        return None
-    return cast(int, pit_in) <= time_ms < cast(int, pit_out)
+    return False
 
 
 def _browser_gear(value: object) -> int | None:

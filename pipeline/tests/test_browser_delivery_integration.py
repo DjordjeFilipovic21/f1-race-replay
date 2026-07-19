@@ -15,8 +15,10 @@ from referencing import Registry, Resource
 
 import f1_replay_pipeline.browser_delivery_orchestration as delivery_orchestration
 from f1_replay_pipeline.browser_chunk_builder import CONTINUOUS_FIELD_SEMANTICS, PREVIOUS_VALUE_FIELD_SEMANTICS
+from f1_replay_pipeline.browser_delivery_models import BrowserDriverFields
 from f1_replay_pipeline.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
+    _leader_lap_starts,
     build_browser_delivery,
 )
 from f1_replay_pipeline.browser_delivery_publication import (
@@ -253,6 +255,20 @@ def test_passing_quality_assessment_derives_dynamic_positions_gaps_and_overlap_w
     assert snapshot.frames["position_telemetry"].equals(frames["position_telemetry"])
 
 
+def test_leader_lap_starts_follow_leader_changes_without_duplicate_or_regressing_markers() -> None:
+    fields = {
+        "HAM": _browser_fields("HAM", (1, 2, 2, 1)),
+        "RUS": _browser_fields("RUS", (1, 1, 4, 4)),
+    }
+
+    markers = _leader_lap_starts(
+        (0, 1_000, 2_000, 3_000), fields,
+        (("HAM", "RUS"), ("HAM", "RUS"), ("RUS", "HAM"), ("HAM", "RUS")),
+    )
+
+    assert [(marker.lap, marker.start_ms) for marker in markers] == [(1, 0), (2, 1_000), (4, 2_000)]
+
+
 def test_failed_quality_assessment_preserves_null_derived_fields_and_classified_fallback(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
     publish_canonical_generation(frames=_live_frames(), target_parent=canonical_parent, generation_id="canonical-v1")
@@ -460,6 +476,16 @@ def _terminal_live_frames(result_statuses: dict[str, str]) -> dict[str, pl.DataF
 def _driver_value(delivery, driver_id, field, time_ms):
     chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= time_ms < chunk.end_ms)
     return getattr(chunk.drivers[driver_id], field)[chunk.time_ms.index(time_ms)]
+
+
+def _browser_fields(driver_id: str, laps: tuple[int, ...]):
+    times = tuple(index * 1_000 for index in range(len(laps)))
+    return BrowserDriverFields(
+        driver_id, times, (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), laps, (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), (None,) * len(laps),
+    )
 
 
 def _delivery_source_times(snapshot) -> set[int]:

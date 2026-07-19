@@ -12,7 +12,7 @@ import pytest
 
 from f1_replay_pipeline.browser_chunk_builder import BrowserChunk, BrowserEvent, BrowserOverlap
 from f1_replay_pipeline.browser_delivery_models import (
-    BrowserDriverFields, BrowserManifest, CanonicalGenerationSnapshot,
+    BrowserDriverFields, BrowserLapStart, BrowserManifest, CanonicalGenerationSnapshot,
 )
 from f1_replay_pipeline.browser_delivery_orchestration import BrowserDeliveryBuild
 from f1_replay_pipeline.browser_delivery_publication import (
@@ -86,6 +86,28 @@ def test_manifest_references_are_ordered_and_digested(tmp_path: Path) -> None:
         "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk", "sequence": 1,
         "sha256": hashlib.sha256(result.chunk_paths[0].read_bytes()).hexdigest(), "startMs": 0,
     }]
+
+
+def test_manifest_lap_starts_are_immutable_and_validate_order() -> None:
+    manifest = BrowserManifest("race-one", "Race One", ({
+        "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+        "colorHex": "#000000", "carNumber": "44",
+    },), (BrowserLapStart(1, 0), BrowserLapStart(3, 2_000)))
+
+    assert manifest.as_dict()["lapStarts"] == [{"lap": 1, "startMs": 0}, {"lap": 3, "startMs": 2_000}]
+    with pytest.raises(ValueError, match="increasing"):
+        BrowserManifest("race-one", "Race One", manifest.drivers, (BrowserLapStart(2, 1_000), BrowserLapStart(1, 2_000)))
+
+
+def test_publication_rejects_a_lap_start_at_the_exclusive_replay_end(tmp_path: Path) -> None:
+    delivery = _delivery()
+    manifest = replace(delivery.manifest, lap_starts=(BrowserLapStart(1, 2_000),))
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="within replay bounds"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=replace(delivery, manifest=manifest), schema_root=SCHEMA_ROOT,
+        )
 
 
 @pytest.mark.parametrize("version", ["../escape", "bad version", ""])
