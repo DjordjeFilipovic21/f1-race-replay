@@ -31,8 +31,8 @@ test('renders dynamic sampled order, leader and follower gaps, metadata, status,
   const rows = screen.getAllByRole('row').slice(1)
   expect(rows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual(['Lando NorrisNOR', 'Max VerstappenVER', 'Lewis HamiltonHAM'])
   expect(rows[0].textContent).toContain('+1.234')
-  expect(rows[0].textContent).toContain('PIT')
-  expect(rows[0].textContent).toContain('MEDIUM')
+  expect(rows[0].textContent).toContain('Pitlane')
+  expect(within(rows[0]).getByRole('img', { name: 'Medium tyre' })).toBeTruthy()
   expect(rows[1].textContent).toContain('Leader')
 })
 
@@ -44,6 +44,26 @@ test('uses exact raw status and unavailable text without fabricating a retired s
   expect(rows[0].textContent).toContain('—')
   expect(rows[1].textContent).toContain('—')
   expect(screen.queryByText('OUT')).toBeNull()
+})
+
+test.each([
+  ['SOFT', 'Soft tyre'],
+  ['MEDIUM', 'Medium tyre'],
+  ['HARD', 'Hard tyre'],
+  ['INTERMEDIATE', 'Intermediate tyre'],
+  ['WET', 'Wet tyre'],
+])('renders the %s compound with its accessible tyre icon', (compound, accessibleName) => {
+  render(<LiveLeaderboard snapshot={snapshot({ drivers: { ...snapshot().drivers, VER: { ...snapshot().drivers.VER, tyreCompound: compound } } })} drivers={drivers} />)
+
+  expect(within(screen.getAllByRole('row')[1]).getByRole('img', { name: accessibleName })).toBeTruthy()
+})
+
+test('renders unavailable tyre text for an unknown compound', () => {
+  render(<LiveLeaderboard snapshot={snapshot({ drivers: { ...snapshot().drivers, VER: { ...snapshot().drivers.VER, tyreCompound: 'UNKNOWN' } } })} drivers={drivers} />)
+
+  const tyreCell = within(screen.getAllByRole('row')[1]).getAllByRole('cell')[3]
+  expect(tyreCell.textContent).toBe('—')
+  expect(within(tyreCell).queryByRole('img')).toBeNull()
 })
 
 test('shows OUT in the position and status cells for a terminal sampled driver', () => {

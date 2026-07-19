@@ -15,8 +15,11 @@ from referencing import Registry, Resource
 
 import f1_replay_pipeline.browser_delivery_orchestration as delivery_orchestration
 from f1_replay_pipeline.browser_chunk_builder import CONTINUOUS_FIELD_SEMANTICS, PREVIOUS_VALUE_FIELD_SEMANTICS
+from f1_replay_pipeline.browser_delivery_models import BrowserDriverFields, CanonicalGenerationSnapshot
 from f1_replay_pipeline.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
+    _delivery_timeline,
+    _leader_lap_starts,
     build_browser_delivery,
 )
 from f1_replay_pipeline.browser_delivery_publication import (
@@ -198,6 +201,57 @@ def test_browser_delivery_fails_closed_without_lap_one_rows(tmp_path: Path) -> N
         build_browser_delivery(read_validated_canonical_generation(canonical_parent), _track_assets())
 
 
+def test_delivery_timeline_unions_canonical_timestamps_and_filters_pre_race_values() -> None:
+    frames = _canonical_frames(lap_one_start_ms=5_501, include_pre_race=True)
+    frames["car_telemetry"] = pl.DataFrame([
+        _row("car_telemetry", session_time_ms=4_999),
+        _row("car_telemetry", session_time_ms=5_001),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)
+    frames["position_telemetry"] = pl.DataFrame([
+        _row("position_telemetry", session_time_ms=5_101),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
+    frames["weather"] = pl.DataFrame([
+        _row("weather", session_time_ms=5_201),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["weather"]), strict=True)
+    frames["track_status_intervals"] = pl.DataFrame([
+        _row("track_status_intervals", start_time_ms=5_301, status="2"),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True)
+    frames["race_control_messages"] = pl.DataFrame([
+        _row("race_control_messages", session_time_ms=5_401, message_index=0, message="yellow"),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["race_control_messages"]), strict=True)
+    frames["laps"] = pl.DataFrame([
+        _row("laps", lap_start_time_ms=5_501, pit_in_time_ms=5_601, pit_out_time_ms=5_701),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    snapshot = CanonicalGenerationSnapshot("generation", "a" * 64, frames)
+
+    timeline = _delivery_timeline(snapshot, 5_000)
+
+    assert timeline == (5_001, 5_101, 5_201, 5_301, 5_401, 5_501, 5_601, 5_701)
+
+
+def test_browser_delivery_derives_each_driver_once_on_the_final_timeline(tmp_path: Path, monkeypatch) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(lap_one_rows=(("HAM", 0), ("VER", 0))),
+        target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+    snapshot = read_validated_canonical_generation(canonical_parent)
+    calls: list[tuple[str, tuple[int, ...] | None]] = []
+    original = delivery_orchestration.derive_browser_driver_fields
+
+    def counted_derivation(snapshot, driver_id, *, timeline=None):
+        calls.append((driver_id, timeline))
+        return original(snapshot, driver_id, timeline=timeline)
+
+    monkeypatch.setattr(delivery_orchestration, "derive_browser_driver_fields", counted_derivation)
+
+    delivery = build_browser_delivery(snapshot, _track_assets())
+
+    final_timeline = _delivery_timeline(snapshot, 0)
+    assert calls == [("HAM", final_timeline), ("VER", final_timeline)]
+
+
 def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compatible() -> None:
     # Arrange: load only committed compatibility artifacts.
     manifest = _load_json(FIXTURE_ROOT / "manifest.json")
@@ -251,6 +305,20 @@ def test_passing_quality_assessment_derives_dynamic_positions_gaps_and_overlap_w
     assert second.leaderboard_order[overlap_index] == first.leaderboard_order[1]
     assert {time_ms for chunk in delivery.chunks for time_ms in chunk.time_ms} == _delivery_source_times(snapshot)
     assert snapshot.frames["position_telemetry"].equals(frames["position_telemetry"])
+
+
+def test_leader_lap_starts_follow_leader_changes_without_duplicate_or_regressing_markers() -> None:
+    fields = {
+        "HAM": _browser_fields("HAM", (1, 2, 2, 1)),
+        "RUS": _browser_fields("RUS", (1, 1, 4, 4)),
+    }
+
+    markers = _leader_lap_starts(
+        (0, 1_000, 2_000, 3_000), fields,
+        (("HAM", "RUS"), ("HAM", "RUS"), ("RUS", "HAM"), ("HAM", "RUS")),
+    )
+
+    assert [(marker.lap, marker.start_ms) for marker in markers] == [(1, 0), (2, 1_000), (4, 2_000)]
 
 
 def test_failed_quality_assessment_preserves_null_derived_fields_and_classified_fallback(tmp_path: Path) -> None:
@@ -460,6 +528,16 @@ def _terminal_live_frames(result_statuses: dict[str, str]) -> dict[str, pl.DataF
 def _driver_value(delivery, driver_id, field, time_ms):
     chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= time_ms < chunk.end_ms)
     return getattr(chunk.drivers[driver_id], field)[chunk.time_ms.index(time_ms)]
+
+
+def _browser_fields(driver_id: str, laps: tuple[int, ...]):
+    times = tuple(index * 1_000 for index in range(len(laps)))
+    return BrowserDriverFields(
+        driver_id, times, (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), laps, (None,) * len(laps), (None,) * len(laps), (None,) * len(laps),
+        (None,) * len(laps), (None,) * len(laps),
+    )
 
 
 def _delivery_source_times(snapshot) -> set[int]:

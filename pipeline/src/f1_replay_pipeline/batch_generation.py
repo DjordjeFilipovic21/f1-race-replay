@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
 from f1_replay_pipeline.browser_delivery_request import BrowserPublishRequest, BrowserPublishResult
+from f1_replay_pipeline.browser_delivery_publication import validate_browser_delivery_pointer
 from f1_replay_pipeline.dataset_manifest import parse_current_pointer, parse_manifest
 from f1_replay_pipeline.generation_identity import GenerationIdentityError, validate_generation_id
 from f1_replay_pipeline.generation_publication import (
@@ -244,9 +245,10 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
                 race_id, race.round_number, "skipped_valid", canonical_state.generation_path.name,
             )
         try:
+            delivery_version = _browser_delivery_version(browser, canonical_state.generation_path.name)
             browser_result = _publish_browser(
                 browser_service,
-                BrowserPublishRequest(canonical, browser, canonical_state.generation_path.name, request.schema_root),
+                BrowserPublishRequest(canonical, browser, delivery_version, request.schema_root),
                 event,
                 detail="reusing validated canonical generation",
             )
@@ -434,9 +436,7 @@ def _browser_output_valid(canonical: GenerationPublicationResult, browser: Path)
         pointer_path = browser / "browser-current.json"
         pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
         pointer = json.loads(pointer_file.data)
-        version = _safe_component(pointer.get("deliveryVersion"), "deliveryVersion")
-        if pointer.get("manifestPath") != f"generations/{version}/manifest.json":
-            return False
+        version = validate_browser_delivery_pointer(pointer)
         manifest_path = _browser_file(browser, ("generations", version, "manifest.json"), "browser manifest")
         manifest_file = read_regular_file_no_follow(manifest_path, "browser manifest")
         if pointer.get("manifestSha256") != _sha256(manifest_file.data):
@@ -468,9 +468,7 @@ def _shallow_browser_output_valid(canonical: GenerationPublicationResult, browse
         pointer_path = browser / "browser-current.json"
         pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
         pointer = json.loads(pointer_file.data)
-        version = _safe_component(pointer.get("deliveryVersion"), "deliveryVersion")
-        if pointer.get("manifestPath") != f"generations/{version}/manifest.json":
-            return False
+        version = validate_browser_delivery_pointer(pointer)
         manifest_path = _browser_file(browser, ("generations", version, "manifest.json"), "browser manifest")
         manifest_file = read_regular_file_no_follow(manifest_path, "browser manifest")
         if pointer.get("manifestSha256") != _sha256(manifest_file.data):
@@ -563,6 +561,47 @@ def _sha256(data: bytes) -> str:
 
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _browser_delivery_version(browser: Path, generation_id: str) -> str:
+    """Retain an occupied delivery and choose a deterministic browser-only successor."""
+    try:
+        _require_no_follow_directory(browser, "browser root")
+        generations = browser / "generations"
+        _require_no_follow_directory(generations, "browser generations")
+    except FileNotFoundError:
+        return generation_id
+    except OSError:
+        return generation_id
+    descriptor = os.open(generations, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if not _directory_entry_exists(descriptor, generation_id):
+            return generation_id
+        suffix = 1
+        while True:
+            candidate = _browser_successor_version(generation_id, suffix)
+            if not _directory_entry_exists(descriptor, candidate):
+                return candidate
+            suffix += 1
+    finally:
+        os.close(descriptor)
+
+
+def _directory_entry_exists(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _browser_successor_version(generation_id: str, suffix: int) -> str:
+    candidate = f"{generation_id}-browser-{suffix}"
+    try:
+        return validate_generation_id(candidate)
+    except GenerationIdentityError:
+        digest = hashlib.sha256(generation_id.encode("utf-8")).hexdigest()[:24]
+        return f"browser-{digest}-{suffix}"
 
 
 def _generation_id(request: BatchRequest, canonical: Path, browser: Path, round_number: int) -> str:

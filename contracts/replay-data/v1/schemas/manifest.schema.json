@@ -116,6 +116,18 @@
         "$ref": "#/$defs/driver"
       }
     },
+    "lapStarts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lap", "startMs"],
+        "properties": {
+          "lap": {"type": "integer", "minimum": 1},
+          "startMs": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
     "goldenSnapshots": {
       "type": "object",
       "additionalProperties": false,

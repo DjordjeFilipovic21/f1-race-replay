@@ -112,12 +112,30 @@ class BrowserDriverFields:
 
 
 @dataclass(frozen=True)
+class BrowserLapStart:
+    """One immutable leader-lap navigation marker in absolute session time."""
+
+    lap: int
+    start_ms: int
+
+    def __post_init__(self) -> None:
+        if type(self.lap) is not int or self.lap < 1:
+            raise ValueError("lap start lap must be a positive integer")
+        if type(self.start_ms) is not int or not 0 <= self.start_ms <= MAX_INT64:
+            raise ValueError("lap start time must be a non-negative signed Int64 integer")
+
+    def as_dict(self) -> dict[str, int]:
+        return {"lap": self.lap, "startMs": self.start_ms}
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
     fixture_id: str
     fixture_name: str
     drivers: tuple[Mapping[str, object], ...]
+    lap_starts: tuple[BrowserLapStart, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -132,10 +150,19 @@ class BrowserManifest:
             raise ValueError("drivers must contain immutable driver metadata")
         if len({driver["id"] for driver in frozen_drivers}) != len(frozen_drivers):
             raise ValueError("driver metadata IDs must be unique")
+        lap_starts = tuple(self.lap_starts)
+        if any(not isinstance(marker, BrowserLapStart) for marker in lap_starts):
+            raise TypeError("lap_starts must contain BrowserLapStart values")
+        if any(
+            following.lap <= current.lap or following.start_ms < current.start_ms
+            for current, following in zip(lap_starts, lap_starts[1:], strict=False)
+        ):
+            raise ValueError("lap starts must have increasing laps and nondecreasing timestamps")
         object.__setattr__(self, "drivers", frozen_drivers)
+        object.__setattr__(self, "lap_starts", lap_starts)
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "contractVersion": "v1",
             "fixtureId": self.fixture_id,
             "fixtureName": self.fixture_name,
@@ -146,9 +173,12 @@ class BrowserManifest:
             },
             "drivers": [dict(driver) for driver in self.drivers],
         }
+        if self.lap_starts:
+            value["lapStarts"] = [marker.as_dict() for marker in self.lap_starts]
+        return value
 
 
 __all__ = [
-    "BrowserDriverFields", "BrowserManifest", "CanonicalGenerationSnapshot",
+    "BrowserDriverFields", "BrowserLapStart", "BrowserManifest", "CanonicalGenerationSnapshot",
     "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "deep_freeze_json",
 ]

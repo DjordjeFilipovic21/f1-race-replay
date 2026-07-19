@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from f1_replay_pipeline.batch_generation import BatchRequest, BatchResult, ScheduledRace, _browser_output_valid, publish_catalog, run_batch, verify_catalog
+from f1_replay_pipeline.batch_generation import BatchRequest, BatchResult, ScheduledRace, _browser_output_valid, _shallow_browser_output_valid, publish_catalog, run_batch, verify_catalog
 from f1_replay_pipeline.browser_delivery_publication import BrowserValidationProgress
 from f1_replay_pipeline.browser_delivery_request import BrowserPublishResult
 from f1_replay_pipeline.cli import main
@@ -252,6 +252,7 @@ def _valid_browser_artifacts(tmp_path: Path, *, source_generation_id: str = "gen
     manifest_bytes = json.dumps(manifest).encode("utf-8")
     (generation / "manifest.json").write_bytes(manifest_bytes)
     (browser / "browser-current.json").write_text(json.dumps({
+        "formatVersion": "browser-delivery-v1",
         "deliveryVersion": "delivery",
         "manifestPath": "generations/delivery/manifest.json",
         "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
@@ -278,6 +279,7 @@ def test_browser_resume_validation_rejects_untrusted_reference_paths_and_symlink
 
     canonical, browser = _valid_browser_artifacts(tmp_path / "version")
     (browser / "browser-current.json").write_text(json.dumps({
+        "formatVersion": "browser-delivery-v1",
         "deliveryVersion": "../outside",
         "manifestPath": "generations/../outside/manifest.json",
         "manifestSha256": "a" * 64,
@@ -291,6 +293,24 @@ def test_browser_resume_validation_rejects_untrusted_reference_paths_and_symlink
     pointer.unlink()
     pointer.symlink_to(pointer_target)
     assert not _browser_output_valid(canonical, browser)
+
+
+@pytest.mark.parametrize("pointer_change", [
+    {"formatVersion": "browser-delivery-v0"},
+    {"manifestSha256": None},
+    {"unexpected": True},
+])
+def test_browser_resume_and_retained_catalog_validation_require_exact_pointer_shape(
+    tmp_path: Path, pointer_change: dict[str, object],
+) -> None:
+    canonical, browser = _valid_browser_artifacts(tmp_path)
+    pointer_path = browser / "browser-current.json"
+    pointer = json.loads(pointer_path.read_bytes())
+    pointer.update(pointer_change)
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    assert not _browser_output_valid(canonical, browser)
+    assert not _shallow_browser_output_valid(canonical, browser)
 
 
 def test_browser_resume_validation_requires_current_canonical_source_identity(tmp_path: Path) -> None:
@@ -328,6 +348,37 @@ def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_p
 
     assert calls == []
     assert result.races[0].generation_id == "existing"
+
+
+def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_successor(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    canonical = SimpleNamespace(generation_path=tmp_path / "canonical" / "existing", manifest_sha256="a" * 64)
+    browser_root = tmp_path / "browser" / "2024-round-01-one"
+    occupied = browser_root / "generations" / "existing"
+    occupied.mkdir(parents=True)
+    (occupied / "partial.json").write_text("invalid", encoding="utf-8")
+    browser_calls = []
+
+    def browser(request):
+        browser_calls.append(request)
+        return BrowserPublishResult(request, request.delivery_version, object())
+
+    monkeypatch.setattr("f1_replay_pipeline.batch_generation._canonical_state", lambda *_paths: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.batch_generation._browser_output_valid", lambda *_paths: False)
+    _calls, pipeline, _browser = _services()
+
+    result = run_batch(
+        _request(tmp_path, resume=True),
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        pipeline_service=pipeline, browser_service=browser,
+    )
+
+    assert (browser_calls[0].canonical_parent, browser_calls[0].delivery_version) == (
+        tmp_path / "canonical" / "2024-round-01-one", "existing-browser-1",
+    )
+    assert (occupied / "partial.json").read_text(encoding="utf-8") == "invalid"
+    assert result.races[0].delivery_version == "existing-browser-1"
 
 
 def test_canonical_durability_warning_continues_browser_and_preserves_outcome(
