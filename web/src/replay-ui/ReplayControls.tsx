@@ -5,6 +5,7 @@ import { LiveLeaderboardPanel } from './LiveLeaderboardPanel'
 import { LiveTrackMap } from './LiveTrackMap'
 import { PlaybackControls } from './PlaybackControls'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
+import { ReplayWorkspace, type ReplayWorkspacePanel } from './ReplayWorkspace'
 
 export { parseElapsedParts } from './ExactTimeEditor'
 
@@ -50,35 +51,45 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     setLeaderboardRefreshKey((revision) => revision + 1)
   }
 
+  const panels: readonly ReplayWorkspacePanel[] = [
+    {
+      id: 'player',
+      label: 'Player',
+      element: <PlaybackControls
+        controller={controller}
+        currentLap={currentLap}
+        displayedTimeMs={displayedTimeMs}
+        durationMs={durationMs}
+        elapsedMs={elapsedMs}
+        endMs={endMs}
+        isReady={isReady}
+        lapStarts={lapStarts}
+        onCommitSeek={commitSeek}
+        onSeek={seek}
+        onSeekPreview={handleSeekPreview}
+        snapshot={snapshot}
+        startMs={startMs}
+      />,
+    },
+    {
+      id: 'track-map',
+      label: 'Track map',
+      element: <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />,
+    },
+    {
+      id: 'leaderboard',
+      label: 'Leaderboard',
+      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} />,
+    },
+  ]
+
   return (
     <section className="replay-panel" aria-labelledby="replay-panel-title">
       <ReplayHeaderMetrics
         controller={controller}
         coordinateInterpolation={coordinateInterpolation}
-        currentLap={currentLap}
-        durationMs={durationMs}
-        elapsedMs={elapsedMs}
-        isReady={isReady}
-        lapStarts={lapStarts}
-        onSeek={seek}
-        startMs={startMs}
       />
-
-      <div className="replay-workspace">
-        <PlaybackControls
-          controller={controller}
-          displayedTimeMs={displayedTimeMs}
-          elapsedMs={elapsedMs}
-          endMs={endMs}
-          isReady={isReady}
-          onCommitSeek={commitSeek}
-          onSeekPreview={handleSeekPreview}
-          snapshot={snapshot}
-          startMs={startMs}
-        />
-        <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />
-        <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} />
-      </div>
+      <ReplayWorkspace panels={panels} />
     </section>
   )
 }

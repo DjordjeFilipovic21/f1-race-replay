@@ -69,6 +69,59 @@ test('wires accessible playback, seek, and speed controls to the controller', as
   expect(screen.getByRole('status', { name: 'Replay status' }).textContent).toContain('ready')
 })
 
+test('renders all workspace panels in the registry order with visible toggle states', () => {
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.className)).toEqual([
+    'replay-control-area',
+    'live-track-map',
+    'live-leaderboard',
+  ])
+  expect(screen.getByRole('button', { name: 'Player' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Leaderboard' }).getAttribute('aria-pressed')).toBe('true')
+  const playerPanel = document.querySelector('.replay-control-area')
+  expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
+  expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
+})
+
+test('hides and restores timestamp and lap navigation with the Player panel', () => {
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+  expect(screen.queryByLabelText('Replay time')).toBeNull()
+  expect(screen.queryByLabelText('Lap navigation')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+  expect(screen.getByLabelText('Replay time')).toBeTruthy()
+  expect(screen.getByLabelText('Lap navigation')).toBeTruthy()
+})
+
+test('hides and restores panels while cleaning up and remounting specialized subscriptions', () => {
+  const { controller, getUnsubscribeCalls } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Track map' }))
+  expect(screen.queryByRole('group', { name: 'Test Circuit live track map' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('false')
+  expect(getUnsubscribeCalls()).toBe(1)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Track map' }))
+  expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('true')
+  expect(controller.subscribe).toHaveBeenCalledTimes(5)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Leaderboard' }))
+  expect(screen.queryByRole('table')).toBeNull()
+  expect(getUnsubscribeCalls()).toBe(2)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Leaderboard' }))
+  expect(screen.getByRole('table')).toBeTruthy()
+  expect(controller.subscribe).toHaveBeenCalledTimes(6)
+})
+
 test('shows zero-based replay times while seeking with absolute session times', () => {
   const { controller } = createController({ ...readySnapshot, timeMs: 11_500 })
   render(<ReplayControls controller={controller} startMs={10_000} endMs={13_000} drivers={drivers} trackAssets={trackAssets} />)
