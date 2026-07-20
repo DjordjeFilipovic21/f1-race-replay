@@ -1,22 +1,29 @@
 import type { ChangeEvent, FormEvent } from 'react'
+import type { LapStart } from '../replay-data/types'
 import type { ReplayController, ReplayControllerSnapshot } from '../replay-engine'
+import { ExactLapNavigation } from './ExactLapNavigation'
+import { ExactTimeEditor } from './ExactTimeEditor'
 
 const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 2, 4] as const
 
 export interface PlaybackControlsProps {
   readonly controller: ReplayController
+  readonly currentLap: number | null
   readonly displayedTimeMs: number
+  readonly durationMs: number
   readonly elapsedMs: number
   readonly endMs: number
   readonly isReady: boolean
+  readonly lapStarts?: readonly LapStart[]
   readonly onCommitSeek: () => void
+  readonly onSeek: (timeMs: number) => void
   readonly onSeekPreview: (event: FormEvent<HTMLInputElement>) => void
   readonly snapshot: ReplayControllerSnapshot
   readonly startMs: number
 }
 
 /** Renders playback actions and controller status while delegating seek preview state to the adapter. */
-export function PlaybackControls({ controller, displayedTimeMs, elapsedMs, endMs, isReady, onCommitSeek, onSeekPreview, snapshot, startMs }: PlaybackControlsProps) {
+export function PlaybackControls({ controller, currentLap, displayedTimeMs, durationMs, elapsedMs, endMs, isReady, lapStarts, onCommitSeek, onSeek, onSeekPreview, snapshot, startMs }: PlaybackControlsProps) {
   const handlePlaybackToggle = () => {
     if (snapshot.isPlaying) controller.pause()
     else controller.start()
@@ -28,6 +35,10 @@ export function PlaybackControls({ controller, displayedTimeMs, elapsedMs, endMs
 
   return (
     <div className="replay-control-area">
+      <div className="replay-navigation">
+        <ExactTimeEditor durationMs={durationMs} elapsedMs={elapsedMs} isReady={isReady} onSeek={onSeek} startMs={startMs} />
+        <ExactLapNavigation currentLap={currentLap} isReady={isReady} lapStarts={lapStarts} onSeek={onSeek} />
+      </div>
       <div className="replay-controls">
         <button className="control-button" type="button" aria-pressed={snapshot.isPlaying} disabled={!isReady && !snapshot.isPlaying} onClick={handlePlaybackToggle}>
           {snapshot.isPlaying ? 'Pause' : 'Play'}
