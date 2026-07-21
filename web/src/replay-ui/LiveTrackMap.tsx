@@ -39,13 +39,7 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
   }, [controller, geometry, trackAssets.rotationDegrees])
 
   return (
-    <section className="live-track-map" aria-labelledby="live-track-map-title">
-      <header className="live-track-map__header">
-        <div>
-          <p className="eyebrow">Live circuit position</p>
-          <h2 id="live-track-map-title">{trackAssets.trackName} track map</h2>
-        </div>
-      </header>
+    <section className="live-track-map" aria-label={`${trackAssets.trackName} track map`}>
       {geometry === null ? (
         <p className="live-track-map__empty" role="status">Track geometry is unavailable for this replay.</p>
       ) : (

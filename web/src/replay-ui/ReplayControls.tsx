@@ -51,10 +51,12 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     setLeaderboardRefreshKey((revision) => revision + 1)
   }
 
+  // This experiment deliberately keeps panel modules statically loaded; bundle cost is traded for simple remount semantics.
   const panels: readonly ReplayWorkspacePanel[] = [
     {
       id: 'player',
       label: 'Player',
+      columns: 1,
       element: <PlaybackControls
         controller={controller}
         currentLap={currentLap}
@@ -74,11 +76,13 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     {
       id: 'track-map',
       label: 'Track map',
+      columns: 2,
       element: <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />,
     },
     {
       id: 'leaderboard',
       label: 'Leaderboard',
+      columns: 1,
       element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} />,
     },
   ]
