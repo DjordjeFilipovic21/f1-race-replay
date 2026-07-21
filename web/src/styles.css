@@ -59,21 +59,26 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .replay-message { color: var(--text-muted); font-size: .9rem; }
 .replay-message--error, .app-diagnostic--error { color: var(--danger); display: grid; gap: .75rem; }
 .live-leaderboard { min-width: 0; }
-.live-leaderboard__header { align-items: start; display: flex; flex-wrap: wrap; gap: .75rem; justify-content: space-between; margin-bottom: .75rem; }
+.live-leaderboard__header { align-items: start; display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; margin-bottom: .5rem; }
 .live-leaderboard__gap-toggle { display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.live-leaderboard__gap-toggle button { border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; padding: .4rem .65rem; }
+.live-leaderboard__gap-toggle button { border: 1px solid #59626b; background: #171a1e; color: #c7cdd3; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .68rem; font-weight: 800; letter-spacing: .06em; min-height: 2rem; padding: .3rem .5rem; text-transform: uppercase; }
 .live-leaderboard__gap-toggle button + button { border-left: 0; }
-.live-leaderboard__gap-toggle button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #17110e; font-weight: 700; }
-.live-leaderboard__table { border-collapse: collapse; font-size: .875rem; table-layout: fixed; width: 100%; }
+.live-leaderboard__gap-toggle button[aria-pressed='true'] { background: #f5f6f7; border-color: #f5f6f7; color: #101214; }
+.live-leaderboard__table { border-collapse: separate; border-spacing: 0 3px; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .72rem; table-layout: fixed; width: 100%; }
+.live-leaderboard__column--position { width: 2rem; }
+.live-leaderboard__column--team-accent { width: 4px; }
+.live-leaderboard__column--metric { width: 5.625rem; }
 .live-leaderboard__table caption { height: 1px; margin: -1px; overflow: hidden; position: absolute; width: 1px; clip: rect(0 0 0 0); white-space: nowrap; }
-.live-leaderboard__table th, .live-leaderboard__table td { border-bottom: 1px solid var(--border); overflow-wrap: anywhere; padding: .65rem .35rem; text-align: left; vertical-align: middle; }
-.live-leaderboard__table thead { color: var(--text-muted); font-size: .72rem; text-transform: uppercase; }
+.live-leaderboard__table th, .live-leaderboard__table td { background: #111315; border: 0; overflow: hidden; padding: .3rem .3rem; text-align: left; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
+.live-leaderboard__table thead { height: 1px; overflow: hidden; position: absolute; width: 1px; clip: rect(0 0 0 0); white-space: nowrap; }
+.live-leaderboard__table tbody tr { height: 2rem; }
 .live-leaderboard__table tbody th { font-weight: 700; }
-.live-leaderboard__position, .live-leaderboard__gap { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.live-leaderboard__table .live-leaderboard__tyre { text-align: center; }
-.live-leaderboard__tyre-icon { display: block; height: 2rem; margin: 0 auto; object-fit: contain; width: 2rem; }
-.live-leaderboard__driver-name, .live-leaderboard__driver-code { display: block; }
-.live-leaderboard__driver-code { color: var(--text-muted); font-size: .75rem; font-weight: 600; letter-spacing: .04em; }
+.live-leaderboard__position { background: #f4f5f6 !important; border-radius: 0 0 .35rem 0; color: #111315; font-size: .75rem; font-weight: 900; padding: 0 !important; text-align: center !important; }
+.live-leaderboard__team-accent { background: var(--live-leaderboard-team-color, #7a8794) !important; padding: 0 !important; }
+.live-leaderboard__driver { color: #f4f5f6; font-size: .86rem; font-weight: 900; letter-spacing: -.03em; padding-left: .45rem !important; }
+.live-leaderboard__gap { background: rgb(0 0 0 / 35%) !important; color: #f3f4f5; font-size: .7rem; font-variant-numeric: tabular-nums; font-weight: 800; text-align: right !important; white-space: nowrap; }
+.live-leaderboard__row--terminal { opacity: .52; }
+.live-leaderboard__row--terminal .live-leaderboard__position { background: #838b93 !important; }
 .live-leaderboard__empty { color: var(--text-muted); font-size: .9rem; }
 .live-track-map { min-width: 0; }
 .live-track-map__svg { background: #14181c; border: 1px solid var(--border); display: block; height: auto; min-height: 16rem; width: 100%; }
@@ -94,7 +99,6 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
   .replay-panel__header { align-items: end; grid-template-columns: 1fr auto; }
   .replay-navigation { align-items: center; grid-template-columns: repeat(2, max-content); justify-content: start; }
   .replay-controls { align-items: end; grid-template-columns: auto 1fr 10rem; }
-  .live-leaderboard__table { font-size: .95rem; }
   .live-track-map__svg { min-height: 20rem; }
   .replay-workspace { align-items: start; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-panel-frame { grid-column: span var(--replay-panel-columns); }
@@ -109,11 +113,6 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 
 @media (min-width: 1440px) {
   .replay-panel { padding: 1.75rem; }
-}
-
-@media (max-width: 767px) {
-  .live-leaderboard__team { display: none; }
-  .live-leaderboard__table th, .live-leaderboard__table td { padding-inline: .25rem; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

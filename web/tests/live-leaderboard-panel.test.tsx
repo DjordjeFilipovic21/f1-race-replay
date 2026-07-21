@@ -40,7 +40,9 @@ test('bounds playing table updates while publishing pause and explicit refresh i
   publish(84, 3_000)
   expect(screen.getByText('+1.000')).toBeTruthy()
   publish(126, 4_000)
-  act(() => vi.advanceTimersByTime(125))
+  act(() => vi.advanceTimersByTime(999))
+  expect(screen.getByText('+1.000')).toBeTruthy()
+  act(() => vi.advanceTimersByTime(1))
   expect(screen.getByText('+4.000')).toBeTruthy()
   act(() => {
     snapshot = { ...snapshot, status: 'loading', replay: null }

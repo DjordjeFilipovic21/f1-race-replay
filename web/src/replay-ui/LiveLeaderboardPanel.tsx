@@ -4,6 +4,8 @@ import type { ReplayController } from '../replay-engine'
 import { LiveLeaderboard } from './LiveLeaderboard'
 import { createThrottledReplayStore } from './throttled-replay-store'
 
+const LEADERBOARD_REFRESH_INTERVAL_MS = 1_000
+
 export interface LiveLeaderboardPanelProps {
   readonly controller: ReplayController
   readonly drivers: readonly DriverMetadata[]
@@ -12,7 +14,7 @@ export interface LiveLeaderboardPanelProps {
 
 /** Keeps the table responsive without reconciling every animation frame. */
 export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ controller, drivers, refreshKey }: LiveLeaderboardPanelProps) {
-  const store = useMemo(() => createThrottledReplayStore(controller), [controller])
+  const store = useMemo(() => createThrottledReplayStore(controller, LEADERBOARD_REFRESH_INTERVAL_MS), [controller])
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
 
   useEffect(() => {
