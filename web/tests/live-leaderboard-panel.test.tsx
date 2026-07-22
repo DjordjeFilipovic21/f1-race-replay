@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboardPanel } from '../src/replay-ui/LiveLeaderboardPanel'
 import type { ReplayController, ReplayControllerSnapshot } from '../src/replay-engine'
@@ -34,7 +34,11 @@ test('bounds playing table updates while publishing pause and explicit refresh i
     snapshot = { ...snapshot, timeMs, isPlaying, replay: replay(gapToLeaderMs) }
     listeners.forEach((listener) => listener())
   })
-  const { rerender } = render(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={0} />)
+  const onDriverSelect = vi.fn()
+  const { rerender } = render(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={0} selectedDriverId="NOR" onDriverSelect={onDriverSelect} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Select Lando Norris' }))
+  expect(onDriverSelect).toHaveBeenCalledWith('NOR')
 
   publish(42, 2_000)
   publish(84, 3_000)
@@ -55,6 +59,6 @@ test('bounds playing table updates while publishing pause and explicit refresh i
 
   publish(128, 6_000)
   publish(129, 7_000)
-  rerender(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={1} />)
+  rerender(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={1} selectedDriverId="NOR" onDriverSelect={onDriverSelect} />)
   expect(screen.getByText('+7.000')).toBeTruthy()
 })

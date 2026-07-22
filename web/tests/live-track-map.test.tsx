@@ -145,3 +145,13 @@ test('hides only markers sampled with terminal OUT status', () => {
   setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OffTrack' } } })
   expect(marker.getAttribute('visibility')).toBe('visible')
 })
+
+test('renders the selected marker last with a visible selection ring', () => {
+  const { controller } = createController(snapshot())
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} selectedDriverId="VER" />)
+
+  const markers = Array.from(document.querySelectorAll('.live-track-map__marker'))
+  expect(markers.at(-1)?.getAttribute('aria-label')).toBe('Max Verstappen (VER)')
+  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('class')).toContain('live-track-map__marker--selected')
+  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).querySelector('.live-track-map__selection-ring')).toBeTruthy()
+})

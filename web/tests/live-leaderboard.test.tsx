@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboard } from '../src/replay-ui/LiveLeaderboard'
 import type { ReplaySnapshot } from '../src/replay-engine/types'
 
@@ -150,6 +150,17 @@ test('uses a validated dedicated team-colour cell and subdues terminal rows with
   expect(terminalRow.getAttribute('style')).toContain('--live-leaderboard-team-color: #7a8794')
   expect(activeRow.getAttribute('style')).toContain('--live-leaderboard-team-color: #ff8000')
   expect(within(terminalRow).getAllByRole('cell')[1].className).toContain('live-leaderboard__team-accent')
+})
+
+test('selects a driver through its accessible identity control and highlights the row', () => {
+  const onDriverSelect = vi.fn()
+  render(<LiveLeaderboard snapshot={snapshot()} drivers={drivers} selectedDriverId="NOR" onDriverSelect={onDriverSelect} />)
+
+  const selected = screen.getByRole('button', { name: 'Select Lando Norris' })
+  expect(selected.getAttribute('aria-pressed')).toBe('true')
+  expect(rowForDriver('NOR').className).toContain('live-leaderboard__row--selected')
+  fireEvent.click(selected)
+  expect(onDriverSelect).toHaveBeenCalledWith('NOR')
 })
 
 function rowForDriver(code: string): HTMLElement {

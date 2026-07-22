@@ -7,6 +7,8 @@ type GapMode = 'leader' | 'interval'
 export interface LiveLeaderboardProps {
   readonly snapshot: ReplaySnapshot | null
   readonly drivers: readonly DriverMetadata[]
+  readonly selectedDriverId?: string | null
+  readonly onDriverSelect?: (driverId: string) => void
 }
 
 interface LeaderboardRow {
@@ -19,7 +21,7 @@ interface LeaderboardRow {
 }
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
-export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers }: LiveLeaderboardProps) {
+export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect }: LiveLeaderboardProps) {
   const [gapMode, setGapMode] = useState<GapMode>('leader')
   const rows = createLeaderboardRows(snapshot, drivers)
 
@@ -48,7 +50,7 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
             <tr><th scope="col">Position</th><th scope="col">Team colour</th><th scope="col">Driver</th><th scope="col">{gapMode === 'leader' ? 'Leader gap' : 'Interval'}</th></tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} gapMode={gapMode} />)}
+            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} gapMode={gapMode} isSelected={row.id === selectedDriverId} onDriverSelect={onDriverSelect} />)}
           </tbody>
         </table>
       )}
@@ -56,15 +58,15 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
   )
 })
 
-function LeaderboardTableRow({ row, ahead, gapMode }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly gapMode: GapMode }) {
+function LeaderboardTableRow({ row, ahead, gapMode, isSelected, onDriverSelect }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly gapMode: GapMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined }) {
   const identity = row.metadata?.displayName ?? row.id
   const code = row.metadata?.id ?? row.id
   const terminal = isTerminalStatus(row.status)
   return (
-    <tr className={terminal ? 'live-leaderboard__row--terminal' : undefined} style={teamAccentStyle(row.metadata?.colorHex)}>
+    <tr className={[terminal ? 'live-leaderboard__row--terminal' : '', isSelected ? 'live-leaderboard__row--selected' : ''].filter(Boolean).join(' ') || undefined} style={teamAccentStyle(row.metadata?.colorHex)}>
       <td className="live-leaderboard__position">{formatPosition(row.position, row.status)}</td>
       <td className="live-leaderboard__team-accent" aria-label={`Team colour for ${identity}`} />
-      <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}>{code}</th>
+      <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}><button type="button" aria-label={`Select ${identity}`} aria-pressed={isSelected} title={identity} onClick={() => onDriverSelect?.(row.id)}>{code}</button></th>
       <td className="live-leaderboard__gap">{formatMetric(row, ahead, gapMode)}</td>
     </tr>
   )
