@@ -53,6 +53,37 @@ describe('replay controller', () => {
     expect([controller.getSnapshot().replay?.sessionTimeMs, controller.getSnapshot().crossedEvents]).toEqual([2_000, []])
   })
 
+  test('keeps telemetry ready while handing off to a prefetched chunk', async () => {
+    const scheduler = createScheduler()
+    const controller = createReplayController({ index: await loadReplayIndex({ source: fixtureSource }), scheduler })
+    const snapshots: ReturnType<typeof controller.getSnapshot>[] = []
+    controller.subscribe(() => { snapshots.push(controller.getSnapshot()) })
+    await waitForReady(controller)
+    controller.start()
+    scheduler.fire(1_000)
+    scheduler.fire(2_000)
+
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', isPlaying: true, replay: { sessionTimeMs: 2_000 } })
+    expect(snapshots.some(({ timeMs, replay }) => timeMs === 2_000 && replay === null)).toBe(false)
+  })
+
+  test('seeks into a prefetched chunk without clearing telemetry and promotes the following window', async () => {
+    const base = await loadReplayIndex({ source: fixtureSource })
+    const third = Object.freeze({ ...(await base.loadChunk(2)), chunkId: 'chunk-003', sequence: 3, startMs: 4_000, endMs: 6_000 })
+    const loadChunk = vi.fn((sequence: number) => sequence === 3 ? Promise.resolve(third) : base.loadChunk(sequence))
+    const controller = createReplayController({ index: withThirdChunk(base, loadChunk), scheduler: createScheduler() })
+    const snapshots: ReturnType<typeof controller.getSnapshot>[] = []
+    controller.subscribe(() => { snapshots.push(controller.getSnapshot()) })
+    await waitForReady(controller)
+    controller.seek(2_000)
+    await flushAsyncWork()
+    controller.seek(4_000)
+
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', replay: { sessionTimeMs: 4_000 } })
+    expect(snapshots.some(({ timeMs, replay }) => timeMs === 2_000 && replay === null)).toBe(false)
+    expect(loadChunk.mock.calls.filter(([sequence]) => sequence === 3)).toHaveLength(1)
+  })
+
   test('propagates a cache error and retries without publishing a stale completion', async () => {
     const base = await loadReplayIndex({ source: fixtureSource })
     let attempts = 0
@@ -79,10 +110,14 @@ describe('replay controller', () => {
     expect(scheduler.cancelled).toEqual([1])
   })
 
-  test('pauses one delayed unavailable transition and retains its crossed event', async () => {
-    const base = await eventIndex(1_500)
+  test('retains events from a delayed promoted chunk at the following handoff', async () => {
+    const base = await loadReplayIndex({ source: fixtureSource })
     const deferred = createDeferred<ReplayChunk>()
-    const index = withThirdChunk(base, (sequence) => sequence === 3 ? deferred.promise : base.loadChunk(sequence))
+    const second = Object.freeze({
+      ...(await base.loadChunk(2)),
+      events: Object.freeze([{ sessionTimeMs: 3_500, eventType: 'sector', description: 'Sector' }]),
+    })
+    const index = withThirdChunk(base, (sequence) => sequence === 2 ? Promise.resolve(second) : sequence === 3 ? deferred.promise : base.loadChunk(sequence))
     const loadChunk = vi.fn(index.loadChunk)
     const scheduler = createScheduler()
     const controller = createReplayController({ index: Object.freeze({ ...index, loadChunk }), scheduler })
@@ -90,13 +125,20 @@ describe('replay controller', () => {
     controller.start()
     scheduler.fire(1_000)
     scheduler.fire(2_000)
-    scheduler.fire(2_500)
+    scheduler.fire(3_000)
+    scheduler.fire(4_000)
 
     expect([controller.getSnapshot().isPlaying, loadChunk.mock.calls.filter(([sequence]) => sequence === 2).length]).toEqual([true, 1])
-    deferred.resolve(Object.freeze({ ...(await base.loadChunk(2)), sequence: 3, startMs: 4_000, endMs: 6_000 }))
+    deferred.resolve(Object.freeze({
+      ...second,
+      sequence: 3,
+      startMs: 4_000,
+      endMs: 6_000,
+      events: Object.freeze([{ sessionTimeMs: 4_000, eventType: 'pass', description: 'Pass' }]),
+    }))
     await waitForReady(controller)
 
-    expect(controller.getSnapshot().crossedEvents.map(({ eventType }) => eventType)).toEqual(['pass'])
+    expect(controller.getSnapshot().crossedEvents.map(({ sessionTimeMs }) => sessionTimeMs)).toEqual([3_500, 4_000])
   })
 
   test('keeps a transition error paused until explicit retry', async () => {
@@ -109,7 +151,7 @@ describe('replay controller', () => {
     }), scheduler: createScheduler() })
     await waitForReady(controller)
     controller.start()
-    controller.seek(2_000)
+    controller.seek(4_000)
     await waitForStatus(controller, 'error')
     await Promise.resolve()
 
@@ -124,10 +166,10 @@ describe('replay controller', () => {
     const deferred = createDeferred<ReplayChunk>()
     const controller = createReplayController({ index: withThirdChunk(base, (sequence) => sequence === 3 ? deferred.promise : base.loadChunk(sequence)), scheduler: createScheduler() })
     await waitForReady(controller)
-    controller.seek(2_000)
+    controller.seek(4_000)
     controller.seek(500)
     deferred.resolve(Object.freeze({ ...(await base.loadChunk(2)), sequence: 3, startMs: 4_000, endMs: 6_000 }))
-    await Promise.resolve()
+    await flushAsyncWork()
 
     expect([controller.getSnapshot().status, controller.getSnapshot().replay?.sessionTimeMs]).toEqual(['ready', 500])
   })
@@ -136,6 +178,10 @@ describe('replay controller', () => {
 function createDeferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
   let resolvePromise!: (value: T) => void
   return { promise: new Promise<T>((resolve) => { resolvePromise = resolve }), resolve: (value) => resolvePromise(value) }
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
 }
 
 function withThirdChunk(base: ReplayIndex, loadChunk: ReplayIndex['loadChunk']): ReplayIndex {

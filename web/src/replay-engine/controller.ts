@@ -30,6 +30,7 @@ export function createReplayController(options: ReplayControllerOptions): Replay
   let requestedPlaying = false
   let suppressNextCrossing = false
   let transition: Promise<void> | null = null
+  let promotingSequence: number | null = null
   let beginningTransition = false
   let pendingCrossings: readonly ReplayEvent[] = Object.freeze([])
   let ignoreClockChange = false
@@ -38,7 +39,7 @@ export function createReplayController(options: ReplayControllerOptions): Replay
     store.publish(createSnapshot(status, clock.getSnapshot(), replay, crossedEvents, error, requestedPlaying))
   }
 
-  const beginTransition = (timeMs: number, crossings: readonly ReplayEvent[], retry = false): Promise<void> => {
+  const beginTransition = (timeMs: number, crossings: readonly ReplayEvent[], retry = false, crossingStartMs: number | null = null): Promise<void> => {
     if (!retry && transition !== null) return transition
     const loadGeneration = ++generation
     const sequence = resolveSequence(options.index, timeMs)
@@ -52,7 +53,9 @@ export function createReplayController(options: ReplayControllerOptions): Replay
         if (disposed || loadGeneration !== generation || clock.getSnapshot().timeMs !== timeMs) return
         readyWindow = window
         readySampler = prepareReplaySampler(composeWindowReplayData(options.index, window), undefined, options.coordinateInterpolation)
-        const retainedCrossings = pendingCrossings
+        const retainedCrossings = crossingStartMs === null
+          ? pendingCrossings
+          : mergeCrossings(pendingCrossings, forwardEventCrossings(eventsInWindow(window), crossingStartMs, timeMs))
         pendingCrossings = Object.freeze([])
         publish('ready', samplePreparedReplayAt(readySampler, timeMs), retainedCrossings, null)
         transition = null
@@ -72,19 +75,37 @@ export function createReplayController(options: ReplayControllerOptions): Replay
     return transition
   }
 
+  const promoteWindow = (sequence: number): void => {
+    if (readyWindow?.current.sequence === sequence || promotingSequence === sequence) return
+    const promotionGeneration = generation
+    promotingSequence = sequence
+    void cache.seek(sequence).then(
+      (window) => {
+        if (disposed || promotionGeneration !== generation) return
+        readyWindow = window
+        readySampler = prepareReplaySampler(composeWindowReplayData(options.index, window), undefined, options.coordinateInterpolation)
+      },
+      () => undefined,
+    ).finally(() => {
+      if (promotionGeneration === generation && promotingSequence === sequence) promotingSequence = null
+    })
+  }
+
   const handleTime = (timeMs: number, isSeek: boolean): void => {
     const sequence = resolveSequence(options.index, timeMs)
-    const crossings = suppressNextCrossing || isSeek || timeMs <= lastTimeMs || readyWindow === null
+    const previousTimeMs = lastTimeMs
+    const crossings = suppressNextCrossing || isSeek || timeMs <= previousTimeMs || readyWindow === null
       ? Object.freeze([])
-      : forwardEventCrossings(eventsInWindow(readyWindow), lastTimeMs, timeMs)
+      : forwardEventCrossings(eventsInWindow(readyWindow), previousTimeMs, timeMs)
     suppressNextCrossing = false
     lastTimeMs = timeMs
     if (timeMs === bounds.endMs) requestedPlaying = false
-    if (readyWindow !== null && readySampler !== null && sequence === readyWindow.current.sequence) {
+    if (readyWindow !== null && readySampler !== null && (sequence === readyWindow.current.sequence || sequence === readyWindow.next?.sequence)) {
       publish('ready', samplePreparedReplayAt(readySampler, timeMs), crossings, null)
+      if (sequence !== readyWindow.current.sequence) promoteWindow(sequence)
       return
     }
-    void beginTransition(timeMs, crossings)
+    void beginTransition(timeMs, crossings, false, isSeek ? null : previousTimeMs)
   }
 
   const onClockChange = (): void => { if (!disposed && !ignoreClockChange && !beginningTransition && transition === null) handleTime(clock.getSnapshot().timeMs, false) }
@@ -109,6 +130,7 @@ export function createReplayController(options: ReplayControllerOptions): Replay
       if (disposed) return
       const nextTimeMs = clampTime(timeMs, bounds)
       generation += 1 // A public seek invalidates every outstanding controller completion, including a ready-window seek.
+      promotingSequence = null
       transition = null
       pendingCrossings = Object.freeze([])
       suppressNextCrossing = true
@@ -165,5 +187,9 @@ function composeWindowReplayData(index: ReplayIndex, window: ChunkWindow): Repla
   return Object.freeze({ ...(index.pointer ? { pointer: index.pointer } : {}), manifest: index.manifest, trackAssets: index.trackAssets, chunks: Object.freeze(chunks) })
 }
 function eventsInWindow(window: ChunkWindow): readonly ReplayEvent[] { return Object.freeze([window.previous, window.current, window.next].filter((chunk): chunk is ReplayChunk => chunk !== null).flatMap((chunk) => chunk.events)) }
+function mergeCrossings(existing: readonly ReplayEvent[], additional: readonly ReplayEvent[]): readonly ReplayEvent[] {
+  const seen = new Set(existing)
+  return Object.freeze([...existing, ...additional.filter((event) => !seen.has(event))])
+}
 function createSnapshot(status: ChunkCacheStatus, clock: { readonly timeMs: number; readonly speed: PlaybackSpeed; readonly isPlaying: boolean }, replay: ReplaySnapshot | null, crossedEvents: readonly ReplayEvent[], error: unknown | null, isPlaying = clock.isPlaying): ReplayControllerSnapshot { return Object.freeze({ status, timeMs: clock.timeMs, speed: clock.speed, isPlaying, replay, crossedEvents, error }) }
 function clampTime(timeMs: number, bounds: { readonly startMs: number; readonly endMs: number }): number { if (!Number.isSafeInteger(timeMs)) throw new RangeError('Replay time must be an integer millisecond'); return Math.min(bounds.endMs, Math.max(bounds.startMs, timeMs)) }
