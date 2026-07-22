@@ -83,8 +83,8 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-leaderboard__team-accent { background: var(--live-leaderboard-team-color, #7a8794) !important; padding: 0 !important; }
 .live-leaderboard__driver { color: #f4f5f6; font-size: .86rem; font-weight: 900; letter-spacing: -.03em; padding-left: .45rem !important; }
 .live-leaderboard__driver button { background: transparent; border: 0; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; min-height: 2rem; padding: 0; text-align: left; width: 100%; }
-.live-leaderboard__row--selected > * { box-shadow: inset 3px 0 0 var(--focus); }
-.live-leaderboard__driver button[aria-pressed='true'] { color: var(--focus); text-decoration: underline; text-underline-offset: .15em; }
+.live-leaderboard__row--selected > .live-leaderboard__driver, .live-leaderboard__row--selected > .live-leaderboard__gap { background: color-mix(in srgb, var(--live-leaderboard-team-color) 18%, #111315) !important; }
+.live-leaderboard__driver button[aria-pressed='true'] { color: #fff; }
 .live-leaderboard__gap { background: rgb(0 0 0 / 35%) !important; color: #f3f4f5; font-size: .7rem; font-variant-numeric: tabular-nums; font-weight: 800; text-align: right !important; white-space: nowrap; }
 .live-leaderboard__row--terminal { opacity: .52; }
 .live-leaderboard__row--terminal .live-leaderboard__position { background: #838b93 !important; }
@@ -95,7 +95,7 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-track-map__center-line { fill: none; stroke: var(--text-muted); stroke-dasharray: 5 6; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .live-track-map__start-finish { stroke: var(--focus); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .live-track-map__marker circle { stroke: #111315; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.live-track-map__selection-ring { fill: none; stroke: var(--focus) !important; stroke-width: 4 !important; vector-effect: non-scaling-stroke; }
+.live-track-map__marker--selected .live-track-map__driver-dot { filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 6px currentColor); }
 .live-track-map__marker--selected text { fill: #f5f6f7; font-weight: 900; }
 .live-track-map__marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__empty { color: var(--text-muted); font-size: .9rem; }

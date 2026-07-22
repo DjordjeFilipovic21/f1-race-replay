@@ -62,9 +62,8 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
             y2={geometry.startFinish[1].y}
           />
           {orderMarkers(drivers, selectedDriverId).map((driver) => (
-            <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
-              {driver.id === selectedDriverId && <circle className="live-track-map__selection-ring" cx="0" cy="0" r={geometry.markerRadius * 1.55} />}
-              <circle cx="0" cy="0" r={geometry.markerRadius} fill={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} />
+            <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} color={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
+              <circle className="live-track-map__driver-dot" cx="0" cy="0" r={geometry.markerRadius} fill="currentColor" />
               <text x="0" y="0" fontSize={geometry.markerLabelSize} aria-hidden="true">{driver.id}</text>
             </g>
           ))}

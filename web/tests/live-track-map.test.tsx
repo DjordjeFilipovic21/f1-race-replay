@@ -146,12 +146,15 @@ test('hides only markers sampled with terminal OUT status', () => {
   expect(marker.getAttribute('visibility')).toBe('visible')
 })
 
-test('renders the selected marker last with a visible selection ring', () => {
+test('renders the selected marker last with glow styling on its driver dot', () => {
   const { controller } = createController(snapshot())
   render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} selectedDriverId="VER" />)
 
   const markers = Array.from(document.querySelectorAll('.live-track-map__marker'))
   expect(markers.at(-1)?.getAttribute('aria-label')).toBe('Max Verstappen (VER)')
-  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('class')).toContain('live-track-map__marker--selected')
-  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).querySelector('.live-track-map__selection-ring')).toBeTruthy()
+  const selected = screen.getByRole('img', { name: 'Max Verstappen (VER)' })
+  expect(selected.getAttribute('class')).toContain('live-track-map__marker--selected')
+  expect(selected.getAttribute('color')).toBe('#3671c6')
+  expect(selected.querySelectorAll('circle')).toHaveLength(1)
+  expect(selected.querySelector('.live-track-map__driver-dot')).toBeTruthy()
 })
