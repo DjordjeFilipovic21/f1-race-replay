@@ -1,4 +1,4 @@
-import type { ChangeEvent, FormEvent } from 'react'
+import type { FormEvent } from 'react'
 import type { LapStart } from '../replay-data/types'
 import type { ReplayController, ReplayControllerSnapshot } from '../replay-engine'
 import { ExactLapNavigation } from './ExactLapNavigation'
@@ -29,39 +29,66 @@ export function PlaybackControls({ controller, currentLap, displayedTimeMs, dura
     else controller.start()
   }
 
-  const handleSpeedChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    controller.setSpeed(Number(event.currentTarget.value) as (typeof PLAYBACK_SPEEDS)[number])
+  const seekBy = (offsetMs: number) => {
+    onSeek(Math.min(Math.max(displayedTimeMs + offsetMs, startMs), endMs))
   }
 
+  const lapMarker = (offset: -1 | 1) => lapStarts?.find((entry) => entry.lap === (currentLap ?? 0) + offset)
+  const previousLap = lapMarker(-1)
+  const nextLap = lapMarker(1)
+
   return (
-    <div className="replay-control-area">
+    <div className="replay-control-area" aria-busy={snapshot.status === 'loading'}>
       <div className="replay-navigation">
         <ExactTimeEditor durationMs={durationMs} elapsedMs={elapsedMs} isReady={isReady} onSeek={onSeek} startMs={startMs} />
         <ExactLapNavigation currentLap={currentLap} isReady={isReady} lapStarts={lapStarts} onSeek={onSeek} />
       </div>
       <div className="replay-controls">
-        <button className="control-button" type="button" aria-pressed={snapshot.isPlaying} disabled={!isReady && !snapshot.isPlaying} onClick={handlePlaybackToggle}>
-          {snapshot.isPlaying ? 'Pause' : 'Play'}
-        </button>
+        <div className="transport-controls" aria-label="Replay transport" role="group">
+          <button className="transport-button transport-button--jump" type="button" aria-label="Previous lap" disabled={!isReady || previousLap === undefined} onClick={() => previousLap && onSeek(previousLap.startMs)}>
+            <JumpIcon direction="back" label="1L" />
+          </button>
+          <button className="transport-button" type="button" aria-label="Rewind 10 seconds" disabled={!isReady} onClick={() => seekBy(-10_000)}>
+            <JumpIcon direction="back" label="10s" />
+          </button>
+          <button className="transport-button transport-button--primary" type="button" aria-label={snapshot.isPlaying ? 'Pause' : 'Play'} aria-pressed={snapshot.isPlaying} disabled={!isReady && !snapshot.isPlaying} onClick={handlePlaybackToggle}>
+            {snapshot.isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button className="transport-button" type="button" aria-label="Forward 10 seconds" disabled={!isReady} onClick={() => seekBy(10_000)}>
+            <JumpIcon direction="forward" label="10s" />
+          </button>
+          <button className="transport-button transport-button--jump" type="button" aria-label="Next lap" disabled={!isReady || nextLap === undefined} onClick={() => nextLap && onSeek(nextLap.startMs)}>
+            <JumpIcon direction="forward" label="1L" />
+          </button>
+        </div>
 
-        <label className="seek-control">
-          <span>Seek replay</span>
-          <input type="range" min={startMs} max={endMs} step="1" value={displayedTimeMs} aria-valuetext={formatTime(elapsedMs)} disabled={!isReady} onInput={onSeekPreview} onPointerUp={onCommitSeek} onKeyUp={onCommitSeek} onBlur={onCommitSeek} />
-        </label>
+        <div className="seek-control">
+          <input type="range" min={startMs} max={endMs} step="1" value={displayedTimeMs} aria-label="Seek replay" aria-valuetext={formatTime(elapsedMs)} disabled={!isReady} onInput={onSeekPreview} onPointerUp={onCommitSeek} onKeyUp={onCommitSeek} onBlur={onCommitSeek} />
+        </div>
 
-        <label className="speed-control">
+        <div className="speed-control">
           <span>Playback speed</span>
-          <select value={snapshot.speed} disabled={!isReady} onChange={handleSpeedChange}>
-            {PLAYBACK_SPEEDS.map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
-          </select>
-        </label>
+          <div className="speed-options" role="group" aria-label="Playback speed">
+            {PLAYBACK_SPEEDS.map((speed) => <button key={speed} type="button" aria-pressed={snapshot.speed === speed} disabled={!isReady} onClick={() => controller.setSpeed(speed)}>{speed}×</button>)}
+          </div>
+        </div>
       </div>
 
-      {snapshot.status === 'loading' && <p className="replay-message" role="status" aria-label="Replay loading">Loading replay samples…</p>}
       {snapshot.status === 'error' && <div className="replay-message replay-message--error" role="alert"><p>Replay data could not be loaded: {errorMessage(snapshot.error)}</p><button className="retry-button" type="button" onClick={() => void controller.retry()}>Retry loading</button></div>}
-      {isReady && <p className="replay-message" role="status" aria-label="Replay status">Replay samples ready.</p>}
     </div>
   )
+}
+
+function PlayIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z" fill="currentColor" /></svg>
+}
+
+function PauseIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z" fill="currentColor" /></svg>
+}
+
+function JumpIcon({ direction, label }: { readonly direction: 'back' | 'forward'; readonly label: string }) {
+  return <span className={`transport-jump-icon transport-jump-icon--${direction}`} aria-hidden="true"><svg viewBox="0 0 24 24"><path d={direction === 'back' ? 'm15 5-7 7 7 7' : 'm9 5 7 7-7 7'} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" /></svg><span>{label}</span></span>
 }
 
 function formatTime(timeMs: number): string {

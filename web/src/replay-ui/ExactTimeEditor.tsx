@@ -15,28 +15,59 @@ interface TimeParts {
   readonly milliseconds: string
 }
 
+type TimePartName = keyof TimeParts
+
 /** Edits elapsed replay time while retaining invalid input until the user commits it. */
 export function ExactTimeEditor({ durationMs, elapsedMs, isReady, onSeek, startMs }: ExactTimeEditorProps) {
   const [timeParts, setTimeParts] = useState(() => splitTime(elapsedMs))
   const [timeError, setTimeError] = useState<string | null>(null)
-  const isEditingTime = useRef(false)
-  const lastTimeCommit = useRef<string | null>(null)
+  const [editingPart, setEditingPart] = useState<TimePartName | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const timePartsRef = useRef(timeParts)
+  const lastCommitRef = useRef<string | null>(null)
+  const durationParts = splitTime(durationMs)
 
   useEffect(() => {
-    if (!isEditingTime.current) setTimeParts(splitTime(elapsedMs))
-  }, [elapsedMs])
+    if (editingPart === null) {
+      const nextTimeParts = splitTime(elapsedMs)
+      timePartsRef.current = nextTimeParts
+      lastCommitRef.current = null
+      setTimeParts(nextTimeParts)
+    }
+  }, [editingPart, elapsedMs])
 
-  const commitExactTime = () => {
-    const draftKey = `${timeParts.hours}:${timeParts.minutes}:${timeParts.seconds}.${timeParts.milliseconds}`
-    if (lastTimeCommit.current === draftKey) return
-    const elapsed = parseElapsedParts(timeParts, durationMs)
+  useEffect(() => {
+    if (editingPart !== null) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [editingPart])
+
+  const commitExactTime = (): boolean => {
+    const draftKey = formatTimeParts(timePartsRef.current)
+    if (lastCommitRef.current === draftKey) {
+      setEditingPart(null)
+      return true
+    }
+    const elapsed = parseElapsedParts(timePartsRef.current, durationMs)
     if (typeof elapsed === 'string') {
       setTimeError(elapsed)
-      return
+      return false
     }
     setTimeError(null)
-    lastTimeCommit.current = draftKey
+    lastCommitRef.current = draftKey
     onSeek(startMs + elapsed)
+    setEditingPart(null)
+    return true
+  }
+
+  const cancelExactTime = () => {
+    setTimeError(null)
+    const nextTimeParts = splitTime(elapsedMs)
+    timePartsRef.current = nextTimeParts
+    lastCommitRef.current = null
+    setTimeParts(nextTimeParts)
+    setEditingPart(null)
   }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -49,26 +80,33 @@ export function ExactTimeEditor({ durationMs, elapsedMs, isReady, onSeek, startM
       className="replay-time replay-time-editor"
       aria-label="Replay time"
       onSubmit={handleSubmit}
-      onFocus={() => { isEditingTime.current = true }}
       onBlur={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-        isEditingTime.current = false
-        commitExactTime()
+        if (editingPart !== null) commitExactTime()
       }}
     >
-      <span className="replay-time-fields">
-        <input aria-label="Hours" aria-invalid={timeError !== null} aria-describedby={timeError === null ? undefined : 'exact-time-error'} inputMode="numeric" value={timeParts.hours} disabled={!isReady} onChange={(event) => { lastTimeCommit.current = null; setTimeParts({ ...timeParts, hours: event.currentTarget.value }) }} />
-        <span aria-hidden="true">:</span>
-        <input aria-label="Minutes" aria-invalid={timeError !== null} aria-describedby={timeError === null ? undefined : 'exact-time-error'} inputMode="numeric" value={timeParts.minutes} disabled={!isReady} onChange={(event) => { lastTimeCommit.current = null; setTimeParts({ ...timeParts, minutes: event.currentTarget.value }) }} />
-        <span aria-hidden="true">:</span>
-        <input aria-label="Seconds" aria-invalid={timeError !== null} aria-describedby={timeError === null ? undefined : 'exact-time-error'} inputMode="numeric" value={timeParts.seconds} disabled={!isReady} onChange={(event) => { lastTimeCommit.current = null; setTimeParts({ ...timeParts, seconds: event.currentTarget.value }) }} />
-        <span aria-hidden="true">.</span>
-        <input aria-label="Milliseconds" aria-invalid={timeError !== null} aria-describedby={timeError === null ? undefined : 'exact-time-error'} inputMode="numeric" value={timeParts.milliseconds} disabled={!isReady} onChange={(event) => { lastTimeCommit.current = null; setTimeParts({ ...timeParts, milliseconds: event.currentTarget.value }) }} />
+      <span className="replay-time-display">
+        <span className="replay-time-fields">
+          {renderTimePart('hours', 'Hours')}
+          <span aria-hidden="true">:</span>
+          {renderTimePart('minutes', 'Minutes')}
+          <span aria-hidden="true">:</span>
+          {renderTimePart('seconds', 'Seconds')}
+          <span aria-hidden="true">.</span>
+          {renderTimePart('milliseconds', 'Milliseconds')}
+        </span>
+        <span className="replay-time-duration" aria-hidden="true"><span className="replay-time-separator">/</span><span className="replay-time-duration-hours">{durationParts.hours}</span>:<span className="replay-time-duration-segment">{durationParts.minutes}</span>:<span className="replay-time-duration-segment">{durationParts.seconds}</span></span>
       </span>
-      <span aria-hidden="true"> / {formatTime(durationMs)}</span>
       {timeError !== null && <span id="exact-time-error" className="replay-inline-error" role="alert">{timeError}</span>}
     </form>
   )
+
+  function renderTimePart(part: TimePartName, label: string) {
+    if (editingPart === part) {
+      return <input key={part} ref={inputRef} aria-label={label} aria-invalid={timeError !== null} aria-describedby={timeError === null ? undefined : 'exact-time-error'} inputMode="numeric" value={timeParts[part]} disabled={!isReady} onChange={(event) => { const nextTimeParts = { ...timePartsRef.current, [part]: event.currentTarget.value }; timePartsRef.current = nextTimeParts; lastCommitRef.current = null; setTimeParts(nextTimeParts) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitExactTime() } else if (event.key === 'Escape') { event.preventDefault(); cancelExactTime() } }} />
+    }
+    return <button key={part} className={`replay-time-part${part === 'hours' ? ' replay-time-part--hours' : ''}`} type="button" aria-label={`Edit ${label}`} disabled={!isReady} onClick={() => setEditingPart(part)}>{timeParts[part]}</button>
+  }
 }
 
 /** Parse segmented elapsed replay time without clamping malformed user input. */
@@ -92,11 +130,6 @@ function splitTime(timeMs: number): TimeParts {
   }
 }
 
-function formatTime(timeMs: number): string {
-  const wholeSeconds = Math.floor(timeMs / 1000)
-  const hours = Math.floor(wholeSeconds / 3600)
-  const minutes = Math.floor(wholeSeconds / 60) % 60
-  const seconds = wholeSeconds % 60
-  const milliseconds = timeMs % 1000
-  return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`
+function formatTimeParts(parts: TimeParts): string {
+  return `${parts.hours}:${parts.minutes}:${parts.seconds}.${parts.milliseconds}`
 }
