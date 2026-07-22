@@ -7,6 +7,8 @@ import arcade
 from src.interfaces.race_replay import F1RaceReplayWindow
 from src.insights.telemetry_stream_viewer import main as telemetry_viewer_main
 
+LEGACY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def run_arcade_replay(frames, track_statuses, example_lap, drivers, title,
                       playback_speed=1.0, driver_colors=None, circuit_rotation=0.0, total_laps=None,
                       visible_hud=True, ready_file=None, session_info=None, session=None,
@@ -43,7 +45,11 @@ def launch_telemetry_viewer():
     try:
       # Give the main application a moment to start the telemetry server
       time.sleep(3)
-      subprocess.run([sys.executable, "-m", "src.insights.telemetry_stream_viewer"], check=False)
+      subprocess.run(
+          [sys.executable, "-m", "src.insights.telemetry_stream_viewer"],
+          check=False,
+          cwd=LEGACY_ROOT,
+      )
     except Exception as e:
       print(f"Failed to launch telemetry viewer: {e}")
   
@@ -56,7 +62,11 @@ def launch_insights_menu():
     try:
       # Give the main application a moment to start
       time.sleep(1)
-      subprocess.run([sys.executable, "-m", "src.gui.insights_menu"], check=False)
+      subprocess.run(
+          [sys.executable, "-m", "src.gui.insights_menu"],
+          check=False,
+          cwd=LEGACY_ROOT,
+      )
     except Exception as e:
       print(f"Failed to launch insights menu: {e}")
   

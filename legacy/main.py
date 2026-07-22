@@ -1,3 +1,5 @@
+import os
+
 from src.f1_data import get_race_telemetry, enable_cache, get_circuit_rotation, load_session, get_quali_telemetry, list_rounds, list_sprints
 from src.run_session import run_arcade_replay, launch_insights_menu
 from src.interfaces.qualifying import run_qualifying_replay
@@ -110,6 +112,10 @@ def main(year=None, round_number=None, playback_speed=1, session_type='R', visib
     )
 
 if __name__ == "__main__":
+
+  # Keep legacy assets and generated runtime data local to this application
+  # regardless of whether it is launched from the repository root or here.
+  os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
   if "--verbose" not in sys.argv:# fastf1 logging is disabled by default
     logging.getLogger("fastf1").setLevel(logging.CRITICAL)

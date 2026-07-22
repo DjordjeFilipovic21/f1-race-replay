@@ -34,10 +34,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-            pipeline/pyproject.toml
+          cache-dependency-path: pipeline/pyproject.toml
 
       - name: Install lightweight test dependencies
         run: |
@@ -46,7 +43,7 @@ jobs:
           python -m pip install --editable ./pipeline
 
       - name: Run contract, unit, and pipeline tests
-        run: python -m pytest tests/contracts tests/lib pipeline/tests
+        run: python -m pytest tests/contracts pipeline/tests
 
   full-suite:
     name: Full project suite (Python ${{ matrix.python-version }})
@@ -68,8 +65,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+            legacy/requirements.txt
+            legacy/requirements-dev.txt
 
       - name: Install system dependencies
         run: |
@@ -84,7 +81,10 @@ jobs:
       - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+          python -m pip install -r legacy/requirements-dev.txt
+          python -m pip install --editable ./pipeline
 
       - name: Run full test suite
-        run: xvfb-run -a python -m pytest
+        run: |
+          xvfb-run -a python -m pytest
+          xvfb-run -a python -m pytest legacy/tests

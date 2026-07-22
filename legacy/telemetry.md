@@ -6,11 +6,11 @@ This document provides instructions on how to use the telemetry stream feature w
 
 ## How to Use
 
-Ensure you have the latest version of the application with telemetry support and have already setup an environment with the required dependencies (see `README.md` for setup instructions).
+Ensure you have the latest version of the application with telemetry support and have already setup an environment with the required dependencies (see `README.md` for setup instructions). The command below is run from the repository root.
 
 1. **Start the F1 Race Replay and pass the --telemetry flag:**
    ```bash
-   python main.py --telemetry
+   .venv/bin/python legacy/main.py --telemetry
    ```
 
 2. **Select a race session from the GUI.** The telemetry stream will start automatically when the replay begins.

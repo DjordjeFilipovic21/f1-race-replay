@@ -56,7 +56,7 @@ making readers observe a partially written set.
    recorded as `succeeded`, `unsupported`, or `failed`.
 10. **Expose orchestration, not policy leakage.** The Python API accepts
    validated canonical Polars frames and explicit filesystem seams. It does not
-   load FastF1, create browser artifacts, modify `src/`, or provide a CLI.
+   load FastF1, create browser artifacts, modify `legacy/src/`, or provide a CLI.
 
 ## Consequences
 

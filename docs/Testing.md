@@ -9,36 +9,48 @@ For local development, create and activate a virtual environment first:
     python3 -m venv .venv
     source .venv/bin/activate
 
-Then install the development requirements:
+Install the lightweight modern test dependencies and the separately packaged
+canonical pipeline:
 
-    python -m pip install --upgrade pip
-    python -m pip install -r requirements-dev.txt
+    .venv/bin/python -m pip install --upgrade pip
+    .venv/bin/python -m pip install pytest pytest-mock "jsonschema[format-nongpl]>=4.26,<5"
 
-Install the separately packaged canonical pipeline in editable mode:
+    .venv/bin/python -m pip install --editable ./pipeline
 
-    python -m pip install --editable ./pipeline
+The desktop application's dependencies remain isolated under
+`legacy/requirements-dev.txt`.
+
+Install them only when working on the desktop application:
+
+    .venv/bin/python -m pip install -r legacy/requirements-dev.txt
 
 ## Run the test suite
 
-Run all tests with:
+Run all modern tests with:
 
-    python -m pytest
+    .venv/bin/python -m pytest
 
 Run only the lightweight unit tests with:
 
-    python -m pytest tests/lib
+    .venv/bin/python -m pytest pipeline/tests
 
 Run the offline replay contract checks with:
 
-    python -m pytest tests/contracts/test_replay_contract.py
+    .venv/bin/python -m pytest tests/contracts/test_replay_contract.py
 
 Run the lightweight pipeline suite with:
 
-    python -m pytest pipeline/tests
+    .venv/bin/python -m pytest pipeline/tests
 
 Run the complete lightweight CI-equivalent suite with:
 
-    python -m pytest tests/contracts tests/lib pipeline/tests
+    .venv/bin/python -m pytest tests/contracts pipeline/tests
+
+Run the legacy desktop tests separately from the repository root with:
+
+    .venv/bin/python -m pytest legacy/tests
+
+Alternatively, change into `legacy/` and run `../.venv/bin/python -m pytest`.
 
 These contract tests validate the committed deterministic fixture in
 `contracts/replay-data/v1/fixtures/deterministic-race/` without FastF1 session
@@ -60,10 +72,10 @@ The initial test suite focuses on lightweight modules that do not require:
 
 The current suite includes:
 
-- unit tests for time formatting and parsing
-- unit tests for tyre compound mapping
-- unit tests for season detection
-- unit tests for settings persistence with temporary files
-- smoke import tests for project modules
+- contract tests for the deterministic browser replay fixture
+- canonical pipeline unit and integration tests
+
+Legacy-only checks cover time formatting, tyre compound mapping, season
+detection, settings persistence, and desktop module import smoke tests.
 
 Some import smoke tests may be skipped locally when optional runtime dependencies are not installed.

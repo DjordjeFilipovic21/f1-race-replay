@@ -2,7 +2,7 @@
 
 `f1-replay-pipeline` is an isolated Python foundation for transforming FastF1
 data into deterministic, canonical replay tables. It is separate from the
-legacy desktop application and its `src/` modules.
+legacy desktop application and its `legacy/src/` modules.
 
 ## Installation
 
@@ -92,7 +92,7 @@ only under the documented deterministic policy; invalid duplicate keys are
 rejected. See [the canonical schema](../docs/canonical-pipeline-schema.md) for
 columns, nulls, ordering, and deduplication.
 
-This boundary explicitly excludes the legacy `src/` application and
+This boundary explicitly excludes the `legacy/src/` application and
 network-backed CI or network-loading tests. Testing events
 retain FastF1 round zero; they are selected through the explicit `testing`
 command and testing-session API, never through ordinary round lookup.

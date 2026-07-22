@@ -8,7 +8,7 @@ body:
     attributes:
       label: Documentation location
       description: Which file, section, or page should be improved?
-      placeholder: "README.md, telemetry.md, docs/..."
+      placeholder: "README.md, legacy/README.md, docs/..."
     validations:
       required: true
 

@@ -4,6 +4,10 @@
 
 `PitWallWindow` is a base class that simplifies creating custom telemetry-enabled windows in the F1 Race Replay project. It handles all the complexity of connecting to the telemetry stream, allowing developers to focus solely on building their window's functionality.
 
+The desktop application is kept under `legacy/`. Run the module examples from
+that directory (or prefix commands with `cd legacy &&` when starting at the
+repository root).
+
 ![PitWall Window Template](../resources/pit-wall-window-template.png)
 
 ## Why Use PitWallWindow?

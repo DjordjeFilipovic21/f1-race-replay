@@ -51,7 +51,7 @@ For the factory path, assert the single call uses
 remote FastF1 response or network availability. Fake `car_data` and `pos_data`
 with different timestamps to verify that their native streams stay independent.
 
-The boundary excludes the legacy `src/` application, network-backed CI and
+The boundary excludes the `legacy/src/` application, network-backed CI and
 network-loading tests, Parquet writing, checksum/logical-hash manifests,
 browser chunks, and CLI orchestration. Telemetry performance optimization is
 also deferred to a later PR; this phase prioritizes native-row correctness.

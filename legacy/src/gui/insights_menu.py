@@ -1,10 +1,15 @@
 import sys
+import os
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
+LEGACY_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 
 
 class InsightsMenu(QMainWindow):
@@ -220,7 +225,10 @@ class InsightsMenu(QMainWindow):
         try:
             import subprocess
             import sys
-            subprocess.Popen([sys.executable, "-m", "src.insights.telemetry_stream_viewer"])
+            subprocess.Popen(
+                [sys.executable, "-m", "src.insights.telemetry_stream_viewer"],
+                cwd=LEGACY_ROOT,
+            )
         except Exception as e:
             print(f"Failed to launch telemetry viewer: {e}")
             self.show_placeholder_message("Telemetry Stream Viewer")

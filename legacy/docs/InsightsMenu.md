@@ -4,6 +4,10 @@
 
 The Insights Menu is a PySide6 window that launches automatically when the race replay starts. It provides quick access to telemetry analysis tools and insight windows. The menu stays open alongside the replay and allows you to launch multiple insight windows.
 
+The desktop application is kept under `legacy/`. Run the module examples from
+that directory (or prefix commands with `cd legacy &&` when starting at the
+repository root).
+
 ![Insights Menu](../resources/insights-menu.png)
 
 ### Active Insights
@@ -142,7 +146,7 @@ InsightsMenu (QMainWindow)
 
 ### Launch Process
 
-1. User starts replay with `python main.py --viewer`
+1. User starts replay with `.venv/bin/python legacy/main.py --viewer`
 2. `main.py` calls `launch_insights_menu()` from `src.run_session`
 3. Menu window is created and shown
 4. User clicks insight buttons to open analysis windows
@@ -217,4 +221,4 @@ def create_insight_button(self, name, description, callback):
 
 - [PitWallWindow.md](./PitWallWindow.md) - Base class for creating insights
 - [../src/gui/insights_menu.py](../src/gui/insights_menu.py) - Menu implementation
-- [../src/gui/example_pit_wall_window.py](../src/gui/example_pit_wall_window.py) - Example insight
+- [../src/insights/example_pit_wall_window.py](../src/insights/example_pit_wall_window.py) - Example insight

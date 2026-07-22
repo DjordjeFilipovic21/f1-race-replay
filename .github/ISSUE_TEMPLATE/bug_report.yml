@@ -23,7 +23,7 @@ body:
     attributes:
       label: Command used
       description: Paste the command that triggered the issue.
-      placeholder: "python main.py --year 2025 --round 1"
+      placeholder: ".venv/bin/python legacy/main.py --viewer --year 2025 --round 1"
     validations:
       required: false
 

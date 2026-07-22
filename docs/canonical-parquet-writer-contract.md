@@ -21,7 +21,7 @@ It MUST validate all ten tables before serialization, including declared dtype,
 column order, required fields, and row count. Empty tables retain their typed
 schema. The writer MUST NOT load FastF1, resample/interpolate telemetry, infer
 schema, reorder rows, create browser artifacts, or call code under legacy
-`src/`.
+`legacy/src/`.
 
 ## 2. Published layout
 
@@ -260,4 +260,4 @@ count, and hash validation succeeds.
 Memory-streaming optimization is explicitly deferred: v1 materializes the
 validated in-memory frames and closed Parquet bytes. The writer requires native
 Polars (`use_pyarrow=False`), does not load FastF1, and does not alter the Phase 0
-browser manifest, browser chunks, or legacy `src/` pipeline.
+browser manifest, browser chunks, or the `legacy/src/` application.
