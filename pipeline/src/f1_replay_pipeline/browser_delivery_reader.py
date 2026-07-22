@@ -101,11 +101,12 @@ def derive_browser_driver_fields(
     return BrowserDriverFields(
         driver_id=driver_id, time_ms=timestamps,
         x=tuple(value[0] for value in values), y=tuple(value[1] for value in values),
-        speed=tuple(value[2] for value in values), throttle=tuple(value[3] for value in values),
-        brake=tuple(value[4] for value in values), gear=tuple(value[5] for value in values),
-        drs=tuple(value[6] for value in values), status=tuple(value[7] for value in values),
-        lap=tuple(value[8] for value in values), tyre_compound=tuple(value[9] for value in values),
-        is_in_pit_lane=tuple(value[10] for value in values),
+        speed=tuple(value[2] for value in values), rpm=tuple(value[3] for value in values),
+        throttle=tuple(value[4] for value in values), brake=tuple(value[5] for value in values),
+        gear=tuple(value[6] for value in values), drs=tuple(value[7] for value in values),
+        status=tuple(value[8] for value in values), lap=tuple(value[9] for value in values),
+        tyre_compound=tuple(value[10] for value in values),
+        is_in_pit_lane=tuple(value[11] for value in values),
         track_distance_meters=(None,) * count, gap_to_leader_ms=(None,) * count,
         position=(None,) * count,
     )
@@ -146,13 +147,14 @@ def _rows_by_time(rows: tuple[dict[str, object], ...]) -> dict[int, dict[str, ob
 def _field_values(
     time_ms: int, car: dict[int, dict[str, object]], position: dict[int, dict[str, object]],
     lap_row: dict[str, object] | None, pit_intervals: tuple[tuple[int, int | None], ...],
-) -> tuple[float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, bool | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, bool | None]:
     car_row, position_row = car.get(time_ms), position.get(time_ms)
     brake = None if car_row is None or car_row["brake"] is None else int(cast(bool, car_row["brake"]))
     return (
         _browser_coordinate(None if position_row is None else position_row["x"]),
         _browser_coordinate(None if position_row is None else position_row["y"]),
         None if car_row is None else cast(float | None, car_row["speed_kph"]),
+        None if car_row is None else cast(float | None, car_row["rpm"]),
         None if car_row is None else cast(float | None, car_row["throttle_pct"]), brake,
         _browser_gear(None if car_row is None else car_row["gear"]),
         None if car_row is None else cast(int | None, car_row["drs"]),

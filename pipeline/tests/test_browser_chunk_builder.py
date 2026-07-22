@@ -99,7 +99,7 @@ def test_alignment_is_performed_once_per_field_not_once_per_chunk(monkeypatch) -
     )
 
     assert len(chunks) == 5
-    assert calls == 17
+    assert calls == 18
 
 
 def test_empty_nominal_interval_is_merged_without_emitting_an_empty_chunk() -> None:
@@ -142,7 +142,7 @@ def _driver(driver_id: str, time_ms: tuple[int, ...], x: tuple[float | None, ...
     count = len(time_ms)
     return BrowserDriverFields(
         driver_id=driver_id, time_ms=time_ms, x=x, y=(None,) * count,
-        speed=(None,) * count, throttle=(None,) * count, brake=(None,) * count,
+        speed=(None,) * count, rpm=(None,) * count, throttle=(None,) * count, brake=(None,) * count,
         gear=(None,) * count, drs=(None,) * count, status=(None,) * count,
         lap=(None,) * count, tyre_compound=(None,) * count,
         is_in_pit_lane=(None,) * count, track_distance_meters=(None,) * count,
@@ -156,7 +156,7 @@ def _globals() -> BrowserGlobalFields:
 
 def _columns(fields: BrowserDriverFields) -> tuple[tuple[object, ...], ...]:
     return (
-        fields.x, fields.y, fields.speed, fields.throttle, fields.brake, fields.gear, fields.drs,
+        fields.x, fields.y, fields.speed, fields.rpm, fields.throttle, fields.brake, fields.gear, fields.drs,
         fields.status, fields.lap, fields.tyre_compound, fields.is_in_pit_lane,
         fields.track_distance_meters, fields.gap_to_leader_ms, fields.position,
     )

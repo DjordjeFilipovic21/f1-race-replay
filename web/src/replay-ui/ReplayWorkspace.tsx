@@ -61,7 +61,7 @@ export function ReplayWorkspace({ panels }: ReplayWorkspaceProps) {
   const panelIds = useMemo(() => panels.map((panel) => panel.id), [panelRegistryKey])
   const [layout, setLayout] = useState<readonly ReplayPanelLayoutItem[]>(() => reconcileReplayPanelLayout(panelIds, []))
   const [activePanelId, setActivePanelId] = useState<ReplayPanelId | null>(null)
-  const [rowSpans, setRowSpans] = useState<Readonly<Record<ReplayPanelId, number>>>({ player: 1, 'track-map': 1, leaderboard: 1, driver: 1 })
+  const [rowSpans, setRowSpans] = useState<Readonly<Record<ReplayPanelId, number>>>({ player: 1, 'track-map': 1, leaderboard: 1, driver: 1, telemetry: 1 })
   const [columnCount, setColumnCount] = useState(() => workspaceColumnCount(typeof window === 'undefined' ? 1 : window.innerWidth))
   const [dropPreview, setDropPreview] = useState<ReplayDropPreview | null>(null)
   const [measuredGhostSlot, setMeasuredGhostSlot] = useState<GhostSlot | null>(null)

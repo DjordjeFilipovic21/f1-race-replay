@@ -84,6 +84,8 @@ export type DerivedPosition = number | null
 export interface DriverColumns {
   readonly x: readonly (number | null)[]; readonly y: readonly (number | null)[]
   readonly trackDistanceMeters: readonly DerivedDistanceMeters[]; readonly speed: readonly (number | null)[]
+  /** Optional in the frozen v1 payload; guards expose legacy absence as nulls. */
+  readonly rpm?: readonly (number | null)[]
   readonly throttle: readonly (number | null)[]; readonly brake: readonly (number | null)[]
   readonly gapToLeaderMs: readonly DerivedGapToLeaderMs[]; readonly lap: readonly (number | null)[]
   readonly position: readonly DerivedPosition[]; readonly gear: readonly (number | null)[]

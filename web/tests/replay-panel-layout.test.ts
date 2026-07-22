@@ -23,7 +23,7 @@ test('keeps array position as the canonical workspace reorder order', () => {
 
 test('validates the Driver panel sortable ID with the registered panel IDs', () => {
   expect(isReplayPanelId('driver')).toBe(true)
-  expect(isReplayPanelId('telemetry')).toBe(false)
+  expect(isReplayPanelId('telemetry')).toBe(true)
 })
 
 test('updates the dragged panel column while retaining canonical sortable order', () => {
@@ -34,7 +34,7 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('driver')]).toEqual([1, 2, 4, 1])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry')]).toEqual([1, 2, 4, 1, 1])
 })
 
 test('keeps a collapsed panel in the canonical order when it is shown', () => {
@@ -53,4 +53,18 @@ test('reconciles a changed registry while retaining known visibility and order',
     { id: 'leaderboard', visible: true, desktopColumnStart: 4 },
     { id: 'driver', visible: true, desktopColumnStart: 3 },
   ])
+})
+
+test('adds the two-column telemetry panel to legacy layouts without changing saved choices', () => {
+  expect(reconcileReplayPanelLayout(['player', 'track-map', 'leaderboard', 'driver', 'telemetry'] as const, layout)).toEqual([
+    { id: 'player', visible: true, desktopColumnStart: 1 },
+    { id: 'track-map', visible: false, desktopColumnStart: 2 },
+    { id: 'leaderboard', visible: true, desktopColumnStart: 4 },
+    { id: 'driver', visible: true, desktopColumnStart: 3 },
+    { id: 'telemetry', visible: true, desktopColumnStart: 1 },
+  ])
+})
+
+test('clamps every registered two-column panel to a valid desktop start', () => {
+  expect(commitReplayPanelDrag([...layout, { id: 'telemetry', visible: true, desktopColumnStart: 1 }], { id: 'telemetry', index: 4, desktopColumnStart: 4 }).find(({ id }) => id === 'telemetry')?.desktopColumnStart).toBe(3)
 })

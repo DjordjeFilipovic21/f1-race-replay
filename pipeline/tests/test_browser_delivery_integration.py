@@ -105,6 +105,25 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     assert PREVIOUS_VALUE_FIELD_SEMANTICS["gear"] == "previous"
 
 
+def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(include_rpm=True), target_parent=canonical_parent, generation_id="canonical-v1"
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets()
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1", delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    chunks = tuple(_load_json(path) for path in published.chunk_paths)
+    _validate_browser_contract(_load_json(published.manifest_path), chunks, _track_assets())
+
+    assert chunks[0]["drivers"]["HAM"]["rpm"] == [11_000.0, None, None, None]
+    assert chunks[1]["drivers"]["HAM"]["rpm"] == [None, 12_000.0, 12_500.0, None]
+
+
 def test_browser_publication_rejects_an_unsafe_version_before_creating_output(
     tmp_path: Path,
 ) -> None:
@@ -370,15 +389,15 @@ def test_dns_is_out_from_race_start_while_finished_offtrack_driver_remains_activ
 def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
-    include_pre_race: bool = False,
+    include_pre_race: bool = False, include_rpm: bool = False,
 ) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
     rows["car_telemetry"] = [
         _row("car_telemetry", session_time_ms=time, speed_kph=speed, throttle_pct=throttle,
-             brake=brake, gear=gear, drs=drs)
-        for time, speed, throttle, brake, gear, drs in (
-            (0, 100.0, 50.0, False, 4, 0), (10_000, 200.0, 70.0, True, 6, 1),
-            (11_000, 210.0, 75.0, False, 7, 1), (20_000, 220.0, 80.0, None, None, None),
+             brake=brake, gear=gear, drs=drs, **({"rpm": rpm} if include_rpm else {}))
+        for time, speed, rpm, throttle, brake, gear, drs in (
+            (0, 100.0, 11_000.0, 50.0, False, 4, 0), (10_000, 200.0, 12_000.0, 70.0, True, 6, 1),
+            (11_000, 210.0, 12_500.0, 75.0, False, 7, 1), (20_000, 220.0, None, 80.0, None, None, None),
         )
     ]
     rows["position_telemetry"] = [

@@ -7,7 +7,8 @@ import { array, exact, finite, freeze, integer, jsonObject, nullable, object, st
 export const MANIFEST_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:manifest'
 export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:chunk'
 export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:track-assets'
-const DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
+const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
+const OPTIONAL_DRIVER_FIELDS = ['rpm'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const SHA256 = /^[0-9a-f]{64}$/
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
@@ -134,12 +135,13 @@ function parseEvent(raw: unknown): ReplayEvent {
 }
 
 function parseColumns(value: unknown, length: number, label: string): DriverColumns {
-  const columns = object(value, `driver ${label}`); exact(columns, DRIVER_FIELDS, [], `driver ${label}`)
+  const columns = object(value, `driver ${label}`); exact(columns, REQUIRED_DRIVER_FIELDS, OPTIONAL_DRIVER_FIELDS, `driver ${label}`)
   const numberColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => finite(value, field)))
   const integerColumn = (field: string, min: number, max = Number.MAX_SAFE_INTEGER) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => integer(value, field, min, max)))
   const stringColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => string(value, field)))
   const nonNegativeNumberColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => { const parsed = finite(value, field); if (parsed < 0) throw new Error(`${field} must be non-negative`); return parsed }))
-  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })) })
+  const rpm = columns.rpm === undefined ? Array<null>(length).fill(null) : numberColumn('rpm')
+  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), rpm, throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })) })
 }
 
 function validateDerivedFields(drivers: ReplayChunk['drivers'], order: ReplayChunk['leaderboardOrder']): void {

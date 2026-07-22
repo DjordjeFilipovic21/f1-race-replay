@@ -14,7 +14,7 @@ interface DragDropProviderProps {
 const dragEvent = {
   canceled: false,
   operation: {
-    source: { id: 'driver', index: 3 },
+    source: { id: 'telemetry', index: 4 },
     shape: { current: { center: { x: 350, y: 350 } } },
   },
 }
@@ -22,8 +22,8 @@ const dragEvent = {
 const trackLaneDragEvent = {
   canceled: false,
   operation: {
-    source: { id: 'driver', index: 3 },
-    shape: { current: { center: { x: 150, y: 350 } } },
+    source: { id: 'telemetry', index: 4 },
+    shape: { current: { center: { x: 160, y: 350 } } },
   },
 }
 
@@ -50,6 +50,7 @@ const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'track-map', label: 'Track map', columns: 2, element: <p>Track content</p> },
   { id: 'leaderboard', label: 'Leaderboard', columns: 1, element: <p>Leaderboard content</p> },
   { id: 'driver', label: 'Driver', columns: 1, element: <p>Driver content</p> },
+  { id: 'telemetry', label: 'Telemetry', columns: 2, element: <p>Telemetry content</p> },
 ]
 
 afterEach(() => {
@@ -65,22 +66,22 @@ test('renders prospective cross-column order, restores invalid previews, and com
   const { rerender } = render(<ReplayWorkspace panels={panels} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
-  expect(document.querySelector('.replay-workspace__drop-preview')?.textContent).toContain('Drop driver panel')
+   expect(document.querySelector('.replay-workspace__drop-preview')?.textContent).toContain('Drop telemetry panel')
   expect(document.querySelector('.replay-workspace__lane-highlight')).toBeTruthy()
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.left).toBe('')
-  expect(screen.getByRole('region', { name: 'Driver' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
+   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
 
   fireEvent.click(screen.getByRole('button', { name: 'Invalidate preview' }))
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
-  expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Leaderboard', 'Driver'])
-  expect(screen.getByRole('region', { name: 'Driver' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('1')
+   expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Leaderboard', 'Driver', 'Telemetry'])
+   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('1')
 
-  const driver = screen.getByRole('region', { name: 'Driver' })
+   const driver = screen.getByRole('region', { name: 'Telemetry' })
   const workspace = document.querySelector('.replay-workspace') as HTMLElement
   setLayoutSlot(driver, workspace, { height: 120, left: 103, top: 160, width: 91 })
   fireEvent.click(screen.getByRole('button', { name: 'Preview Track lane' }))
-  expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Driver', 'Leaderboard'])
-  expect(screen.getByRole('region', { name: 'Driver' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+   expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Telemetry', 'Leaderboard', 'Driver'])
+   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.cssText).toContain('left: 103px')
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.cssText).toContain('top: 160px')
 
@@ -90,8 +91,8 @@ test('renders prospective cross-column order, restores invalid previews, and com
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.cssText).toContain('height: 160px')
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
-  expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Driver', 'Leaderboard'])
-  expect(screen.getByRole('region', { name: 'Driver' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+   expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Telemetry', 'Leaderboard', 'Driver'])
+   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
 })
 
 function workspacePanelLabels(): string[] {
@@ -118,14 +119,14 @@ test('recomputes the active drop preview when the workspace breakpoint changes',
   fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
   const desktopPreview = document.querySelector<HTMLElement>('.replay-workspace__drop-preview')
   expect(desktopPreview?.style.getPropertyValue('--replay-preview-column-count')).toBe('4')
-  expect(desktopPreview?.style.getPropertyValue('--replay-preview-column')).toBe('4')
+   expect(desktopPreview?.style.getPropertyValue('--replay-preview-column')).toBe('3')
 
   setViewportWidth(800)
   fireEvent(window, new Event('resize'))
 
   const tabletPreview = document.querySelector<HTMLElement>('.replay-workspace__drop-preview')
   expect(tabletPreview?.style.getPropertyValue('--replay-preview-column-count')).toBe('2')
-  expect(tabletPreview?.style.getPropertyValue('--replay-preview-column')).toBe('2')
+  expect(tabletPreview?.style.getPropertyValue('--replay-preview-column')).toBe('1')
 })
 
 function setViewportWidth(width: number): void {

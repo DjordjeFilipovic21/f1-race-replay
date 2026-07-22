@@ -108,6 +108,24 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .driver-info-panel__segment dt { color: var(--text-muted); font-size: .6rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .driver-info-panel__segment dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .7rem; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .driver-info-panel__empty { color: var(--text-muted); font-size: .9rem; }
+.driver-telemetry-panel { --driver-telemetry-team-color: #7a8794; background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
+.driver-telemetry-panel__header { align-items: stretch; background: linear-gradient(105deg, #050607, #171c20); display: grid; grid-template-columns: 5px minmax(0, 1fr); gap: .65rem; padding: .7rem; }
+.driver-telemetry-panel__accent { background: var(--driver-telemetry-team-color); }
+.driver-telemetry-panel__eyebrow, .driver-telemetry-panel__reading dt, .driver-telemetry-panel__gauge-copy span { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
+.driver-telemetry-panel__header h2 { font-size: 1rem; line-height: 1.2; }
+.driver-telemetry-panel__header h2 span { color: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .8em; }
+.driver-telemetry-panel__layout { align-items: center; display: grid; gap: .75rem; grid-template-columns: minmax(7.5rem, .85fr) minmax(0, 1fr); padding: .75rem; }
+.driver-telemetry-panel__gauge { aspect-ratio: 1; display: grid; min-width: 0; place-items: center; position: relative; }
+.driver-telemetry-panel__gauge-svg { grid-area: 1 / 1; height: auto; transform: rotate(0deg); width: 100%; }
+.driver-telemetry-panel__gauge-track, .driver-telemetry-panel__gauge-value { fill: none; stroke-linecap: round; stroke-width: 9; }
+.driver-telemetry-panel__gauge-track { stroke: #303940; }
+.driver-telemetry-panel__gauge-value { stroke: var(--driver-telemetry-team-color); }
+.driver-telemetry-panel__gauge-copy { align-items: center; display: grid; gap: .15rem; grid-area: 1 / 1; justify-items: center; text-align: center; }
+.driver-telemetry-panel__gauge-copy strong { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: clamp(1rem, 6vw, 1.55rem); font-variant-numeric: tabular-nums; }
+.driver-telemetry-panel__readings { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.driver-telemetry-panel__reading { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .4rem .45rem; }
+.driver-telemetry-panel__reading dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .76rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
 
 @media (min-width: 375px) {
   .live-leaderboard__table th, .live-leaderboard__table td { padding-inline: .5rem; }
@@ -122,6 +140,7 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
   .live-track-map__svg { min-height: 20rem; }
   .replay-workspace { align-items: start; gap: 12px; grid-auto-flow: dense; grid-auto-rows: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
+  .driver-telemetry-panel__layout { grid-template-columns: minmax(9rem, .8fr) minmax(0, 1fr); }
 }
 
 @media (min-width: 1024px) {
@@ -139,4 +158,5 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
   button, select { transition: background-color 160ms ease, border-color 160ms ease; }
   .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
   .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
+  .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
 }

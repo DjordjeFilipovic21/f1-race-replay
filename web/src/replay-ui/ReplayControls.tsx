@@ -4,6 +4,7 @@ import type { CoordinateInterpolationStrategy, ReplayController } from '../repla
 import { LiveLeaderboardPanel } from './LiveLeaderboardPanel'
 import { LiveTrackMap } from './LiveTrackMap'
 import { DriverInfoPanel } from './DriverInfoPanel'
+import { DriverTelemetryPanel } from './DriverTelemetryPanel'
 import { PlaybackControls } from './PlaybackControls'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
 import { ReplayWorkspace, type ReplayWorkspacePanel } from './ReplayWorkspace'
@@ -93,6 +94,12 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       label: 'Driver',
       columns: 1,
       element: <DriverInfoPanel drivers={drivers} selectedDriverId={selectedDriverId} snapshot={snapshot.replay} />,
+    },
+    {
+      id: 'telemetry',
+      label: 'Telemetry',
+      columns: 2,
+      element: <DriverTelemetryPanel drivers={drivers} selectedDriverId={selectedDriverId} snapshot={snapshot.replay} />,
     },
   ]
 
