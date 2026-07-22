@@ -22,7 +22,7 @@ export interface ReplayControlsProps {
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, trackAssets, coordinateInterpolation = 'linear' }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, trackAssets }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -55,7 +55,6 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     setLeaderboardRefreshKey((revision) => revision + 1)
   }
 
-  // This experiment deliberately keeps panel modules statically loaded; bundle cost is traded for simple remount semantics.
   const panels: readonly ReplayWorkspacePanel[] = [
     {
       id: 'player',
@@ -105,10 +104,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
 
   return (
     <section className="replay-panel" aria-labelledby="replay-panel-title">
-      <ReplayHeaderMetrics
-        controller={controller}
-        coordinateInterpolation={coordinateInterpolation}
-      />
+      <ReplayHeaderMetrics />
       <ReplayWorkspace panels={panels} />
     </section>
   )

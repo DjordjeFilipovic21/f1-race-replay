@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { parseElapsedParts, ReplayControls, selectDriverId } from '../src/replay-ui/ReplayControls'
@@ -50,23 +50,65 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-test('wires accessible playback, seek, and speed controls to the controller', async () => {
+test('wires icon transport, seek, and speed controls to the controller', async () => {
   const user = userEvent.setup()
-  const { controller } = createController(readySnapshot)
+  const { controller, setSnapshot } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   await user.click(screen.getByRole('button', { name: 'Play' }))
+  act(() => setSnapshot({ ...readySnapshot, isPlaying: true }))
+  expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy()
   const slider = screen.getByRole('slider', { name: 'Seek replay' })
   expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
   fireEvent.input(slider, { target: { value: '1501' } })
   expect(controller.seek).not.toHaveBeenCalled()
   fireEvent.pointerUp(slider)
-  await user.selectOptions(screen.getByRole('combobox', { name: 'Playback speed' }), '2')
+  await user.click(screen.getByRole('button', { name: '2×' }))
+  act(() => setSnapshot({ ...readySnapshot, isPlaying: true, speed: 2 }))
 
   expect(controller.start).toHaveBeenCalledOnce()
   expect(controller.seek).toHaveBeenCalledWith(1501)
   expect(controller.setSpeed).toHaveBeenCalledWith(2)
-  expect(screen.getByRole('status', { name: 'Replay status' }).textContent).toContain('ready')
+  expect(screen.getByRole('button', { name: '2×' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.queryByText('Seek replay')).toBeNull()
+  expect(screen.queryByText('Replay samples ready.')).toBeNull()
+})
+
+test('rewinds and forwards by ten seconds within replay bounds', async () => {
+  const user = userEvent.setup()
+  const { controller, setSnapshot } = createController({ ...readySnapshot, timeMs: 15_000 })
+  const { rerender } = render(<ReplayControls controller={controller} startMs={10_000} endMs={30_000} drivers={drivers} trackAssets={trackAssets} />)
+
+  await user.click(screen.getByRole('button', { name: 'Rewind 10 seconds' }))
+  setSnapshot({ ...readySnapshot, timeMs: 10_000 })
+  await user.click(screen.getByRole('button', { name: 'Forward 10 seconds' }))
+  expect(controller.seek).toHaveBeenNthCalledWith(1, 10_000)
+  expect(controller.seek).toHaveBeenNthCalledWith(2, 20_000)
+
+  const atEnd = createController({ ...readySnapshot, timeMs: 29_000 })
+  rerender(<ReplayControls controller={atEnd.controller} startMs={10_000} endMs={30_000} drivers={drivers} trackAssets={trackAssets} />)
+  await user.click(screen.getByRole('button', { name: 'Forward 10 seconds' }))
+  expect(atEnd.controller.seek).toHaveBeenCalledWith(30_000)
+})
+
+test('jumps to the previous and next indexed lap with indicative controls', async () => {
+  const user = userEvent.setup()
+  const replay = { ...readySnapshot.replay!, leaderboardOrder: ['VER'], drivers: { VER: { ...readySnapshot.replay!.drivers.VER, lap: 2 } } }
+  const { controller } = createController({ ...readySnapshot, replay })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={40_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 2, startMs: 20_000 }, { lap: 3, startMs: 30_000 }]} trackAssets={trackAssets} />)
+
+  const previous = screen.getByRole('button', { name: 'Previous lap' })
+  const next = screen.getByRole('button', { name: 'Next lap' })
+  expect(previous.textContent).toContain('1L')
+  expect(next.textContent).toContain('1L')
+  expect(screen.getByRole('button', { name: 'Rewind 10 seconds' }).textContent).toContain('10s')
+  expect(screen.getByRole('button', { name: 'Forward 10 seconds' }).textContent).toContain('10s')
+
+  await user.click(previous)
+  await user.click(next)
+
+  expect(controller.seek).toHaveBeenNthCalledWith(1, 10_000)
+  expect(controller.seek).toHaveBeenNthCalledWith(2, 30_000)
 })
 
 test('renders persistent workspace headers in canonical order with definition-driven spans', () => {
@@ -129,7 +171,7 @@ test('hides and restores panels while cleaning up and remounting specialized sub
   fireEvent.click(screen.getByRole('button', { name: 'Show Track map panel' }))
   expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(controller.subscribe).toHaveBeenCalledTimes(5)
+  expect(controller.subscribe).toHaveBeenCalledTimes(4)
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Leaderboard panel' }))
   expect(screen.queryByRole('table')).toBeNull()
@@ -137,7 +179,7 @@ test('hides and restores panels while cleaning up and remounting specialized sub
 
   fireEvent.click(screen.getByRole('button', { name: 'Show Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
-  expect(controller.subscribe).toHaveBeenCalledTimes(6)
+  expect(controller.subscribe).toHaveBeenCalledTimes(5)
 })
 
 test('shows zero-based replay times while seeking with absolute session times', () => {
@@ -146,7 +188,7 @@ test('shows zero-based replay times while seeking with absolute session times', 
 
   const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
   expect(timeFieldValues()).toEqual(['0', '00', '01', '500'])
-  expect(screen.getByLabelText('Replay time').textContent).toContain('/ 0:00:03.000')
+  expect(screen.getByLabelText('Replay time').textContent).toContain('/0:00:03')
   expect(slider.min).toBe('10000')
   expect(slider.max).toBe('13000')
   expect(slider.value).toBe('11500')
@@ -238,8 +280,8 @@ test('formats replay time with hours and displays the leaders current lap', () =
   render(<ReplayControls controller={controller} startMs={0} endMs={7_200_000} drivers={drivers} trackAssets={trackAssets} />)
 
   expect(timeFieldValues()).toEqual(['1', '02', '03', '456'])
-  expect(screen.getByLabelText('Replay time').textContent).toContain('/ 2:00:00.000')
-  expect((screen.getByLabelText('Current lap') as HTMLInputElement).value).toBe('18')
+  expect(screen.getByLabelText('Replay time').textContent).toContain('/2:00:00')
+  expect(screen.getByRole('button', { name: 'Edit current lap' }).textContent).toBe('18')
 })
 
 test.each([
@@ -254,15 +296,21 @@ test.each([
 
 test('seeks segmented elapsed time on Enter and an indexed race lap on blur', async () => {
   const user = userEvent.setup()
-  const { controller } = createController(readySnapshot)
+  const replay = { ...readySnapshot.replay!, leaderboardOrder: ['VER'], drivers: { VER: { ...readySnapshot.replay!.drivers.VER, lap: 1 } } }
+  const { controller } = createController({ ...readySnapshot, replay })
   render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 17_500 }]} trackAssets={trackAssets} />)
 
+  expect(screen.getByLabelText('Lap navigation').textContent).toContain('Lap1 / 3')
+
+  await user.click(screen.getByRole('button', { name: 'Edit Seconds' }))
   const seconds = screen.getByLabelText('Seconds')
-  const milliseconds = screen.getByLabelText('Milliseconds')
   await user.clear(seconds)
   await user.type(seconds, '1')
+  await user.click(screen.getByRole('button', { name: 'Edit Milliseconds' }))
+  const milliseconds = screen.getByLabelText('Milliseconds')
   await user.clear(milliseconds)
   await user.type(milliseconds, '250{Enter}')
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
   const lap = screen.getByLabelText('Current lap')
   await user.clear(lap)
   await user.type(lap, '3')
@@ -277,10 +325,12 @@ test('seeks elapsed time on group blur and a race lap on Enter', async () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 17_500 }]} trackAssets={trackAssets} />)
 
+  await user.click(screen.getByRole('button', { name: 'Edit Seconds' }))
   const seconds = screen.getByLabelText('Seconds')
   await user.clear(seconds)
   await user.type(seconds, '2')
   fireEvent.blur(seconds, { relatedTarget: null })
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
   const lap = screen.getByLabelText('Current lap')
   await user.clear(lap)
   await user.type(lap, '3{Enter}')
@@ -294,23 +344,27 @@ test('does not seek invalid or out-of-range time and lap values', async () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 17_500 }]} trackAssets={trackAssets} />)
 
+  await user.click(screen.getByRole('button', { name: 'Edit Minutes' }))
   const minutes = screen.getByLabelText('Minutes')
   await user.clear(minutes)
   await user.type(minutes, '60{Enter}')
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
   const lap = screen.getByLabelText('Current lap')
   await user.clear(lap)
   await user.type(lap, '2{Enter}')
 
   expect(controller.seek).not.toHaveBeenCalled()
   expect(screen.getAllByRole('alert')).toHaveLength(2)
+  expect(minutes.getAttribute('aria-invalid')).toBe('true')
+  expect(minutes.getAttribute('aria-describedby')).toBe('exact-time-error')
 })
 
 test('keeps inline time seek available and explains unavailable lap navigation', () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  expect((screen.getByLabelText('Hours') as HTMLInputElement).disabled).toBe(false)
-  expect((screen.getByLabelText('Current lap') as HTMLInputElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Edit Hours' }) as HTMLButtonElement).disabled).toBe(false)
+  expect((screen.getByRole('button', { name: 'Edit current lap' }) as HTMLButtonElement).disabled).toBe(true)
   expect(screen.getByText(/lap seek unavailable/i)).toBeTruthy()
 })
 
@@ -324,19 +378,19 @@ test('falls back to the highest valid lap and shows a placeholder without replay
   }
   const first = createController({ ...readySnapshot, replay })
   const { rerender } = render(<ReplayControls controller={first.controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
-  expect((screen.getByLabelText('Current lap') as HTMLInputElement).value).toBe('14')
+  expect(screen.getByRole('button', { name: 'Edit current lap' }).textContent).toBe('14')
 
   const loading = createController({ ...readySnapshot, status: 'loading', replay: null })
   rerender(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
-  expect((screen.getByLabelText('Current lap') as HTMLInputElement).value).toBe('')
-  expect((screen.getByLabelText('Current lap') as HTMLInputElement).placeholder).toBe('—')
+  expect(screen.getByRole('button', { name: 'Edit current lap' }).textContent).toBe('—')
 })
 
-test('shows loading and error diagnostics and retries controller loading', async () => {
+test('avoids transient loading content and retries controller loading errors', async () => {
   const user = userEvent.setup()
   const loading = createController({ ...readySnapshot, status: 'loading', replay: null })
   const { rerender } = render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
-  expect(screen.getByRole('status', { name: 'Replay loading' }).textContent).toContain('Loading')
+  expect(screen.queryByText(/loading replay samples/i)).toBeNull()
+  expect(document.querySelector('.replay-control-area')?.getAttribute('aria-busy')).toBe('true')
 
   const failed = createController({ ...readySnapshot, status: 'error', replay: null, error: new Error('network unavailable') })
   rerender(<ReplayControls controller={failed.controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
@@ -364,17 +418,71 @@ test('keeps Pause available while requested playback is loading or has failed', 
   expect(failed.controller.pause).toHaveBeenCalledOnce()
 })
 
+test('keeps transport unavailable until replay data is ready', () => {
+  const loading = createController({ ...readySnapshot, status: 'loading', replay: null })
+  render(<ReplayControls controller={loading.controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  expect((screen.getByRole('button', { name: 'Rewind 10 seconds' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Previous lap' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Play' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Forward 10 seconds' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Next lap' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+test('keeps elapsed time read-only until one segment is selected and Escape restores it', async () => {
+  const user = userEvent.setup()
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  expect(within(screen.getByLabelText('Replay time')).queryByRole('textbox')).toBeNull()
+  expect(within(screen.getByLabelText('Replay time')).queryByRole('button', { name: /duration/i })).toBeNull()
+  await user.click(screen.getByRole('button', { name: 'Edit Seconds' }))
+  expect(screen.getByRole('textbox', { name: 'Seconds' })).toBeTruthy()
+  expect(screen.queryByRole('textbox', { name: 'Minutes' })).toBeNull()
+  await user.clear(screen.getByRole('textbox', { name: 'Seconds' }))
+  await user.type(screen.getByRole('textbox', { name: 'Seconds' }), '2{Escape}')
+
+  expect(within(screen.getByLabelText('Replay time')).queryByRole('textbox')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Edit Seconds' }).textContent).toBe('01')
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.getByLabelText('Replay time').textContent).toContain('/0:00:03')
+})
+
+test.each(['Hours', 'Minutes', 'Seconds', 'Milliseconds'])('edits only the selected %s timestamp segment', async (label) => {
+  const user = userEvent.setup()
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  const trigger = screen.getByRole('button', { name: `Edit ${label}` })
+  trigger.focus()
+  await user.keyboard('{Enter}')
+
+  expect(within(screen.getByLabelText('Replay time')).getAllByRole('textbox')).toHaveLength(1)
+  expect(screen.getByRole('textbox', { name: label })).toBeTruthy()
+})
+
+test.each(['Hours', 'Minutes', 'Seconds', 'Milliseconds'])('opens the %s timestamp segment by pointer activation', async (label) => {
+  const user = userEvent.setup()
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  await user.click(screen.getByRole('button', { name: `Edit ${label}` }))
+
+  expect(within(screen.getByLabelText('Replay time')).getAllByRole('textbox')).toHaveLength(1)
+  expect(screen.getByRole('textbox', { name: label })).toBeTruthy()
+})
+
 test('unsubscribes when the adapter unmounts', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
   unmount()
-  expect(controller.subscribe).toHaveBeenCalledTimes(4)
-  expect(getUnsubscribeCalls()).toBe(4)
+  expect(controller.subscribe).toHaveBeenCalledTimes(3)
+  expect(getUnsubscribeCalls()).toBe(3)
 })
 
 function timeFieldValues(): string[] {
   return ['Hours', 'Minutes', 'Seconds', 'Milliseconds'].map(
-    (label) => (screen.getByLabelText(label) as HTMLInputElement).value,
+    (label) => screen.getByRole('button', { name: `Edit ${label}` }).textContent ?? '',
   )
 }
 
