@@ -1,5 +1,16 @@
 # Agent Instructions
 
+## OpenAgent context
+
+OpenAgent standards are global, not project-local. Load the applicable files from
+`/home/fdjor/.opencode/context/` before executing work:
+
+- Code: `core/standards/code-quality.md`
+- Documentation: `core/standards/documentation.md`
+- Tests: `core/standards/test-coverage.md`
+- Review: `core/workflows/code-review.md`
+- Delegation: `core/workflows/task-delegation-basics.md`
+
 ## Python validation
 
 - Always run Python tests through the project virtual environment with `.venv/bin/python`; do not use the system Python.
