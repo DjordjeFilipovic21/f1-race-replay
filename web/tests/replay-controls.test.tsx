@@ -4,7 +4,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
-import { parseElapsedParts, ReplayControls } from '../src/replay-ui/ReplayControls'
+import { parseElapsedParts, ReplayControls, selectDriverId } from '../src/replay-ui/ReplayControls'
 import type { ReplayController, ReplayControllerSnapshot } from '../src/replay-engine'
 
 const drivers = [{ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }]
@@ -69,55 +69,71 @@ test('wires accessible playback, seek, and speed controls to the controller', as
   expect(screen.getByRole('status', { name: 'Replay status' }).textContent).toContain('ready')
 })
 
-test('renders all workspace panels in the registry order with visible toggle states', () => {
+test('renders persistent workspace headers in canonical order with definition-driven spans', () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.className)).toEqual([
-    'replay-control-area',
-    'live-track-map',
-    'live-leaderboard',
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.getAttribute('class'))).toEqual([
+    'replay-panel-frame',
+    'replay-panel-frame',
+    'replay-panel-frame',
+    'replay-panel-frame',
   ])
-  expect(screen.getByRole('button', { name: 'Player' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Leaderboard' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Player panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Leaderboard panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Driver panel' }).getAttribute('aria-pressed')).toBe('true')
   const playerPanel = document.querySelector('.replay-control-area')
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
+  expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('⠿ Track map')
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1'])
 })
 
 test('hides and restores timestamp and lap navigation with the Player panel', () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Player panel' }))
   expect(screen.queryByLabelText('Replay time')).toBeNull()
   expect(screen.queryByLabelText('Lap navigation')).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show Player panel' }))
   expect(screen.getByLabelText('Replay time')).toBeTruthy()
   expect(screen.getByLabelText('Lap navigation')).toBeTruthy()
+})
+
+test('keeps a collapsed panel frame and its drag handle mounted', () => {
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
+
+  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(4)
+  expect(screen.getByRole('button', { name: 'Move Track map panel' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
 })
 
 test('hides and restores panels while cleaning up and remounting specialized subscriptions', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Track map' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
   expect(screen.queryByRole('group', { name: 'Test Circuit live track map' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('false')
+  expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
   expect(getUnsubscribeCalls()).toBe(1)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Track map' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show Track map panel' }))
   expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Track map' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(controller.subscribe).toHaveBeenCalledTimes(5)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Leaderboard' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Leaderboard panel' }))
   expect(screen.queryByRole('table')).toBeNull()
   expect(getUnsubscribeCalls()).toBe(2)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Leaderboard' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
   expect(controller.subscribe).toHaveBeenCalledTimes(6)
 })
@@ -359,3 +375,33 @@ function timeFieldValues(): string[] {
     (label) => (screen.getByLabelText(label) as HTMLInputElement).value,
   )
 }
+
+test('defaults to the race leader while preserving an explicit driver selection', () => {
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['NOR', 'VER'],
+    drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 1 } },
+  }
+
+  expect(selectDriverId(null, replay, [{ ...drivers[0], id: 'NOR' }, drivers[0]])).toBe('NOR')
+  expect(selectDriverId('VER', { ...replay, leaderboardOrder: ['NOR', 'VER'] }, drivers)).toBe('VER')
+})
+
+test('shares leaderboard clicks with the Driver panel and selected track marker', () => {
+  const twoDrivers = [...drivers, { id: 'NOR', displayName: 'Lando Norris', teamName: 'McLaren', colorHex: '#ff8000', carNumber: '4' }]
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['VER', 'NOR'],
+    drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 2 } },
+  }
+  const { controller, setSnapshot } = createController({ ...readySnapshot, replay })
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={twoDrivers} trackAssets={trackAssets} />)
+
+  expect(screen.getByRole('region', { name: 'Driver' }).textContent).toContain('Max Verstappen')
+  fireEvent.click(screen.getByRole('button', { name: 'Select Max Verstappen' }))
+  setSnapshot({ ...readySnapshot, replay: { ...replay, leaderboardOrder: ['NOR', 'VER'] } })
+
+  expect(screen.getByRole('region', { name: 'Driver' }).textContent).toContain('Max Verstappen')
+  expect(screen.getByRole('button', { name: 'Select Max Verstappen' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('class')).toContain('live-track-map__marker--selected')
+})

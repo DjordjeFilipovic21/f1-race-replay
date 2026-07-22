@@ -3,6 +3,7 @@ import type { DriverMetadata, LapStart, TrackAssets } from '../replay-data/types
 import type { CoordinateInterpolationStrategy, ReplayController } from '../replay-engine'
 import { LiveLeaderboardPanel } from './LiveLeaderboardPanel'
 import { LiveTrackMap } from './LiveTrackMap'
+import { DriverInfoPanel } from './DriverInfoPanel'
 import { PlaybackControls } from './PlaybackControls'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
 import { ReplayWorkspace, type ReplayWorkspacePanel } from './ReplayWorkspace'
@@ -24,12 +25,14 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
+  const [explicitSelectedDriverId, setExplicitSelectedDriverId] = useState<string | null>(null)
   const seekPreviewRef = useRef<number | null>(null)
   const isReady = snapshot.status === 'ready'
   const displayedTimeMs = seekPreviewMs ?? snapshot.timeMs
   const elapsedMs = relativeElapsedMs(displayedTimeMs, startMs, endMs)
   const durationMs = relativeElapsedMs(endMs, startMs, endMs)
   const currentLap = currentLapNumber(snapshot.replay)
+  const selectedDriverId = selectDriverId(explicitSelectedDriverId, snapshot.replay, drivers)
 
   const handleSeekPreview = (event: FormEvent<HTMLInputElement>) => {
     const value = event.currentTarget.valueAsNumber
@@ -51,10 +54,12 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     setLeaderboardRefreshKey((revision) => revision + 1)
   }
 
+  // This experiment deliberately keeps panel modules statically loaded; bundle cost is traded for simple remount semantics.
   const panels: readonly ReplayWorkspacePanel[] = [
     {
       id: 'player',
       label: 'Player',
+      columns: 1,
       element: <PlaybackControls
         controller={controller}
         currentLap={currentLap}
@@ -74,12 +79,20 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     {
       id: 'track-map',
       label: 'Track map',
-      element: <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />,
+      columns: 2,
+      element: <LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} selectedDriverId={selectedDriverId} />,
     },
     {
       id: 'leaderboard',
       label: 'Leaderboard',
-      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} />,
+      columns: 1,
+      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} />,
+    },
+    {
+      id: 'driver',
+      label: 'Driver',
+      columns: 1,
+      element: <DriverInfoPanel drivers={drivers} selectedDriverId={selectedDriverId} snapshot={snapshot.replay} />,
     },
   ]
 
@@ -109,4 +122,9 @@ function currentLapNumber(replay: ReturnType<ReplayController['getSnapshot']>['r
 
 function relativeElapsedMs(timeMs: number, startMs: number, endMs: number): number {
   return Math.min(Math.max(timeMs - startMs, 0), Math.max(endMs - startMs, 0))
+}
+
+export function selectDriverId(explicitSelectedDriverId: string | null, replay: ReturnType<ReplayController['getSnapshot']>['replay'], drivers: readonly DriverMetadata[]): string | null {
+  if (explicitSelectedDriverId !== null) return explicitSelectedDriverId
+  return replay?.leaderboardOrder?.[0] ?? drivers[0]?.id ?? null
 }

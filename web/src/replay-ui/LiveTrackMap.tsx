@@ -7,6 +7,7 @@ export interface LiveTrackMapProps {
   readonly trackAssets: TrackAssets
   readonly controller: ReplayController
   readonly drivers: readonly DriverMetadata[]
+  readonly selectedDriverId?: string | null
 }
 
 export interface TrackMapViewBox {
@@ -27,7 +28,7 @@ interface TrackMapGeometry {
 }
 
 /** Renders static geometry while updating mounted marker nodes from controller notifications. */
-export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller, drivers }: LiveTrackMapProps) {
+export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller, drivers, selectedDriverId = null }: LiveTrackMapProps) {
   const geometry = useMemo(() => createTrackMapGeometry(trackAssets), [trackAssets])
   const markerRefs = useRef(new Map<string, SVGGElement>())
 
@@ -39,13 +40,7 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
   }, [controller, geometry, trackAssets.rotationDegrees])
 
   return (
-    <section className="live-track-map" aria-labelledby="live-track-map-title">
-      <header className="live-track-map__header">
-        <div>
-          <p className="eyebrow">Live circuit position</p>
-          <h2 id="live-track-map-title">{trackAssets.trackName} track map</h2>
-        </div>
-      </header>
+    <section className="live-track-map" aria-label={`${trackAssets.trackName} track map`}>
       {geometry === null ? (
         <p className="live-track-map__empty" role="status">Track geometry is unavailable for this replay.</p>
       ) : (
@@ -66,8 +61,9 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
             x2={geometry.startFinish[1].x}
             y2={geometry.startFinish[1].y}
           />
-          {drivers.map((driver) => (
-            <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className="live-track-map__marker" role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
+          {orderMarkers(drivers, selectedDriverId).map((driver) => (
+            <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
+              {driver.id === selectedDriverId && <circle className="live-track-map__selection-ring" cx="0" cy="0" r={geometry.markerRadius * 1.55} />}
               <circle cx="0" cy="0" r={geometry.markerRadius} fill={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} />
               <text x="0" y="0" fontSize={geometry.markerLabelSize} aria-hidden="true">{driver.id}</text>
             </g>
@@ -77,6 +73,10 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
     </section>
   )
 })
+
+function orderMarkers(drivers: readonly DriverMetadata[], selectedDriverId: string | null): readonly DriverMetadata[] {
+  return selectedDriverId === null ? drivers : [...drivers.filter((driver) => driver.id !== selectedDriverId), ...drivers.filter((driver) => driver.id === selectedDriverId)]
+}
 
 /** Converts telemetry's Y-up coordinates to SVG's Y-down space, then applies display rotation. */
 export function toMapPoint(point: TrackPoint, rotationDegrees: number): TrackPoint | null {
