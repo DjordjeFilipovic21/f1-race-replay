@@ -45,6 +45,7 @@ def test_field_mapping_uses_exact_timestamp_order_and_preserves_nulls() -> None:
     assert fields.time_ms == (1000, 1003, 1012)
     assert fields.x == (None, 0.1, None)
     assert fields.speed == (300.0, None, None)
+    assert fields.rpm == (None, None, 12_500.0)
     assert fields.brake == (None, None, 0)
     assert fields.gear == (None, None, 6)
     assert fields.status == (None, None, None)
@@ -193,7 +194,7 @@ def _frames() -> dict[str, pl.DataFrame]:
     frames = {name: pl.DataFrame(schema=dict(schema)) for name, schema in CANONICAL_TABLE_SCHEMAS.items()}
     frames["car_telemetry"] = pl.DataFrame([
         {"session_id": "race", "driver_id": "HAM", "source_driver_key": "44", "session_time_ms": 1012,
-         "speed_kph": None, "rpm": None, "gear": 6, "throttle_pct": None, "brake": False, "drs": None, "source": "car"},
+         "speed_kph": None, "rpm": 12_500.0, "gear": 6, "throttle_pct": None, "brake": False, "drs": None, "source": "car"},
         {"session_id": "race", "driver_id": "HAM", "source_driver_key": "44", "session_time_ms": 1000,
          "speed_kph": 300.0, "rpm": None, "gear": None, "throttle_pct": None, "brake": None, "drs": None, "source": "car"},
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)

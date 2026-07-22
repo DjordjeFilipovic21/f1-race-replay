@@ -1,7 +1,17 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'driver'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'driver' | 'telemetry'
+
+const DESKTOP_WORKSPACE_COLUMNS = 4
+
+const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
+  player: 1,
+  'track-map': 2,
+  leaderboard: 1,
+  driver: 1,
+  telemetry: 2,
+}
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'driver'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'driver' || value === 'telemetry'
 }
 
 export interface ReplayPanelLayoutItem {
@@ -18,6 +28,10 @@ export interface ReplayPanelDragCommit {
 
 export function defaultReplayPanelColumn(id: ReplayPanelId): number {
   return id === 'track-map' ? 2 : id === 'leaderboard' ? 4 : 1
+}
+
+export function replayPanelColumns(id: ReplayPanelId): 1 | 2 {
+  return REPLAY_PANEL_COLUMNS[id]
 }
 
 /** Reconciles panel registry changes without replacing a user's local layout choices. */
@@ -61,5 +75,6 @@ function clampIndex(index: number, length: number): number {
 }
 
 function normalizeDesktopColumn(value: number, id: ReplayPanelId): number {
-  return Number.isInteger(value) ? Math.min(Math.max(value, 1), id === 'track-map' ? 3 : 4) : defaultReplayPanelColumn(id)
+  const maximumColumnStart = DESKTOP_WORKSPACE_COLUMNS - replayPanelColumns(id) + 1
+  return Number.isInteger(value) ? Math.min(Math.max(value, 1), maximumColumnStart) : defaultReplayPanelColumn(id)
 }

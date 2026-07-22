@@ -78,6 +78,7 @@ class BrowserDriverFields:
     track_distance_meters: tuple[float | None, ...]
     gap_to_leader_ms: tuple[float | None, ...]
     position: tuple[int | None, ...]
+    rpm: tuple[float | None, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.driver_id, str) or not self.driver_id:
@@ -87,15 +88,18 @@ class BrowserDriverFields:
         if not all(type(value) is int and 0 <= value <= MAX_INT64 for value in self.time_ms):
             raise TypeError("time_ms must contain non-negative signed Int64 milliseconds")
         size = len(self.time_ms)
+        if self.rpm == ():
+            object.__setattr__(self, "rpm", (None,) * size)
         fields = (
             self.x, self.y, self.speed, self.throttle, self.brake, self.gear,
             self.drs, self.status, self.lap, self.tyre_compound,
             self.is_in_pit_lane, self.track_distance_meters,
             self.gap_to_leader_ms, self.position,
+            self.rpm,
         )
         if any(not isinstance(field, tuple) or len(field) != size for field in fields):
             raise ValueError("every browser field must be a tuple aligned to time_ms")
-        if any(value is not None and (type(value) is not float or not math.isfinite(value)) for field in (self.x, self.y, self.speed, self.throttle) for value in field):
+        if any(value is not None and (type(value) is not float or not math.isfinite(value)) for field in (self.x, self.y, self.speed, self.throttle, self.rpm) for value in field):
             raise TypeError("continuous driver fields must contain finite floats or null")
         if any(value not in (None, 0, 1) for value in self.brake):
             raise ValueError("brake must contain 0, 1, or null")

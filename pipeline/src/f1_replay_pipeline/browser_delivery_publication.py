@@ -584,7 +584,7 @@ def _chunk_dict(chunk: BrowserChunk, fixture_id: str) -> dict[str, object]:
 
 
 def _driver_dict(fields: BrowserDriverFields) -> dict[str, object]:
-    return {"x": fields.x, "y": fields.y, "trackDistanceMeters": fields.track_distance_meters, "speed": fields.speed, "throttle": fields.throttle, "brake": fields.brake, "gapToLeaderMs": fields.gap_to_leader_ms, "lap": fields.lap, "position": fields.position, "gear": fields.gear, "drs": fields.drs, "tyreCompound": fields.tyre_compound, "status": fields.status, "isInPitLane": fields.is_in_pit_lane}
+    return {"x": fields.x, "y": fields.y, "trackDistanceMeters": fields.track_distance_meters, "speed": fields.speed, "rpm": fields.rpm, "throttle": fields.throttle, "brake": fields.brake, "gapToLeaderMs": fields.gap_to_leader_ms, "lap": fields.lap, "position": fields.position, "gear": fields.gear, "drs": fields.drs, "tyreCompound": fields.tyre_compound, "status": fields.status, "isInPitLane": fields.is_in_pit_lane}
 
 
 def _event_dict(event: BrowserEvent) -> dict[str, object]:

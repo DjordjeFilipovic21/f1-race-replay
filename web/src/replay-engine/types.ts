@@ -1,6 +1,6 @@
 import type { ReplayEvent } from '../replay-data/types'
 
-export interface DriverSnapshot {
+interface DriverSnapshotFields {
   readonly x: number | null
   readonly y: number | null
   readonly trackDistanceMeters: number | null
@@ -17,13 +17,24 @@ export interface DriverSnapshot {
   readonly isInPitLane: boolean | null
 }
 
+export interface DriverSnapshot extends DriverSnapshotFields {
+  readonly rpm: number | null
+}
+
+/** Keeps hand-authored legacy snapshots source-compatible while sampled output is normalized. */
+export type ReplayDriverSnapshot = DriverSnapshotFields & { readonly rpm?: number | null }
+
 export interface ReplaySnapshot {
   readonly sessionTimeMs: number
-  readonly drivers: Readonly<Record<string, DriverSnapshot>>
+  readonly drivers: Readonly<Record<string, ReplayDriverSnapshot>>
   readonly leaderboardOrder: readonly string[] | null
   readonly trackStatusCode: number | null
   readonly weatherState: string | null
   readonly events: readonly ReplayEvent[]
+}
+
+export interface SampledReplaySnapshot extends Omit<ReplaySnapshot, 'drivers'> {
+  readonly drivers: Readonly<Record<string, DriverSnapshot>>
 }
 
 export interface AuthoritativeSample {

@@ -115,6 +115,44 @@ describe('replay-engine sampler', () => {
     expect([interpolated.drivers.HAM.trackDistanceMeters, interpolated.drivers.HAM.gapToLeaderMs]).toEqual([150, 0])
   })
 
+  test('interpolates RPM continuously while preserving an exact source sample', () => {
+    const replay = syntheticReplay([0, 10, 20], [0, 500, 1_000], { rpm: [10_000, null, 12_000] })
+
+    const exact = sampleReplayAt(replay, 0)
+    const interpolated = sampleReplayAt(replay, 500)
+
+    expect([exact.drivers.HAM.rpm, interpolated.drivers.HAM.rpm]).toEqual([10_000, 11_000])
+  })
+
+  test('returns null for RPM samples without a valid lower or upper bound', () => {
+    const replay = syntheticReplay([0, 10, 20], [0, 500, 1_000], { rpm: [null, 11_000, null] })
+
+    const beforeBound = sampleReplayAt(replay, 250)
+    const exact = sampleReplayAt(replay, 500)
+    const afterBound = sampleReplayAt(replay, 750)
+
+    expect([beforeBound.drivers.HAM.rpm, exact.drivers.HAM.rpm, afterBound.drivers.HAM.rpm]).toEqual([null, 11_000, null])
+  })
+
+  test('uses the 1000 ms RPM interpolation cap without carrying stale values', () => {
+    const atCap = syntheticReplay([0, 10], [0, 1_000], { rpm: [10_000, 12_000] })
+    const overCap = syntheticReplay([0, 10], [0, 1_001], { rpm: [10_000, 12_000] })
+
+    expect([sampleReplayAt(atCap, 500).drivers.HAM.rpm, sampleReplayAt(overCap, 500).drivers.HAM.rpm]).toEqual([11_000, null])
+  })
+
+  test('uses the previous discrete brake value between 0 and 1 samples', () => {
+    const replay = syntheticReplay([0, 10], [0, 1_000], { brake: [0, 1] })
+
+    expect(sampleReplayAt(replay, 500).drivers.HAM.brake).toBe(0)
+  })
+
+  test('keeps brake unavailable when its lower bound is null', () => {
+    const replay = syntheticReplay([0, 10], [0, 1_000], { brake: [null, 1] })
+
+    expect(sampleReplayAt(replay, 500).drivers.HAM.brake).toBeNull()
+  })
+
   test('interpolates circuit distance forward through the centerline origin and preserves exact origin samples', () => {
     const replay = derivedReplay({ trackDistanceMeters: [950, 50] }, 1_000)
 
@@ -143,7 +181,7 @@ describe('replay-engine sampler', () => {
 
     const snapshot = samplePreparedReplayAt(prepareReplaySampler(replay), 50)
 
-    expect([snapshot.drivers.HAM.trackDistanceMeters, snapshot.drivers.HAM.gapToLeaderMs, snapshot.drivers.HAM.position, snapshot.leaderboardOrder]).toEqual([null, null, null, null])
+    expect([snapshot.drivers.HAM.trackDistanceMeters, snapshot.drivers.HAM.gapToLeaderMs, snapshot.drivers.HAM.rpm, snapshot.drivers.HAM.position, snapshot.leaderboardOrder]).toEqual([null, null, null, null, null])
   })
 })
 

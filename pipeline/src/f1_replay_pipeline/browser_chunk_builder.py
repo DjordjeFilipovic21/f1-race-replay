@@ -264,6 +264,7 @@ def _align_driver(fields: BrowserDriverFields, timeline: tuple[int, ...]) -> Bro
         driver_id=fields.driver_id, time_ms=timeline,
         x=_align(fields.time_ms, fields.x, timeline), y=_align(fields.time_ms, fields.y, timeline),
         speed=_align(fields.time_ms, fields.speed, timeline), throttle=_align(fields.time_ms, fields.throttle, timeline),
+        rpm=_align(fields.time_ms, fields.rpm, timeline),
         brake=_align(fields.time_ms, fields.brake, timeline), gear=_align(fields.time_ms, fields.gear, timeline),
         drs=_align(fields.time_ms, fields.drs, timeline), status=_align(fields.time_ms, fields.status, timeline),
         lap=_align(fields.time_ms, fields.lap, timeline), tyre_compound=_align(fields.time_ms, fields.tyre_compound, timeline),
@@ -277,6 +278,7 @@ def _slice_driver(fields: BrowserDriverFields, left: int, right: int) -> Browser
     return BrowserDriverFields(
         driver_id=fields.driver_id, time_ms=fields.time_ms[left:right],
         x=fields.x[left:right], y=fields.y[left:right], speed=fields.speed[left:right],
+        rpm=fields.rpm[left:right],
         throttle=fields.throttle[left:right], brake=fields.brake[left:right],
         gear=fields.gear[left:right], drs=fields.drs[left:right], status=fields.status[left:right],
         lap=fields.lap[left:right], tyre_compound=fields.tyre_compound[left:right],

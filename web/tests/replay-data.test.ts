@@ -78,7 +78,35 @@ describe('replay-data v1 loader', () => {
         driver.trackDistanceMeters = [null, null, null]; driver.gapToLeaderMs = [null, null, null]; driver.position = [null, null, null]
       }
     })
-    await expect((await loadReplayIndex({ source })).loadChunk(1)).resolves.toBeDefined()
+    const chunk = await (await loadReplayIndex({ source })).loadChunk(1)
+    expect(chunk.drivers.HAM.rpm).toEqual([null, null, null])
+  })
+
+  test('accepts an optional nullable RPM column and preserves aligned values', async () => {
+    const source = mutateFixtures({
+      'chunks/chunk-001.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { rpm?: unknown[] }> }
+        value.drivers.HAM.rpm = [11_000, null, 0]
+        value.drivers.RUS.rpm = [null, 10_500, null]
+      },
+      'chunks/chunk-002.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { rpm?: unknown[] }> }
+        value.drivers.HAM.rpm = [0, 12_000, 12_500]
+        value.drivers.RUS.rpm = [null, 11_000, 10_500]
+      },
+    })
+
+    const replay = await loadReplayData({ source })
+    expect(replay.chunks[0].drivers.HAM.rpm).toEqual([11_000, null, 0])
+    expect(replay.chunks[0].drivers.RUS.rpm).toEqual([null, 10_500, null])
+  })
+
+  test('rejects an RPM column with non-finite values', async () => {
+    const source = mutateFixture('chunks/chunk-001.json', (chunk) => {
+      const value = chunk as { drivers: Record<string, { rpm?: unknown[] }> }
+      value.drivers.HAM.rpm = [11_000, 'missing', 0]
+    })
+    await expect(loadReplayData({ source })).rejects.toThrow('rpm must be finite')
   })
 
   test('accepts a valid partial dynamic leaderboard and still rejects duplicate IDs', async () => {
@@ -229,6 +257,19 @@ function mutateFixture(target: string, mutate: (value: unknown) => void): Replay
     async read(path) {
       const bytes = await fixtureSource.read(path)
       if (path !== target) return bytes
+      const value = JSON.parse(decoder.decode(bytes)) as unknown
+      mutate(value)
+      return encoder.encode(JSON.stringify(value))
+    },
+  }
+}
+
+function mutateFixtures(mutations: Readonly<Record<string, (value: unknown) => void>>): ReplaySource {
+  return {
+    async read(path) {
+      const bytes = await fixtureSource.read(path)
+      const mutate = mutations[path]
+      if (!mutate) return bytes
       const value = JSON.parse(decoder.decode(bytes)) as unknown
       mutate(value)
       return encoder.encode(JSON.stringify(value))

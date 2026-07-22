@@ -1,9 +1,9 @@
-import type { DriverColumns, ReplayChunk, ReplayData, ReplayEvent } from '../replay-data/types'
+import type { ReplayChunk, ReplayData, ReplayEvent } from '../replay-data/types'
 import { createAuthoritativeTimeline } from './timeline'
-import type { AuthoritativeTimeline, DriverSnapshot, ReplaySnapshot } from './types'
+import type { AuthoritativeTimeline, DriverSnapshot, SampledReplaySnapshot } from './types'
 
-const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs'] as const
-const STEP_FIELDS = ['lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
+const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'rpm', 'throttle', 'gapToLeaderMs'] as const
+const STEP_FIELDS = ['lap', 'position', 'gear', 'brake', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const MAX_INTERPOLATION_INTERVAL_MS = 1_000
 const MAX_POSITION_INTERPOLATION_INTERVAL_MS = 1_500
 const SMOOTH_FILTER_WINDOW_MS = 1_250
@@ -47,11 +47,11 @@ export function prepareReplaySampler(replay: ReplayData, timeline = createAuthor
 }
 
 /** Standalone compatibility entry point; callers sampling repeatedly should prepare once. */
-export function sampleReplayAt(replay: ReplayData, sessionTimeMs: number, timeline = createAuthoritativeTimeline(replay.chunks)): ReplaySnapshot {
+export function sampleReplayAt(replay: ReplayData, sessionTimeMs: number, timeline = createAuthoritativeTimeline(replay.chunks)): SampledReplaySnapshot {
   return samplePreparedReplayAt(prepareReplaySampler(replay, timeline), sessionTimeMs)
 }
 
-export function samplePreparedReplayAt(prepared: PreparedReplaySampler, sessionTimeMs: number): ReplaySnapshot {
+export function samplePreparedReplayAt(prepared: PreparedReplaySampler, sessionTimeMs: number): SampledReplaySnapshot {
   if (!Number.isSafeInteger(sessionTimeMs)) throw new RangeError('Replay time must be an integer millisecond')
   const sampledDrivers = Object.fromEntries(Object.entries(prepared.drivers).map(([id, driver]) => [id, sampleDriver(driver, sessionTimeMs, prepared.circuitLengthMeters, prepared.coordinateInterpolation)]))
   const leaderboardOrder = copyStepArray(previousValue(prepared.leaderboardOrder, sessionTimeMs))
@@ -67,20 +67,32 @@ export function samplePreparedReplayAt(prepared: PreparedReplaySampler, sessionT
 }
 
 function prepareDriver(replay: ReplayData, timeline: AuthoritativeTimeline, driverId: string): PreparedDriver {
-  const prepare = <T extends keyof DriverColumns>(field: T): PreparedValues<NonNullable<DriverColumns[T][number]>> => {
+  const prepareContinuous = (field: ContinuousField): PreparedValues<number> => {
     const times: number[] = []
-    const values: NonNullable<DriverColumns[T][number]>[] = []
+    const values: number[] = []
     for (const sample of timeline.samples) {
-      const value = replay.chunks[sample.chunkIndex].drivers[driverId][field][sample.timeIndex]
+      const value = replay.chunks[sample.chunkIndex].drivers[driverId][field]?.[sample.timeIndex]
       if (value !== null && value !== undefined) {
         times.push(sample.timeMs)
-        values.push(value as NonNullable<DriverColumns[T][number]>)
+        values.push(value)
       }
     }
     return Object.freeze({ times: Object.freeze(times), values: Object.freeze(values) })
   }
-  const continuous = Object.freeze(Object.fromEntries(CONTINUOUS_FIELDS.map((field) => [field, prepare(field)])) as Record<ContinuousField, PreparedValues<number>>)
-  const step = Object.freeze(Object.fromEntries(STEP_FIELDS.map((field) => [field, prepare(field)])) as Record<StepField, PreparedValues<number | string | boolean>>)
+  const prepareStep = (field: StepField): PreparedValues<number | string | boolean> => {
+    const times: number[] = []
+    const values: (number | string | boolean)[] = []
+    for (const sample of timeline.samples) {
+      const value = replay.chunks[sample.chunkIndex].drivers[driverId][field]?.[sample.timeIndex]
+      if (value !== null && value !== undefined) {
+        times.push(sample.timeMs)
+        values.push(value)
+      }
+    }
+    return Object.freeze({ times: Object.freeze(times), values: Object.freeze(values) })
+  }
+  const continuous = Object.freeze(Object.fromEntries(CONTINUOUS_FIELDS.map((field) => [field, prepareContinuous(field)])) as Record<ContinuousField, PreparedValues<number>>)
+  const step = Object.freeze(Object.fromEntries(STEP_FIELDS.map((field) => [field, prepareStep(field)])) as Record<StepField, PreparedValues<number | string | boolean>>)
   return Object.freeze({
     continuous,
     filteredCoordinates: Object.freeze({ x: preparePositionFilteredValues(continuous.x, step), y: preparePositionFilteredValues(continuous.y, step) }),
@@ -105,7 +117,7 @@ function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeter
   const continuous = (field: ContinuousField) => interpolate(driver.continuous[field], timeMs)
   const step = <T,>(field: StepField): T | null => previousValue(driver.step[field], timeMs) as T | null
   return Object.freeze({
-    x: interpolateCoordinate(driver, 'x', timeMs, coordinateInterpolation), y: interpolateCoordinate(driver, 'y', timeMs, coordinateInterpolation), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), throttle: continuous('throttle'), brake: continuous('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
+    x: interpolateCoordinate(driver, 'x', timeMs, coordinateInterpolation), y: interpolateCoordinate(driver, 'y', timeMs, coordinateInterpolation), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), rpm: continuous('rpm'), throttle: continuous('throttle'), brake: step<number>('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
     lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'),
   })
 }

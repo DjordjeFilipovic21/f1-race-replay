@@ -204,6 +204,9 @@
         "speed": {
           "$ref": "#/$defs/nullableNumberColumn"
         },
+        "rpm": {
+          "$ref": "#/$defs/nullableNumberColumn"
+        },
         "throttle": {
           "$ref": "#/$defs/nullableNumberColumn"
         },

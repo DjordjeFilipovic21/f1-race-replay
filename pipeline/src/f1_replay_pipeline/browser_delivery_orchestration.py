@@ -373,7 +373,7 @@ def _with_terminal_status(fields, terminal_end_time):
     return type(fields)(
         fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
         fields.brake, fields.gear, fields.drs, statuses, fields.lap, fields.tyre_compound,
-        fields.is_in_pit_lane, fields.track_distance_meters, fields.gap_to_leader_ms, fields.position,
+        fields.is_in_pit_lane, fields.track_distance_meters, fields.gap_to_leader_ms, fields.position, fields.rpm,
     )
 
 
@@ -381,7 +381,7 @@ def _with_derived_fields(fields, distances, gaps, positions):
     return type(fields)(
         fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
         fields.brake, fields.gear, fields.drs, fields.status, fields.lap, fields.tyre_compound,
-        fields.is_in_pit_lane, tuple(distances), tuple(gaps), tuple(positions),
+        fields.is_in_pit_lane, tuple(distances), tuple(gaps), tuple(positions), fields.rpm,
     )
 
 
