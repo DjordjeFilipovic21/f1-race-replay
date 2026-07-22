@@ -32,9 +32,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .replay-panel-drag-handle { background: var(--surface-muted); border: 1px solid var(--border); color: var(--text-muted); cursor: grab; flex: 0 0 auto; min-height: 44px; padding: .25rem .5rem; }
 .replay-panel-drag-handle:active { cursor: grabbing; }
 .replay-panel-frame { border: 1px solid var(--border); min-width: 0; }
+.replay-panel-frame--drag-source { filter: blur(2px); opacity: .35; }
 .replay-panel-frame__header { align-items: center; border-bottom: 1px solid var(--border); display: flex; gap: .5rem; justify-content: space-between; padding: .5rem .75rem; }
 .replay-panel-frame__body { padding: .75rem; }
-.replay-panel-drag-overlay { background: var(--surface-muted); border: 1px solid var(--accent); color: var(--text-muted); padding: .5rem .75rem; }
+.replay-panel-drag-overlay { pointer-events: none; }
+.replay-panel-drag-snapshot { background: var(--surface); box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 45%); color: inherit; opacity: .94; overflow: hidden; }
+.replay-panel-drag-snapshot > .replay-panel-frame { background: var(--surface); height: 100%; width: 100%; }
 .replay-panel__header { border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
 .eyebrow { color: var(--accent); font-size: .78rem; font-weight: 700; letter-spacing: .08em; margin: 0 0 .25rem; text-transform: uppercase; }
 h1, h2, p { margin: 0; }

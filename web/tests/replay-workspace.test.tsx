@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 interface DragDropProviderProps {
   readonly children: ReactNode
+  readonly onDragStart?: (event: unknown) => void
   readonly onDragMove?: (event: unknown) => void
   readonly onDragEnd?: (event: unknown) => void
 }
@@ -27,15 +28,18 @@ const trackLaneDragEvent = {
   },
 }
 
+let mockDragSource: { readonly id: string; readonly index: number } | null = null
+
 vi.mock('@dnd-kit/react', () => ({
-  DragDropProvider: ({ children, onDragMove, onDragEnd }: DragDropProviderProps) => <div>
+  DragDropProvider: ({ children, onDragStart, onDragMove, onDragEnd }: DragDropProviderProps) => <div>
     {children}
+    <button type="button" onClick={() => { mockDragSource = dragEvent.operation.source; onDragStart?.(dragEvent) }}>Start drag</button>
     <button type="button" onClick={() => onDragMove?.(dragEvent)}>Preview drop</button>
     <button type="button" onClick={() => onDragMove?.(trackLaneDragEvent)}>Preview Track lane</button>
     <button type="button" onClick={() => onDragMove?.({ ...dragEvent, operation: { ...dragEvent.operation, source: null } })}>Invalidate preview</button>
-    <button type="button" onClick={() => onDragEnd?.(dragEvent)}>Commit drop</button>
+    <button type="button" onClick={() => { onDragEnd?.(dragEvent); mockDragSource = null }}>Commit drop</button>
   </div>,
-  DragOverlay: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
+  DragOverlay: ({ children }: { readonly children: ReactNode | ((source: { readonly id: string; readonly index: number }) => ReactNode) }) => <>{typeof children === 'function' && mockDragSource !== null ? children(mockDragSource) : typeof children === 'function' ? null : children}</>,
 }))
 
 vi.mock('@dnd-kit/react/sortable', () => ({
@@ -55,6 +59,7 @@ const panels: readonly ReplayWorkspacePanel[] = [
 
 afterEach(() => {
   cleanup()
+  mockDragSource = null
   vi.restoreAllMocks()
   setViewportWidth(1024)
 })
@@ -93,6 +98,23 @@ test('renders prospective cross-column order, restores invalid previews, and com
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
    expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Telemetry', 'Leaderboard', 'Driver'])
    expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+})
+
+test('shows a static panel snapshot and blurs the source while dragging', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 200, height: 100, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+
+  expect(screen.getByRole('region', { name: 'Telemetry' }).classList.contains('replay-panel-frame--drag-source')).toBe(true)
+  expect(document.querySelector('.replay-panel-drag-snapshot')?.textContent).toContain('Telemetry content')
+  expect(document.querySelector('.replay-panel-drag-snapshot')?.getAttribute('aria-hidden')).toBe('true')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+  expect(screen.getByRole('region', { name: 'Telemetry' }).classList.contains('replay-panel-frame--drag-source')).toBe(false)
+  expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
 })
 
 function workspacePanelLabels(): string[] {
