@@ -1,4 +1,4 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'driver' | 'telemetry'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry'
 
 const DESKTOP_WORKSPACE_COLUMNS = 4
 
@@ -6,12 +6,13 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   player: 1,
   'track-map': 2,
   leaderboard: 1,
+  'race-control': 1,
   driver: 1,
   telemetry: 2,
 }
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'driver' || value === 'telemetry'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry'
 }
 
 export interface ReplayPanelLayoutItem {

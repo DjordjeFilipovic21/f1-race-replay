@@ -1,10 +1,11 @@
-import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapStart, TrackAssets } from '../../../data/replay/types'
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import type { DriverMetadata, LapStart, ReplayEvent, TrackAssets } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
 import { LiveLeaderboardPanel } from '../panels/LiveLeaderboardPanel'
 import { LiveTrackMap } from '../panels/LiveTrackMap'
+import { RaceControlPanel, RACE_CONTROL_MESSAGE_DURATION_MS, RACE_CONTROL_MESSAGE_EXIT_DURATION_MS } from '../panels/RaceControlPanel'
 import { PlaybackControls } from '../playback/PlaybackControls'
 import { ReplayWorkspace, type ReplayWorkspacePanel } from '../workspace/ReplayWorkspace'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
@@ -27,13 +28,57 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
   const [explicitSelectedDriverId, setExplicitSelectedDriverId] = useState<string | null>(null)
+  const [activeRaceControlMessage, setActiveRaceControlMessage] = useState<ReplayEvent | null>(null)
+  const [isRaceControlMessageExiting, setRaceControlMessageExiting] = useState(false)
   const seekPreviewRef = useRef<number | null>(null)
+  const raceControlTimeRef = useRef(snapshot.timeMs)
   const isReady = snapshot.status === 'ready'
   const displayedTimeMs = seekPreviewMs ?? snapshot.timeMs
   const elapsedMs = relativeElapsedMs(displayedTimeMs, startMs, endMs)
   const durationMs = relativeElapsedMs(endMs, startMs, endMs)
   const currentLap = currentLapNumber(snapshot.replay)
   const selectedDriverId = selectDriverId(explicitSelectedDriverId, snapshot.replay, drivers)
+
+  useEffect(() => {
+    const previousTimeMs = raceControlTimeRef.current
+    raceControlTimeRef.current = snapshot.timeMs
+    if (snapshot.timeMs < previousTimeMs) {
+      setActiveRaceControlMessage(null)
+      setRaceControlMessageExiting(false)
+      return
+    }
+    const latestEvent = snapshot.crossedEvents.at(-1)
+    if (latestEvent !== undefined) {
+      setRaceControlMessageExiting(false)
+      setActiveRaceControlMessage(latestEvent)
+    }
+  }, [snapshot.crossedEvents, snapshot.timeMs])
+
+  useEffect(() => {
+    if (activeRaceControlMessage === null) return
+    const timeout = window.setTimeout(() => setRaceControlMessageExiting(true), RACE_CONTROL_MESSAGE_DURATION_MS)
+    return () => window.clearTimeout(timeout)
+  }, [activeRaceControlMessage])
+
+  useEffect(() => {
+    if (!isRaceControlMessageExiting) return
+    const timeout = window.setTimeout(() => {
+      setActiveRaceControlMessage(null)
+      setRaceControlMessageExiting(false)
+    }, RACE_CONTROL_MESSAGE_EXIT_DURATION_MS)
+    return () => window.clearTimeout(timeout)
+  }, [isRaceControlMessageExiting])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isSpaceKey(event) || event.repeat || isEditableTarget(event.target) || snapshot.status !== 'ready') return
+      event.preventDefault()
+      if (snapshot.isPlaying) controller.pause()
+      else controller.start()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [controller, snapshot.isPlaying, snapshot.status])
 
   const handleSeekPreview = (event: FormEvent<HTMLInputElement>) => {
     const value = event.currentTarget.valueAsNumber
@@ -89,6 +134,12 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} />,
     },
     {
+      id: 'race-control',
+      label: 'Race control',
+      columns: 1,
+      element: <RaceControlPanel snapshot={snapshot} activeMessage={activeRaceControlMessage} isMessageExiting={isRaceControlMessageExiting} />,
+    },
+    {
       id: 'driver',
       label: 'Driver',
       columns: 1,
@@ -125,6 +176,14 @@ function currentLapNumber(replay: ReturnType<ReplayController['getSnapshot']>['r
 
 function relativeElapsedMs(timeMs: number, startMs: number, endMs: number): number {
   return Math.min(Math.max(timeMs - startMs, 0), Math.max(endMs - startMs, 0))
+}
+
+function isSpaceKey(event: KeyboardEvent): boolean {
+  return event.key === ' ' || event.code === 'Space'
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')
 }
 
 export function selectDriverId(explicitSelectedDriverId: string | null, replay: ReturnType<ReplayController['getSnapshot']>['replay'], drivers: readonly DriverMetadata[]): string | null {

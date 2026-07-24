@@ -179,6 +179,24 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .driver-telemetry-panel__reading { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .4rem .45rem; }
 .driver-telemetry-panel__reading dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .76rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
+.race-control-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; display: grid; gap: .75rem; min-width: 0; overflow: hidden; padding-bottom: .75rem; }
+.race-control-panel__header { background: linear-gradient(105deg, #050607, #171c20); display: grid; gap: .15rem; padding: .7rem; }
+.race-control-panel__eyebrow { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
+.race-control-panel__header h2 { font-size: 1rem; line-height: 1.2; }
+.race-control-panel__status { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 .75rem; }
+.race-control-panel__status-item { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .5rem; }
+.race-control-panel__status-item dt { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.race-control-panel__status-item dd { font-size: .82rem; font-weight: 800; margin: .2rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.race-control-panel__message-region { display: grid; gap: .45rem; margin: 0 .75rem; min-width: 0; }
+.race-control-panel__message { animation: race-control-message-enter 180ms ease-out; background: #071b33; border-left: 4px solid var(--focus); display: grid; gap: .35rem; margin: 0; padding: .65rem .75rem; }
+.race-control-panel__message--penalty { background: #34080a; border-left-color: #ff3138; }
+.race-control-panel__message--exiting { animation: race-control-message-exit 240ms ease-in forwards; }
+.race-control-panel__message-headline { color: #d7eaff; font-family: Oxanium, sans-serif; font-size: .72rem; font-weight: 900; letter-spacing: .06em; margin: 0; text-transform: uppercase; }
+.race-control-panel__message--penalty .race-control-panel__message-headline { color: #ffc2c4; }
+.race-control-panel__message-copy { color: #fff; font-family: Oxanium, sans-serif; font-size: .9rem; font-weight: 800; line-height: 1.35; margin: 0; overflow-wrap: anywhere; text-transform: uppercase; }
+
+@keyframes race-control-message-enter { from { opacity: 0; transform: translateY(-.35rem); } to { opacity: 1; transform: translateY(0); } }
+@keyframes race-control-message-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-.35rem); } }
 
 @media (min-width: 375px) {
   .live-leaderboard__table th, .live-leaderboard__table td { padding-inline: .5rem; }
@@ -214,4 +232,8 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
   .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
   .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
   .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .race-control-panel__message, .race-control-panel__message--exiting { animation: none; }
 }

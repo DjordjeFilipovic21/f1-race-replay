@@ -74,6 +74,24 @@ test('wires icon transport, seek, and speed controls to the controller', async (
   expect(screen.queryByText('Replay samples ready.')).toBeNull()
 })
 
+test('toggles replay playback with Space outside editable controls', () => {
+  const { controller, setSnapshot } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  fireEvent.keyDown(window, { code: 'Space', key: ' ' })
+  expect(controller.start).toHaveBeenCalledOnce()
+
+  act(() => setSnapshot({ ...readySnapshot, isPlaying: true }))
+  fireEvent.keyDown(window, { code: 'Space', key: ' ' })
+  expect(controller.pause).toHaveBeenCalledOnce()
+
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Edit current lap' }), { code: 'Space', key: ' ' })
+  expect(controller.pause).toHaveBeenCalledTimes(2)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Seconds' }))
+  fireEvent.keyDown(screen.getByLabelText('Seconds'), { code: 'Space', key: ' ' })
+  expect(controller.pause).toHaveBeenCalledTimes(2)
+})
+
 test('rewinds and forwards by ten seconds within replay bounds', async () => {
   const user = userEvent.setup()
   const { controller, setSnapshot } = createController({ ...readySnapshot, timeMs: 15_000 })
@@ -121,18 +139,20 @@ test('renders persistent workspace headers in canonical order with definition-dr
     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
+    'replay-panel-frame',
   ])
   expect(screen.getByRole('button', { name: 'Hide Player panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Leaderboard panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Race control panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Driver panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Telemetry panel' }).getAttribute('aria-pressed')).toBe('true')
   const playerPanel = document.querySelector('.replay-control-area')
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('⠿ Track map')
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '2'])
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '2'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1', '1'])
 })
 
 test('hides and restores timestamp and lap navigation with the Player panel', () => {
@@ -154,7 +174,7 @@ test('keeps a collapsed panel frame and its drag handle mounted', () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
 
-  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(5)
+  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(6)
   expect(screen.getByRole('button', { name: 'Move Track map panel' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
 })
@@ -180,6 +200,39 @@ test('hides and restores panels while cleaning up and remounting specialized sub
   fireEvent.click(screen.getByRole('button', { name: 'Show Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
   expect(controller.subscribe).toHaveBeenCalledTimes(5)
+})
+
+test('shows the latest crossed race-control message and clears it on rewind', () => {
+  const crossed = { sessionTimeMs: 1_700, eventType: 'flag', description: 'Yellow flag in sector two' }
+  const { controller, setSnapshot } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  act(() => setSnapshot({ ...readySnapshot, timeMs: 1_800, crossedEvents: [crossed] }))
+  expect(screen.getByText('YELLOW FLAG IN SECTOR TWO')).toBeTruthy()
+
+  act(() => setSnapshot({ ...readySnapshot, timeMs: 1_500, crossedEvents: [] }))
+  expect(screen.queryByText('YELLOW FLAG IN SECTOR TWO')).toBeNull()
+})
+
+test('expires the active race-control message after five seconds of wall time', () => {
+  vi.useFakeTimers()
+  try {
+    const crossed = { sessionTimeMs: 1_700, eventType: 'flag', description: 'Yellow flag in sector two' }
+    const { controller, setSnapshot } = createController(readySnapshot)
+    render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+    act(() => setSnapshot({ ...readySnapshot, timeMs: 1_800, crossedEvents: [crossed] }))
+    expect(screen.getByText('YELLOW FLAG IN SECTOR TWO')).toBeTruthy()
+
+    act(() => vi.advanceTimersByTime(5_000))
+    expect(screen.getByText('YELLOW FLAG IN SECTOR TWO')).toBeTruthy()
+    expect(document.querySelector('[data-state="exiting"]')).toBeTruthy()
+
+    act(() => vi.advanceTimersByTime(240))
+    expect(screen.queryByText('YELLOW FLAG IN SECTOR TWO')).toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 test('shows zero-based replay times while seeking with absolute session times', () => {
@@ -339,6 +392,51 @@ test('seeks elapsed time on group blur and a race lap on Enter', async () => {
   expect(controller.seek).toHaveBeenNthCalledWith(2, 17_500)
 })
 
+test.each([
+  ['Enter', (input: HTMLInputElement) => fireEvent.keyDown(input, { key: 'Enter' })],
+  ['blur', (input: HTMLInputElement) => fireEvent.blur(input, { relatedTarget: null })],
+])('does not seek to a lap start when the unchanged current lap is confirmed with %s', async (_action, commit) => {
+  const user = userEvent.setup()
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['VER'],
+    drivers: { VER: { ...readySnapshot.replay!.drivers.VER, lap: 3 } },
+  }
+  const { controller } = createController({ ...readySnapshot, timeMs: 22_500, replay })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={30_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 20_000 }]} trackAssets={trackAssets} />)
+
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
+  commit(screen.getByLabelText('Current lap') as HTMLInputElement)
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Edit current lap' }).textContent).toBe('3')
+})
+
+test.each([
+  ['Enter', (input: HTMLInputElement) => fireEvent.keyDown(input, { key: 'Enter' })],
+  ['blur', (input: HTMLInputElement) => fireEvent.blur(input, { relatedTarget: null })],
+])('closes an unavailable lap on %s without changing the current replay position', async (_action, commit) => {
+  const user = userEvent.setup()
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['VER'],
+    drivers: { VER: { ...readySnapshot.replay!.drivers.VER, lap: 3 } },
+  }
+  const { controller } = createController({ ...readySnapshot, timeMs: 22_500, replay })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={30_000} drivers={drivers} lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 20_000 }]} trackAssets={trackAssets} />)
+
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
+  const lap = screen.getByLabelText('Current lap')
+  await user.clear(lap)
+  await user.type(lap, '2')
+  commit(lap as HTMLInputElement)
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.queryByLabelText('Current lap')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Edit current lap' }).textContent).toBe('3')
+  expect(screen.getByRole('alert').textContent).toContain('Enter an available race lap')
+})
+
 test('does not seek invalid or out-of-range time and lap values', async () => {
   const user = userEvent.setup()
   const { controller } = createController(readySnapshot)
@@ -348,6 +446,8 @@ test('does not seek invalid or out-of-range time and lap values', async () => {
   const minutes = screen.getByLabelText('Minutes')
   await user.clear(minutes)
   await user.type(minutes, '60{Enter}')
+  expect(screen.queryByLabelText('Minutes')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Edit Minutes' }).textContent).toBe('00')
   await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
   const lap = screen.getByLabelText('Current lap')
   await user.clear(lap)
@@ -355,8 +455,24 @@ test('does not seek invalid or out-of-range time and lap values', async () => {
 
   expect(controller.seek).not.toHaveBeenCalled()
   expect(screen.getAllByRole('alert')).toHaveLength(2)
-  expect(minutes.getAttribute('aria-invalid')).toBe('true')
-  expect(minutes.getAttribute('aria-describedby')).toBe('exact-time-error')
+  expect(screen.getByText('Minutes and seconds must be 0–59; milliseconds must be 0–999.')).toBeTruthy()
+})
+
+test('closes an invalid timestamp on blur while retaining the current replay time', async () => {
+  const user = userEvent.setup()
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} trackAssets={trackAssets} />)
+
+  await user.click(screen.getByRole('button', { name: 'Edit Seconds' }))
+  const seconds = screen.getByLabelText('Seconds')
+  await user.clear(seconds)
+  await user.type(seconds, 'invalid')
+  fireEvent.blur(seconds, { relatedTarget: null })
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.queryByLabelText('Seconds')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Edit Seconds' }).textContent).toBe('00')
+  expect(screen.getByRole('alert').textContent).toContain('Enter numeric hours')
 })
 
 test('keeps inline time seek available and explains unavailable lap navigation', () => {

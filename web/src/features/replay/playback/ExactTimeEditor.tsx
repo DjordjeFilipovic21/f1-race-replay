@@ -52,6 +52,7 @@ export function ExactTimeEditor({ durationMs, elapsedMs, isReady, onSeek, startM
     const elapsed = parseElapsedParts(timePartsRef.current, durationMs)
     if (typeof elapsed === 'string') {
       setTimeError(elapsed)
+      setEditingPart(null)
       return false
     }
     setTimeError(null)
