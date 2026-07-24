@@ -37,9 +37,15 @@ export function ExactLapNavigation({ currentLap, isReady, lapStarts, onSeek }: E
     const marker = Number.isSafeInteger(lap) ? lapStarts?.find((entry) => entry.lap === lap) : undefined
     if (!marker) {
       setLapError('Enter an available race lap.')
+      setIsEditingLap(false)
       return false
     }
     setLapError(null)
+    if (lap === currentLap) {
+      lastLapCommit.current = lapDraft
+      setIsEditingLap(false)
+      return true
+    }
     lastLapCommit.current = lapDraft
     onSeek(marker.startMs)
     setIsEditingLap(false)

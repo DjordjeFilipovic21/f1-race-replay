@@ -24,6 +24,7 @@ test('keeps array position as the canonical workspace reorder order', () => {
 test('validates the Driver panel sortable ID with the registered panel IDs', () => {
   expect(isReplayPanelId('driver')).toBe(true)
   expect(isReplayPanelId('telemetry')).toBe(true)
+  expect(isReplayPanelId('race-control')).toBe(true)
 })
 
 test('updates the dragged panel column while retaining canonical sortable order', () => {
@@ -34,7 +35,7 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry')]).toEqual([1, 2, 4, 1, 1])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry')]).toEqual([1, 2, 4, 1, 1, 1])
 })
 
 test('keeps a collapsed panel in the canonical order when it is shown', () => {
