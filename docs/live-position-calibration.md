@@ -66,7 +66,7 @@ p95/max, backward-jump count, and separate pit-affected-lap population. Run it
 with output enabled to record the exact values from these repository inputs:
 
 ```bash
-.venv/bin/python -m pytest -s pipeline/tests/test_live_position_calibration.py
+.venv/bin/python -m pytest -s pipeline/tests/analysis/live_position/test_live_position_calibration.py
 ```
 
 It skips only the artifact-backed case, with an explicit reason, if these local

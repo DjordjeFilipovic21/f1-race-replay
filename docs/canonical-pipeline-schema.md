@@ -14,7 +14,7 @@ the cache. Use `load_session` when an injected factory should perform the one
 load, or pass an existing loaded session to skip loading entirely:
 
 ```python
-from f1_replay_pipeline.session_loader import load_session
+from f1_replay_pipeline.adapters.fastf1.session_loader import load_session
 
 loaded = load_session(session=preloaded_session)
 # A factory-created session receives all four flags exactly once. The factory

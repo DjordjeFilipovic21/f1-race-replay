@@ -2,7 +2,7 @@
 
 import pytest
 
-from fake_fastf1_session import (
+from fixtures.fake_fastf1_session import (
     SESSION_TABLE_NAMES,
     FakeFastF1Session,
     FakeFastF1SessionFactory,

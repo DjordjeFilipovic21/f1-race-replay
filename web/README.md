@@ -1,8 +1,14 @@
 # F1 Race Replay Web
 
-The web package is a Vite + React shell and a framework-independent TypeScript
-loader for replay-data v1. It intentionally contains no replay clock,
-interpolation, canvas rendering, caching, or replay UI.
+The web package is a Vite + React replay application. It provides a
+framework-independent replay-data v1 loader, a replay engine for clocking,
+sampling, caching, and event delivery, and React feature modules for the
+workspace, playback controls, telemetry, leaderboard, and track map.
+
+The Vite bootstrap at `src/main.tsx` renders the application shell from
+`src/app/App.tsx`. Replay data, engine, and feature modules live in their
+respective `src/data/replay/`, `src/engine/replay/`, and `src/features/replay/`
+packages.
 
 ## Setup
 
@@ -14,7 +20,7 @@ npm run ci
 
 ## Replay-data boundary
 
-`src/replay-data/` accepts an injected asynchronous byte source. Production
+`src/data/replay/` accepts an injected asynchronous byte source. Production
 code can use `createFetchSource(import.meta.env.VITE_REPLAY_DATA_BASE_URL ?? '/replay-data/')`;
 tests use the committed fixture under `../contracts/` directly. The loader
 validates v1 identities, safe relative paths, column alignment, chunk ownership

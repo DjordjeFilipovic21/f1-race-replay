@@ -1,0 +1,73 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { act, render } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { afterEach, expect, test, vi } from 'vitest'
+import App from '../../src/app/App'
+import { loadReplayIndex } from '../../src/data/replay/loader'
+import { createReplayController, type ReplayController, type ReplayControllerSnapshot } from '../../src/engine/replay'
+import type { ReplayIndex, TrackAssets } from '../../src/data/replay/types'
+
+vi.mock('../../src/data/replay/loader', () => ({ loadReplayIndex: vi.fn() }))
+vi.mock('../../src/engine/replay', () => ({ createReplayController: vi.fn() }))
+
+interface Deferred<T> {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((promiseResolve) => { resolve = promiseResolve })
+  return { promise, resolve }
+}
+
+const trackAssets: TrackAssets = {
+  contractVersion: 'v1', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
+  coordinateSpace: { units: 'meters', origin: 'test origin' }, circuitLengthMeters: 1000, rotationDegrees: 0,
+  startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
+  centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+  innerBoundary: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 9, y: 9 }, { x: 1, y: 9 }],
+  outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+}
+
+const index = {
+  manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] },
+  trackAssets,
+} as unknown as ReplayIndex
+
+function createController(): ReplayController {
+  const snapshot: ReplayControllerSnapshot = {
+    status: 'loading', timeMs: 0, speed: 1, isPlaying: false, replay: null, crossedEvents: [], error: null,
+  }
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: () => () => undefined,
+    start: vi.fn(), pause: vi.fn(), seek: vi.fn(), setSpeed: vi.fn(), retry: vi.fn(async () => undefined), dispose: vi.fn(),
+  }
+}
+
+afterEach(() => vi.restoreAllMocks())
+
+test('does not create a controller for StrictMode’s stale index resolution and disposes the active controller', async () => {
+  const firstLoad = createDeferred<ReplayIndex>()
+  const activeLoad = createDeferred<ReplayIndex>()
+  const activeController = createController()
+  const loadReplayIndexMock = vi.mocked(loadReplayIndex)
+  const createReplayControllerMock = vi.mocked(createReplayController)
+  loadReplayIndexMock.mockReturnValueOnce(firstLoad.promise).mockReturnValueOnce(activeLoad.promise)
+  createReplayControllerMock.mockReturnValue(activeController)
+
+  const { unmount } = render(<StrictMode><App /></StrictMode>)
+
+  await act(async () => { firstLoad.resolve(index) })
+  expect(createReplayControllerMock).not.toHaveBeenCalled()
+
+  await act(async () => { activeLoad.resolve(index) })
+  expect(createReplayControllerMock).toHaveBeenCalledOnce()
+  expect(createReplayControllerMock).toHaveBeenCalledWith({ index, coordinateInterpolation: 'smooth' })
+
+  unmount()
+  expect(activeController.dispose).toHaveBeenCalledOnce()
+})

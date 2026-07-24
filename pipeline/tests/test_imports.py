@@ -10,9 +10,9 @@ from textwrap import dedent
 
 PUBLIC_MODULES = (
     "f1_replay_pipeline",
-    "f1_replay_pipeline.canonical_schema",
-    "f1_replay_pipeline.normalizers",
-    "f1_replay_pipeline.validators",
+    "f1_replay_pipeline.domain.canonical_schema",
+    "f1_replay_pipeline.domain.normalizers",
+    "f1_replay_pipeline.domain.validators",
 )
 FORBIDDEN_MODULE_PREFIXES = (
     "src",

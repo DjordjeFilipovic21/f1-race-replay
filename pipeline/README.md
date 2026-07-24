@@ -20,8 +20,8 @@ the local browser-publication schema engine `jsonschema-rs` 0.48.x.
 This initial boundary establishes independent packaging and a deliberately
 small top-level import surface. Importing `f1_replay_pipeline` does not load
 FastF1 or Polars and performs no network, GUI, or OpenGL work. Import the
-specific `canonical_schema`, `normalizers`, or `validators` module when that
-capability is needed.
+specific `domain.canonical_schema`, `domain.normalizers`, or `domain.validators`
+module when that capability is needed.
 
 The foundation now provides explicit canonical schemas, pure time/identifier/
 null normalizers, deterministic sort-and-deduplication, in-memory Polars
@@ -38,12 +38,12 @@ once with all four FastF1 data groups enabled. The factory path may invoke
 FastF1 cache/network behavior.
 
 ```python
-from f1_replay_pipeline.session_loader import load_session
-from f1_replay_pipeline.session_metadata_adapter import (
+from f1_replay_pipeline.adapters.fastf1.session_loader import load_session
+from f1_replay_pipeline.adapters.fastf1.session_metadata import (
     adapt_drivers, adapt_session_metadata,
 )
-from f1_replay_pipeline.car_telemetry_adapter import adapt_car_telemetry
-from f1_replay_pipeline.position_telemetry_adapter import adapt_position_telemetry
+from f1_replay_pipeline.adapters.fastf1.car_telemetry import adapt_car_telemetry
+from f1_replay_pipeline.adapters.fastf1.position_telemetry import adapt_position_telemetry
 
 session = load_session(session=my_preloaded_session)
 # Or: session = load_session(session_factory=lambda: fastf1.get_session(...))
@@ -200,7 +200,7 @@ network, GUI, OpenGL, resampling, or interpolation work.
 ```python
 from pathlib import Path
 
-from f1_replay_pipeline.canonical_writer import (
+from f1_replay_pipeline.storage.canonical_writer import (
     publish_canonical_generation,
     resolve_published_canonical_generation,
 )
@@ -303,7 +303,7 @@ new selected generation; it does not claim the old pointer remains current.
 generation mismatches, missing files, manifest checksum mismatches, invalid
 schemas/row counts, and logical or byte hash mismatches. For startup cleanup,
 import `recover_stale_staging` from
-`f1_replay_pipeline.generation_publication`; it removes only directories whose
+`f1_replay_pipeline.storage.generation_publication`; it removes only directories whose
 names begin with the writer’s known `.canonical-parquet-staging-` prefix, then
 revalidates the current pointer. It never treats arbitrary directories as
 staging and never deletes a published generation; cleanup failures are reported.
@@ -415,10 +415,10 @@ network, GUI, FastF1 loading, or automatic canonical selection is implied.
 ```python
 from pathlib import Path
 
-from f1_replay_pipeline.browser_delivery_orchestration import build_browser_delivery
-from f1_replay_pipeline.browser_delivery_publication import publish_browser_delivery
-from f1_replay_pipeline.browser_delivery_reader import read_validated_canonical_generation
-from f1_replay_pipeline.track_assets_generator import generate_track_assets
+from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import build_browser_delivery
+from f1_replay_pipeline.delivery.browser.browser_delivery_publication import publish_browser_delivery
+from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
+from f1_replay_pipeline.app.track_assets_generator import generate_track_assets
 
 canonical_parent = Path("artifacts/canonical")
 browser_parent = Path("artifacts/browser")
