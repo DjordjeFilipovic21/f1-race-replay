@@ -147,12 +147,10 @@ test('renders an accessible finish flag instead of timing, PIT, or raw status in
 
   const metric = () => within(rowForDriver('VER')).getAllByRole('cell')[2]
   expect(within(metric()).getByRole('img', { name: 'Finished' }).getAttribute('aria-label')).toBe('Finished')
-  expect(metric().textContent).toBe('🏁')
 
   fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
 
   expect(within(metric()).getByRole('img', { name: 'Finished' })).toBeTruthy()
-  expect(metric().textContent).toBe('🏁')
 })
 
 test('keeps a finished P1 leader distinct from OUT rows and in sampled order', () => {

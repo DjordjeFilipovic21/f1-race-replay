@@ -68,7 +68,7 @@ function LeaderboardTableRow({ row, ahead, gapMode, isSelected, onDriverSelect }
       <td className="live-leaderboard__position">{formatPosition(row.position, row.status, row.isFinished)}</td>
       <td className="live-leaderboard__team-accent" aria-label={`Team colour for ${identity}`} />
       <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}><button type="button" aria-label={`Select ${identity}`} aria-pressed={isSelected} title={identity} onClick={() => onDriverSelect?.(row.id)}>{code}</button></th>
-      <td className="live-leaderboard__gap">{formatMetric(row, ahead, gapMode)}</td>
+      <td className={`live-leaderboard__gap${row.isFinished ? ' live-leaderboard__gap--finished' : ''}`}>{formatMetric(row, ahead, gapMode)}</td>
     </tr>
   )
 }
@@ -116,7 +116,7 @@ function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, gapMode
 }
 
 function FinishFlag() {
-  return <span className="live-leaderboard__finish-flag" role="img" aria-label="Finished">🏁</span>
+  return <span className="live-leaderboard__finish-flag" role="img" aria-label="Finished" />
 }
 
 function formatMetricStatus(status: string | null, isInPitLane: boolean | null): string | null {
