@@ -40,7 +40,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest pytest-mock "jsonschema[format-nongpl]>=4.26,<5"
-          python -m pip install --editable ./pipeline
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheelhouse" ./pipeline
+          python -m pip install "$RUNNER_TEMP"/wheelhouse/*.whl
+
+      - name: Smoke-test installed pipeline entry points outside the repository
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c 'import os; from pathlib import Path; import f1_replay_pipeline; assert not Path(f1_replay_pipeline.__file__).resolve().is_relative_to(Path(os.environ["GITHUB_WORKSPACE"]).resolve())'
+          python -m f1_replay_pipeline --help
+          f1-replay-pipeline --help
 
       - name: Run contract, unit, and pipeline tests
         run: python -m pytest tests/contracts pipeline/tests
@@ -82,7 +90,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r legacy/requirements-dev.txt
-          python -m pip install --editable ./pipeline
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheelhouse" ./pipeline
+          python -m pip install "$RUNNER_TEMP"/wheelhouse/*.whl
+
+      - name: Smoke-test installed pipeline entry points outside the repository
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c 'import os; from pathlib import Path; import f1_replay_pipeline; assert not Path(f1_replay_pipeline.__file__).resolve().is_relative_to(Path(os.environ["GITHUB_WORKSPACE"]).resolve())'
+          python -m f1_replay_pipeline --help
+          f1-replay-pipeline --help
 
       - name: Run full test suite
         run: |
