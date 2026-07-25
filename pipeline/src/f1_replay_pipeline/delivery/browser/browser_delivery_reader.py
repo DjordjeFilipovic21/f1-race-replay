@@ -120,7 +120,8 @@ def derive_browser_driver_fields(
         gear=tuple(value[6] for value in values), drs=tuple(value[7] for value in values),
         status=tuple(value[8] for value in values), lap=tuple(value[9] for value in values),
         tyre_compound=tuple(value[10] for value in values),
-        is_in_pit_lane=tuple(value[11] for value in values),
+        tyre_age=tuple(value[11] for value in values),
+        is_in_pit_lane=tuple(value[12] for value in values),
         track_distance_meters=(None,) * count, gap_to_leader_ms=(None,) * count,
         position=(None,) * count,
     )
@@ -161,7 +162,7 @@ def _rows_by_time(rows: tuple[dict[str, object], ...]) -> dict[int, dict[str, ob
 def _field_values(
     time_ms: int, car: dict[int, dict[str, object]], position: dict[int, dict[str, object]],
     lap_row: dict[str, object] | None, pit_intervals: tuple[tuple[int, int | None], ...],
-) -> tuple[float | None, float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, bool | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None, int | None, int | None, int | None, str | None, int | None, str | None, int | None, bool | None]:
     car_row, position_row = car.get(time_ms), position.get(time_ms)
     brake = None if car_row is None or car_row["brake"] is None else int(cast(bool, car_row["brake"]))
     return (
@@ -175,6 +176,7 @@ def _field_values(
         None if position_row is None else cast(str | None, position_row["status"]),
         None if lap_row is None else cast(int | None, lap_row["lap_number"]),
         None if lap_row is None else cast(str | None, lap_row["compound"]),
+        _browser_tyre_age(None if lap_row is None else lap_row["tyre_life"]),
         _pit_state(lap_row, pit_intervals, time_ms),
     )
 
@@ -240,6 +242,10 @@ def _pit_state(
 
 def _browser_gear(value: object) -> int | None:
     return value if type(value) is int and 0 <= value <= 8 else None
+
+
+def _browser_tyre_age(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
 
 
 def _browser_coordinate(value: object) -> float | None:

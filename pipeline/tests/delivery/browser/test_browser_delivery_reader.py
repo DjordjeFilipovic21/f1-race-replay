@@ -54,6 +54,22 @@ def test_field_mapping_uses_exact_timestamp_order_and_preserves_nulls() -> None:
     assert fields.track_distance_meters == (None, None, None)
 
 
+def test_field_mapping_maps_lap_tyre_life_to_aligned_browser_tyre_age() -> None:
+    frames = _frames()
+    frames["laps"] = _laps([
+        _lap(1, 1000, 1100),
+        _lap(2, 1100, 1200),
+    ])
+
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames),
+        "HAM", timeline=(999, 1000, 1099, 1100, 1199, 1200),
+    )
+
+    assert fields.tyre_compound == (None, "SOFT", "SOFT", "SOFT", "SOFT", None)
+    assert fields.tyre_age == (None, 1, 1, 2, 2, None)
+
+
 def test_timeline_summary_uses_final_result_and_terminal_activity_not_position_status() -> None:
     frames = _frames()
     frames["session_metadata"] = pl.DataFrame([{

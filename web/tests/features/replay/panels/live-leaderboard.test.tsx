@@ -135,6 +135,43 @@ test('switches from cumulative leader gaps to intervals between adjacent positio
   expect(rows[2].textContent).toContain('+1.766')
 })
 
+test('renders the selected tyre image and sampled tyre age in Tyres mode', () => {
+  const current = snapshot({
+    drivers: {
+      ...snapshot().drivers,
+      VER: { ...snapshot().drivers.VER, tyreCompound: 'soft', tyreAge: 12 },
+      NOR: { ...snapshot().drivers.NOR, tyreCompound: 'MEDIUM', tyreAge: 3 },
+    },
+  })
+  render(<LiveLeaderboard snapshot={current} drivers={drivers} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
+
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Tyres')
+  expect(within(rowForDriver('VER')).getByRole('img', { name: 'Soft tyre' })).toBeTruthy()
+  expect(within(rowForDriver('VER')).getByText('12 laps')).toBeTruthy()
+  expect(within(rowForDriver('NOR')).getByRole('img', { name: 'Medium tyre' })).toBeTruthy()
+  expect(within(rowForDriver('NOR')).getByText('3 laps')).toBeTruthy()
+})
+
+test('shows an explicit unavailable fallback for missing or unrecognized tyre data', () => {
+  const current = snapshot({
+    drivers: {
+      ...snapshot().drivers,
+      VER: { ...snapshot().drivers.VER, tyreCompound: 'UNKNOWN', tyreAge: 4 },
+      NOR: { ...snapshot().drivers.NOR, tyreCompound: 'MEDIUM', tyreAge: null },
+    },
+  })
+  render(<LiveLeaderboard snapshot={current} drivers={drivers} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
+
+  expect(within(rowForDriver('VER')).getByRole('cell', { name: 'Tyres unavailable' }).textContent).toBe('Unavailable')
+  expect(within(rowForDriver('VER')).queryByRole('img')).toBeNull()
+  expect(within(rowForDriver('NOR')).getByRole('cell', { name: 'Tyres unavailable' }).textContent).toBe('Unavailable')
+  expect(within(rowForDriver('NOR')).queryByRole('img')).toBeNull()
+})
+
 test('renders an accessible finish flag instead of timing, PIT, or raw status in both gap modes', () => {
   const current = snapshot({
     drivers: {
@@ -149,6 +186,10 @@ test('renders an accessible finish flag instead of timing, PIT, or raw status in
   expect(within(metric()).getByRole('img', { name: 'Finished' }).getAttribute('aria-label')).toBe('Finished')
 
   fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
+
+  expect(within(metric()).getByRole('img', { name: 'Finished' })).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
 
   expect(within(metric()).getByRole('img', { name: 'Finished' })).toBeTruthy()
 })

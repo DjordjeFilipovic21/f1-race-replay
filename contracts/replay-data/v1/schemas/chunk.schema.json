@@ -282,6 +282,19 @@
             ]
           }
         },
+        "tyreAge": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/nullableInteger"
+              },
+              {
+                "minimum": 0
+              }
+            ]
+          }
+        },
         "status": {
           "type": "array",
           "items": {

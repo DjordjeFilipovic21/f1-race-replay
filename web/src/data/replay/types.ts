@@ -119,6 +119,8 @@ export interface DriverColumns {
   readonly gapToLeaderMs: readonly DerivedGapToLeaderMs[]; readonly lap: readonly (number | null)[]
   readonly position: readonly DerivedPosition[]; readonly gear: readonly (number | null)[]
   readonly drs: readonly (number | null)[]; readonly tyreCompound: readonly (string | null)[]
+  /** Optional in v1 payloads; legacy chunks are normalized to nullable values by the guard. */
+  readonly tyreAge?: readonly (number | null)[]
   readonly status: readonly (string | null)[]; readonly isInPitLane: readonly (boolean | null)[]
   /** Optional in v1 payloads; legacy chunks are normalized to nullable values by the guard. */
   readonly isFinished?: readonly (boolean | null)[]

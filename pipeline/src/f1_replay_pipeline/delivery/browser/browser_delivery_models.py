@@ -82,6 +82,7 @@ class BrowserDriverFields:
     position: tuple[int | None, ...]
     rpm: tuple[float | None, ...] = ()
     is_finished: tuple[bool | None, ...] = ()
+    tyre_age: tuple[int | None, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.driver_id, str) or not self.driver_id:
@@ -95,12 +96,14 @@ class BrowserDriverFields:
             object.__setattr__(self, "rpm", (None,) * size)
         if self.is_finished == ():
             object.__setattr__(self, "is_finished", (None,) * size)
+        if self.tyre_age == ():
+            object.__setattr__(self, "tyre_age", (None,) * size)
         fields = (
             self.x, self.y, self.speed, self.throttle, self.brake, self.gear,
             self.drs, self.status, self.lap, self.tyre_compound,
             self.is_in_pit_lane, self.track_distance_meters,
             self.gap_to_leader_ms, self.position,
-            self.rpm, self.is_finished,
+            self.rpm, self.is_finished, self.tyre_age,
         )
         if any(not isinstance(field, tuple) or len(field) != size for field in fields):
             raise ValueError("every browser field must be a tuple aligned to time_ms")
@@ -108,8 +111,10 @@ class BrowserDriverFields:
             raise TypeError("continuous driver fields must contain finite floats or null")
         if any(value not in (None, 0, 1) for value in self.brake):
             raise ValueError("brake must contain 0, 1, or null")
-        if any(value is not None and type(value) is not int for field in (self.gear, self.drs, self.lap) for value in field):
+        if any(value is not None and type(value) is not int for field in (self.gear, self.drs, self.lap, self.tyre_age) for value in field):
             raise TypeError("discrete driver fields must contain integers or null")
+        if any(value is not None and value < 0 for value in self.tyre_age):
+            raise ValueError("tyre age must contain non-negative integers or null")
         if any(value is not None and not isinstance(value, str) for field in (self.status, self.tyre_compound) for value in field):
             raise TypeError("categorical driver fields must contain strings or null")
         if any(value is not None and type(value) is not bool for value in self.is_in_pit_lane):

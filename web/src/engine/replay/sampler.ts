@@ -3,7 +3,7 @@ import { createAuthoritativeTimeline } from './timeline'
 import type { AuthoritativeTimeline, DriverSnapshot, SampledReplaySnapshot } from './types'
 
 const CONTINUOUS_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'rpm', 'throttle', 'gapToLeaderMs'] as const
-const STEP_FIELDS = ['lap', 'position', 'gear', 'brake', 'drs', 'tyreCompound', 'status', 'isInPitLane', 'isFinished'] as const
+const STEP_FIELDS = ['lap', 'position', 'gear', 'brake', 'drs', 'tyreCompound', 'tyreAge', 'status', 'isInPitLane', 'isFinished'] as const
 const MAX_INTERPOLATION_INTERVAL_MS = 1_000
 const MAX_POSITION_INTERPOLATION_INTERVAL_MS = 1_500
 const SMOOTH_FILTER_WINDOW_MS = 1_250
@@ -118,7 +118,7 @@ function sampleDriver(driver: PreparedDriver, timeMs: number, circuitLengthMeter
   const step = <T,>(field: StepField): T | null => previousValue(driver.step[field], timeMs) as T | null
   return Object.freeze({
     x: interpolateCoordinate(driver, 'x', timeMs, coordinateInterpolation), y: interpolateCoordinate(driver, 'y', timeMs, coordinateInterpolation), trackDistanceMeters: interpolateCircuitDistance(driver.continuous.trackDistanceMeters, timeMs, circuitLengthMeters), speed: continuous('speed'), rpm: continuous('rpm'), throttle: continuous('throttle'), brake: step<number>('brake'), gapToLeaderMs: continuous('gapToLeaderMs'),
-    lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'), isFinished: step<boolean>('isFinished'),
+    lap: step<number>('lap'), position: step<number>('position'), gear: step<number>('gear'), drs: step<number>('drs'), tyreCompound: step<string>('tyreCompound'), tyreAge: step<number>('tyreAge'), status: step<string>('status'), isInPitLane: step<boolean>('isInPitLane'), isFinished: step<boolean>('isFinished'),
   })
 }
 

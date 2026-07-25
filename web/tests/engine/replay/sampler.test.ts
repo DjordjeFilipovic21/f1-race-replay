@@ -148,6 +148,12 @@ describe('replay-engine sampler', () => {
     expect(sampleReplayAt(replay, 500).drivers.HAM.brake).toBe(0)
   })
 
+  test('samples tyre age as a previous discrete value between lap observations', () => {
+    const replay = syntheticReplay([0, 10], [0, 1_000], { tyreAge: [4, 5] })
+
+    expect([0, 500, 1_000, 1_500].map((timeMs) => sampleReplayAt(replay, timeMs).drivers.HAM.tyreAge)).toEqual([4, 4, 5, 5])
+  })
+
   test('samples isFinished before, at, and after its exact finish boundary', () => {
     const replay = syntheticReplay([0, 10], [0, 1_000], { isFinished: [false, true] })
 

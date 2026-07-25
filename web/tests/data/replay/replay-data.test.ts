@@ -150,6 +150,7 @@ describe('replay-data v1 loader', () => {
     })
     const chunk = await (await loadReplayIndex({ source })).loadChunk(1)
     expect(chunk.drivers.HAM.rpm).toEqual([null, null, null])
+    expect(chunk.drivers.HAM.tyreAge).toEqual([null, null, null])
   })
 
   test('accepts an optional nullable RPM column and preserves aligned values', async () => {
@@ -189,6 +190,27 @@ describe('replay-data v1 loader', () => {
     expect(replay.chunks[0].drivers.RUS.isFinished).toEqual([null, null, null])
     expect(replay.chunks[1].drivers.HAM.isFinished).toEqual([true, null, null])
     expect(replay.chunks[1].drivers.RUS.isFinished).toEqual([null, null, null])
+  })
+
+  test('accepts an optional nullable tyre age column and preserves aligned values', async () => {
+    const source = mutateFixtures({
+      'chunks/chunk-001.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { tyreAge?: unknown[] }> }
+        value.drivers.HAM.tyreAge = [4, null, 5]
+        value.drivers.RUS.tyreAge = [null, 3, null]
+      },
+      'chunks/chunk-002.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { tyreAge?: unknown[] }> }
+        value.drivers.HAM.tyreAge = [5, 6, null]
+        value.drivers.RUS.tyreAge = [null, null, 4]
+      },
+    })
+
+    const replay = await loadReplayData({ source })
+
+    expect(replay.chunks[0].drivers.HAM.tyreAge).toEqual([4, null, 5])
+    expect(replay.chunks[0].drivers.RUS.tyreAge).toEqual([null, 3, null])
+    expect(replay.chunks[1].drivers.HAM.tyreAge).toEqual([5, 6, null])
   })
 
   test('rejects an RPM column with non-finite values', async () => {

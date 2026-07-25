@@ -135,6 +135,29 @@ def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tm
     assert chunks[1]["drivers"]["HAM"]["rpm"] == [None, 12_000.0, 12_500.0, None]
 
 
+def test_browser_delivery_serializes_canonical_tyre_life_as_aligned_tyre_age(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _canonical_frames()
+    frames["laps"] = frames["laps"].with_columns(pl.lit(7, dtype=pl.Int16).alias("tyre_life"))
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1", delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    serialized = _load_json(published.chunk_paths[0])
+    times = cast(list[int], serialized["timeMs"])
+    serialized_drivers = cast(dict[str, dict[str, object]], serialized["drivers"])
+
+    assert delivery.chunks[0].drivers["HAM"].tyre_age == (7,) * len(delivery.chunks[0].time_ms)
+    assert serialized_drivers["HAM"]["tyreAge"] == [7] * len(times)
+
+
 def test_browser_publication_rejects_an_unsafe_version_before_creating_output(
     tmp_path: Path,
 ) -> None:

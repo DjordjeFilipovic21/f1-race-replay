@@ -1,8 +1,14 @@
 import { memo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DriverMetadata } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
+import hardTyreImage from '../../../assets/tyres/hard.png'
+import intermediateTyreImage from '../../../assets/tyres/intermediate.png'
+import mediumTyreImage from '../../../assets/tyres/medium.png'
+import softTyreImage from '../../../assets/tyres/soft.png'
+import wetTyreImage from '../../../assets/tyres/wet.png'
 
-type GapMode = 'leader' | 'interval'
+type MetricMode = 'leader' | 'interval' | 'tyres'
+type TyreCompound = 'SOFT' | 'MEDIUM' | 'HARD' | 'INTERMEDIATE' | 'WET'
 
 export interface LiveLeaderboardProps {
   readonly snapshot: ReplaySnapshot | null
@@ -16,6 +22,8 @@ interface LeaderboardRow {
   readonly metadata: DriverMetadata | null
   readonly position: number | null
   readonly gapToLeaderMs: number | null
+  readonly tyreCompound: string | null
+  readonly tyreAge: number | null
   readonly status: string | null
   readonly isInPitLane: boolean | null
   readonly isFinished: boolean
@@ -23,15 +31,16 @@ interface LeaderboardRow {
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
 export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect }: LiveLeaderboardProps) {
-  const [gapMode, setGapMode] = useState<GapMode>('leader')
+  const [metricMode, setMetricMode] = useState<MetricMode>('leader')
   const rows = createLeaderboardRows(snapshot, drivers)
 
   return (
     <section className="live-leaderboard" aria-label="Leaderboard">
       <header className="live-leaderboard__header">
         <div className="live-leaderboard__gap-toggle" role="group" aria-label="Gap display">
-          <button type="button" aria-pressed={gapMode === 'leader'} onClick={() => setGapMode('leader')}>Leader</button>
-          <button type="button" aria-pressed={gapMode === 'interval'} onClick={() => setGapMode('interval')}>Interval</button>
+          <button type="button" aria-pressed={metricMode === 'leader'} onClick={() => setMetricMode('leader')}>Leader</button>
+          <button type="button" aria-pressed={metricMode === 'interval'} onClick={() => setMetricMode('interval')}>Interval</button>
+          <button type="button" aria-pressed={metricMode === 'tyres'} onClick={() => setMetricMode('tyres')}>Tyres</button>
         </div>
       </header>
       {snapshot === null ? (
@@ -48,10 +57,10 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
             <col className="live-leaderboard__column--metric" />
           </colgroup>
           <thead>
-            <tr><th scope="col">Position</th><th scope="col">Team colour</th><th scope="col">Driver</th><th scope="col">{gapMode === 'leader' ? 'Leader gap' : 'Interval'}</th></tr>
+            <tr><th scope="col">Position</th><th scope="col">Team colour</th><th scope="col">Driver</th><th scope="col">{metricMode === 'leader' ? 'Leader gap' : metricMode === 'interval' ? 'Interval' : 'Tyres'}</th></tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} gapMode={gapMode} isSelected={row.id === selectedDriverId} onDriverSelect={onDriverSelect} />)}
+            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} metricMode={metricMode} isSelected={row.id === selectedDriverId} onDriverSelect={onDriverSelect} />)}
           </tbody>
         </table>
       )}
@@ -59,7 +68,7 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
   )
 })
 
-function LeaderboardTableRow({ row, ahead, gapMode, isSelected, onDriverSelect }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly gapMode: GapMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined }) {
+function LeaderboardTableRow({ row, ahead, metricMode, isSelected, onDriverSelect }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly metricMode: MetricMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined }) {
   const identity = row.metadata?.displayName ?? row.id
   const code = row.metadata?.id ?? row.id
   const terminal = isTerminalRow(row)
@@ -68,7 +77,7 @@ function LeaderboardTableRow({ row, ahead, gapMode, isSelected, onDriverSelect }
       <td className="live-leaderboard__position">{formatPosition(row.position, row.status, row.isFinished)}</td>
       <td className="live-leaderboard__team-accent" aria-label={`Team colour for ${identity}`} />
       <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}><button type="button" aria-label={`Select ${identity}`} aria-pressed={isSelected} title={identity} onClick={() => onDriverSelect?.(row.id)}>{code}</button></th>
-      <td className={`live-leaderboard__gap${row.isFinished ? ' live-leaderboard__gap--finished' : ''}`}>{formatMetric(row, ahead, gapMode)}</td>
+      <td className={`live-leaderboard__gap${row.isFinished ? ' live-leaderboard__gap--finished' : ''}`}>{formatMetric(row, ahead, metricMode)}</td>
     </tr>
   )
 }
@@ -102,21 +111,52 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
     metadata,
     position: sampled?.position ?? null,
     gapToLeaderMs: sampled?.gapToLeaderMs ?? null,
+    tyreCompound: sampled?.tyreCompound ?? null,
+    tyreAge: sampled?.tyreAge ?? null,
     status: sampled?.status ?? null,
     isInPitLane: sampled?.isInPitLane ?? null,
     isFinished: sampled?.isFinished === true,
   }
 }
 
-function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, gapMode: GapMode): ReactNode {
+function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, metricMode: MetricMode): ReactNode {
   if (row.isFinished) return <FinishFlag />
+  if (metricMode === 'tyres') return formatTyreMetric(row.tyreCompound, row.tyreAge)
   const status = formatMetricStatus(row.status, row.isInPitLane)
   if (status !== null) return status
-  return gapMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs) : formatIntervalGap(row, ahead)
+  return metricMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs) : formatIntervalGap(row, ahead)
 }
 
 function FinishFlag() {
   return <span className="live-leaderboard__finish-flag" role="img" aria-label="Finished" />
+}
+
+const TYRE_IMAGES: Readonly<Record<TyreCompound, string>> = {
+  SOFT: softTyreImage,
+  MEDIUM: mediumTyreImage,
+  HARD: hardTyreImage,
+  INTERMEDIATE: intermediateTyreImage,
+  WET: wetTyreImage,
+}
+const TYRE_UNAVAILABLE = 'Unavailable'
+
+function formatTyreMetric(tyreCompound: string | null, tyreAge: number | null): ReactNode {
+  const compound = tyreCompound?.trim().toUpperCase() as TyreCompound | undefined
+  const image = compound === undefined ? undefined : TYRE_IMAGES[compound]
+  if (compound === undefined || image === undefined || typeof tyreAge !== 'number' || !Number.isSafeInteger(tyreAge) || tyreAge < 0) {
+    return <span className="live-leaderboard__tyre-unavailable" aria-label="Tyres unavailable">{TYRE_UNAVAILABLE}</span>
+  }
+  const label = `${compound.charAt(0)}${compound.slice(1).toLowerCase()} tyre`
+  return (
+    <span className="live-leaderboard__tyre" aria-label={`${label}, ${formatTyreAge(tyreAge)}`}>
+      <img className="live-leaderboard__tyre-image" src={image} alt={label} />
+      <span className="live-leaderboard__tyre-age">{formatTyreAge(tyreAge)}</span>
+    </span>
+  )
+}
+
+function formatTyreAge(age: number): string {
+  return `${age} lap${age === 1 ? '' : 's'}`
 }
 
 function formatMetricStatus(status: string | null, isInPitLane: boolean | null): string | null {

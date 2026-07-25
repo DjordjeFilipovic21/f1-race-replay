@@ -13,6 +13,7 @@ interface DriverSnapshotFields {
   readonly gear: number | null
   readonly drs: number | null
   readonly tyreCompound: string | null
+  readonly tyreAge?: number | null
   readonly status: string | null
   readonly isInPitLane: boolean | null
 }
