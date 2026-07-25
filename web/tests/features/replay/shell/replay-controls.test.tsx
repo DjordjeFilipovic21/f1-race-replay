@@ -47,6 +47,7 @@ const readySnapshot: ReplayControllerSnapshot = {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -156,10 +157,12 @@ test('renders persistent workspace headers in canonical order with definition-dr
 })
 
 test('hides and restores timestamp and lap navigation with the Player panel', () => {
+  vi.useFakeTimers()
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Player panel' }))
+  act(() => vi.advanceTimersByTime(240))
   expect(screen.queryByLabelText('Replay time')).toBeNull()
   expect(screen.queryByLabelText('Lap navigation')).toBeNull()
 
@@ -180,10 +183,12 @@ test('keeps a collapsed panel frame and its drag handle mounted', () => {
 })
 
 test('hides and restores panels while cleaning up and remounting specialized subscriptions', () => {
+  vi.useFakeTimers()
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
+  act(() => vi.advanceTimersByTime(240))
   expect(screen.queryByRole('group', { name: 'Test Circuit live track map' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
   expect(getUnsubscribeCalls()).toBe(1)
@@ -194,6 +199,7 @@ test('hides and restores panels while cleaning up and remounting specialized sub
   expect(controller.subscribe).toHaveBeenCalledTimes(4)
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Leaderboard panel' }))
+  act(() => vi.advanceTimersByTime(240))
   expect(screen.queryByRole('table')).toBeNull()
   expect(getUnsubscribeCalls()).toBe(2)
 

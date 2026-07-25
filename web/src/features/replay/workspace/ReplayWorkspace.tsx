@@ -30,6 +30,9 @@ export interface ReplayWorkspaceProps {
 
 type ReplayPanelFrameStyle = CSSProperties & Readonly<Record<'--replay-panel-columns' | '--replay-panel-row-span' | '--replay-panel-tablet-column' | '--replay-panel-desktop-column', number>>
 type ReplayDropPreviewStyle = CSSProperties & Readonly<Record<'--replay-preview-column' | '--replay-preview-columns' | '--replay-preview-row' | '--replay-preview-row-span' | '--replay-preview-column-count', number>>
+type PanelContentVisibility = 'visible' | 'entering' | 'exiting' | 'hidden'
+
+const PANEL_VISIBILITY_DURATION_MS = 240
 
 interface DragMoveState {
   readonly id: ReplayPanelId
@@ -283,6 +286,7 @@ function isSameGhostSlot(left: GhostSlot | null, right: GhostSlot | null): boole
 }
 
 function ReplayPanelFrame({ panel, visible, index, rowSpan, desktopColumnStart, isDragging, onMeasure, onPanelElement, onToggle }: { readonly panel: ReplayWorkspacePanel; readonly visible: boolean; readonly index: number; readonly rowSpan: number; readonly desktopColumnStart: number; readonly isDragging: boolean; readonly onMeasure: (id: ReplayPanelId, height: number) => void; readonly onPanelElement: (id: ReplayPanelId, element: HTMLElement | null) => void; readonly onToggle: () => void }) {
+  const contentVisibility = usePanelContentVisibility(visible)
   const style: ReplayPanelFrameStyle = {
     '--replay-panel-columns': panel.columns,
     '--replay-panel-row-span': rowSpan,
@@ -290,8 +294,30 @@ function ReplayPanelFrame({ panel, visible, index, rowSpan, desktopColumnStart, 
     '--replay-panel-desktop-column': responsiveColumnStart(desktopColumnStart, panel.columns, 4),
   }
   return <SortablePanel id={panel.id} index={index} className="replay-panel-frame" style={style} label={panel.label} visible={visible} isDragging={isDragging} onMeasure={onMeasure} onPanelElement={onPanelElement} onToggle={onToggle}>
-    {visible && <div className="replay-panel-frame__body">{panel.element}</div>}
+    {contentVisibility !== 'hidden' && <div className={`replay-panel-frame__body${contentVisibility === 'entering' ? ' replay-panel-frame__body--entering' : contentVisibility === 'exiting' ? ' replay-panel-frame__body--exiting' : ''}`} aria-hidden={contentVisibility === 'exiting'} inert={contentVisibility === 'exiting'}>{panel.element}</div>}
   </SortablePanel>
+}
+
+function usePanelContentVisibility(visible: boolean): PanelContentVisibility {
+  const [contentVisibility, setContentVisibility] = useState<PanelContentVisibility>(visible ? 'visible' : 'hidden')
+
+  useEffect(() => {
+    if (visible) {
+      setContentVisibility((current) => current === 'hidden' ? 'entering' : 'visible')
+      return
+    }
+    setContentVisibility((current) => current === 'hidden' ? current : 'exiting')
+    const timer = window.setTimeout(() => setContentVisibility('hidden'), PANEL_VISIBILITY_DURATION_MS)
+    return () => window.clearTimeout(timer)
+  }, [visible])
+
+  useEffect(() => {
+    if (contentVisibility !== 'entering') return
+    const frame = window.requestAnimationFrame(() => setContentVisibility('visible'))
+    return () => window.cancelAnimationFrame(frame)
+  }, [contentVisibility])
+
+  return contentVisibility
 }
 
 function SortablePanel({ id, index, className, style, label, visible, isDragging, onMeasure, onPanelElement, onToggle, children }: { readonly id: ReplayPanelId; readonly index: number; readonly className: string; readonly style: CSSProperties; readonly label: string; readonly visible: boolean; readonly isDragging: boolean; readonly onMeasure: (id: ReplayPanelId, height: number) => void; readonly onPanelElement: (id: ReplayPanelId, element: HTMLElement | null) => void; readonly onToggle: () => void; readonly children: ReactNode }) {
@@ -313,7 +339,7 @@ function SortablePanel({ id, index, className, style, label, visible, isDragging
     onPanelElement(id, element)
   }
 
-  return <section ref={setPanelRef} className={`${className}${isDragging || isDropping ? ' replay-panel-frame--drag-source' : ''}`} style={style} aria-label={label}>
+  return <section ref={setPanelRef} className={`${className}${visible ? '' : ' replay-panel-frame--hidden'}${isDragging || isDropping ? ' replay-panel-frame--drag-source' : ''}`} style={style} aria-label={label}>
     <header className="replay-panel-frame__header">
       <button ref={handleRef} className="replay-panel-drag-handle" type="button" aria-label={`Move ${label} panel`}><span aria-hidden="true">⠿</span> {label}</button>
       <button className="replay-workspace-toggle" type="button" aria-label={`${visible ? 'Hide' : 'Show'} ${label} panel`} aria-pressed={visible} onClick={onToggle}>{visible ? 'Hide' : 'Show'}</button>
