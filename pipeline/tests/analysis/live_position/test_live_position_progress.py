@@ -100,6 +100,25 @@ def test_terminal_modes_freeze_last_valid_progress_indefinitely(mode):
     assert update.race_progress_meters == 100.0 and update.is_terminal is True
 
 
+def test_finished_mode_freezes_progress_without_becoming_terminal_or_out():
+    first = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(100.0), mode=ProgressMode.ACTIVE,
+    )
+    finished = advance_progress(
+        first.state, session_time_ms=100, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(200.0), mode=ProgressMode.FINISHED,
+    )
+    stale = advance_progress(
+        finished.state, session_time_ms=2_000, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(900.0), mode=ProgressMode.FINISHED,
+    )
+
+    assert finished.mode is ProgressMode.FINISHED
+    assert finished.state.finished is True and finished.is_terminal is False
+    assert stale.race_progress_meters == finished.race_progress_meters == 200.0
+
+
 def test_lap_regression_and_skipped_lap_fail_closed():
     first = advance_progress(ProgressState(), session_time_ms=0, lap_number=2, circuit_length_meters=LENGTH, projection=_projection(100.0), mode=ProgressMode.ACTIVE)
     regression = advance_progress(first.state, session_time_ms=1, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(100.0), mode=ProgressMode.ACTIVE)

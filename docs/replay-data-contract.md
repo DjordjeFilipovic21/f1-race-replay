@@ -28,10 +28,12 @@ canonical observations.
 ## v1 fields and compatibility
 
 Driver columns retain the nullable v1 shape, including
-`trackDistanceMeters`, `gapToLeaderMs`, and `position`. Existing null-only
-generations remain valid and replayable. `null` means unavailable; consumers
-must not replace it with zero, a previous value, a categorical guess, or a
-fabricated retirement.
+`trackDistanceMeters`, `gapToLeaderMs`, `position`, and the optional browser-
+derived `isFinished` field. `isFinished` is a nullable boolean array when
+present; `true` marks a conservatively derived genuine completion, while
+`null` means that completion is unavailable. The field may be absent from old
+chunks, which remain valid and replayable. Consumers must not replace `null`
+with zero, a previous value, a categorical guess, or a fabricated retirement.
 
 `lapStarts` is optional manifest navigation metadata. Each `{lap, startMs}`
 entry is immutable, has a positive lap and non-negative absolute timestamp,
@@ -109,8 +111,11 @@ Timing-lap boundaries and geometric origin may differ.
 - Pit and terminal modes freeze progress and receive no artificial penalty.
 - Active projection freshness is `< 1,000 ms`; at the 1,000 ms stale boundary
   progress becomes null. `OffTrack` is not terminal.
-- Terminal inference from final results is conservative and follows the final
-  position sample.
+- Finish inference is conservative: a driver is marked finished only when
+  final results identify a completion and completed-lap data supplies the
+  corresponding finish boundary. The derived finish time follows the final
+  position sample; `isFinished` is distinct from `OUT` and does not rewrite
+  the raw `status`.
 - `status` is exactly `position_telemetry.status`. It is not a retirement
   classifier, and the UI must not fabricate `OUT`.
 
@@ -125,9 +130,11 @@ coordinates (`x`, `y`) permit bounds up to 1,500 ms to bridge bounded global
 position-telemetry gaps; `trackDistanceMeters`, speed, throttle, brake, and gap
 retain the 1,000 ms cap. Track distance uses circular interpolation across an approved
 wrap; an invalid large backward jump returns null. Position, order, lap,
-status, pit state, tyre, and other discrete/categorical fields use previous
-semantics. The sampled current leader is normalized to zero gap. Direct sample,
-playback, and seek at the same absolute time must agree.
+status, pit state, tyre, `isFinished`, and other discrete/categorical fields use
+previous-value semantics. Thus, once sampled true, `isFinished` remains true
+for later times; it is never interpolated. The sampled current leader is
+normalized to zero gap. Direct sample, playback, and seek at the same absolute
+time must agree.
 
 ## Events and arrays
 
@@ -141,15 +148,22 @@ authoritative observations.
 ```ts
 const snapshot = sampleReplayAt(replay, absoluteSessionTimeMs)
 const row = snapshot.drivers['HAM']
-// row.position and row.gapToLeaderMs may be null; preserve that state in UI.
+// row.isFinished may be null when the optional field is unavailable.
+// A finished row keeps its progress and dynamic order.
+if (row.isFinished === true) renderFinishFlag()
 ```
 
-The dedicated responsive leaderboard uses live order when available, `PIT` from
-`isInPitLane`, raw exact status otherwise, and explicit unavailable markers.
+The dedicated responsive leaderboard uses live order when available, preserves
+finished drivers in that order, and renders an accessible finish flag when
+`isFinished === true` instead of `GAP`, `Leader`, or `Interval`. Otherwise it
+uses `PIT` from `isInPitLane`, raw exact status, and explicit unavailable
+markers. Finished is not `OUT`; stale or later `OffTrack` telemetry must not
+displace a finished driver or lower a finished leader from P1.
 
 ## Current limitations
 
 The one-race Bahrain calibration is provisional pending a multi-circuit corpus.
-Gap results depend on available leader history. Terminal timing is inferred only
-after the final position sample. These limits do not invalidate legacy null-only
-v1 artifacts.
+Gap results depend on available leader history. Finish timing is inferred only
+after the final position sample and requires both completion evidence and
+completed-lap data. These limits do not invalidate legacy chunks that omit the
+optional `isFinished` field.

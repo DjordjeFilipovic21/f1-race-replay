@@ -23,6 +23,7 @@ MIN_GEOMETRIC_WRAP_DECREASE_RATIO = 0.80
 class ProgressMode(str, Enum):
     ACTIVE = "active"
     PIT = "pit"
+    FINISHED = "finished"
     RETIRED = "retired"
     OUT = "out"
 
@@ -32,6 +33,7 @@ class ProgressReason(str, Enum):
     MISSING_PROJECTION = "missing_projection"
     STALE_PROJECTION = "stale_projection"
     PIT_FROZEN = "pit_frozen"
+    FINISHED_FROZEN = "finished_frozen"
     TERMINAL_FROZEN = "terminal_frozen"
     LAP_REGRESSION = "lap_regression"
     INVALID_LAP_TRANSITION = "invalid_lap_transition"
@@ -51,6 +53,7 @@ class ProgressState:
     within_lap_offset_meters: float = 0.0
     terminal_mode: ProgressMode | None = None
     failure_reason: ProgressReason | None = None
+    finished: bool = False
 
     def __post_init__(self) -> None:
         if self.last_session_time_ms is not None and (type(self.last_session_time_ms) is not int or self.last_session_time_ms < 0):
@@ -75,6 +78,8 @@ class ProgressState:
             raise ValueError("terminal_mode must be retired, out, or None")
         if self.failure_reason is not None and not isinstance(self.failure_reason, ProgressReason):
             raise TypeError("failure_reason must be ProgressReason or None")
+        if type(self.finished) is not bool:
+            raise TypeError("finished must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -106,9 +111,13 @@ def advance_progress(
     _validate_input(state, session_time_ms, lap_number, circuit_length_meters, projection, mode)
     if state.terminal_mode is not None:
         return _terminal(state, state.terminal_mode)
+    if state.finished:
+        return _finished(state, ProgressMode.FINISHED)
     if mode in (ProgressMode.RETIRED, ProgressMode.OUT):
         terminal = _replace(state, last_session_time_ms=session_time_ms, terminal_mode=mode)
         return _terminal(terminal, mode)
+    if mode is ProgressMode.FINISHED:
+        return _finish(state, session_time_ms, lap_number, circuit_length_meters, projection)
     if mode is ProgressMode.PIT:
         return _pit(_replace(state, last_session_time_ms=session_time_ms), mode)
     if projection is None:
@@ -200,6 +209,31 @@ def _pit(state, mode):
     if state.last_valid_progress_meters is None:
         return _unknown(state, mode, ProgressReason.MISSING_PROJECTION)
     return ProgressUpdate(state, mode, None, state.last_valid_progress_meters, True, False, ProgressReason.PIT_FROZEN)
+
+
+def _finish(state, time_ms, lap, length, projection):
+    if projection is None:
+        return _finished(_replace(state, last_session_time_ms=time_ms, finished=True), ProgressMode.FINISHED)
+    candidate = _active(state, time_ms, lap, length, projection, ProgressMode.FINISHED)
+    if candidate.race_progress_meters is None:
+        return _finished(_replace(state, last_session_time_ms=time_ms, finished=True), ProgressMode.FINISHED)
+    if (
+        state.last_valid_progress_meters is not None
+        and candidate.race_progress_meters < state.last_valid_progress_meters
+    ):
+        return _finished(_replace(state, last_session_time_ms=time_ms, finished=True), ProgressMode.FINISHED)
+    finished_state = _replace(candidate.state, finished=True)
+    return ProgressUpdate(
+        finished_state, ProgressMode.FINISHED, candidate.track_distance_meters,
+        candidate.race_progress_meters, True, False, ProgressReason.FINISHED_FROZEN,
+    )
+
+
+def _finished(state, mode):
+    return ProgressUpdate(
+        state, mode, None, state.last_valid_progress_meters, True, False,
+        ProgressReason.FINISHED_FROZEN,
+    )
 
 
 def _terminal(state, mode):

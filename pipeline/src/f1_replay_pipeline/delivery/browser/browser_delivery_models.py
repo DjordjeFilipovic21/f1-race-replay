@@ -81,6 +81,7 @@ class BrowserDriverFields:
     gap_to_leader_ms: tuple[float | None, ...]
     position: tuple[int | None, ...]
     rpm: tuple[float | None, ...] = ()
+    is_finished: tuple[bool | None, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.driver_id, str) or not self.driver_id:
@@ -92,12 +93,14 @@ class BrowserDriverFields:
         size = len(self.time_ms)
         if self.rpm == ():
             object.__setattr__(self, "rpm", (None,) * size)
+        if self.is_finished == ():
+            object.__setattr__(self, "is_finished", (None,) * size)
         fields = (
             self.x, self.y, self.speed, self.throttle, self.brake, self.gear,
             self.drs, self.status, self.lap, self.tyre_compound,
             self.is_in_pit_lane, self.track_distance_meters,
             self.gap_to_leader_ms, self.position,
-            self.rpm,
+            self.rpm, self.is_finished,
         )
         if any(not isinstance(field, tuple) or len(field) != size for field in fields):
             raise ValueError("every browser field must be a tuple aligned to time_ms")
@@ -111,6 +114,8 @@ class BrowserDriverFields:
             raise TypeError("categorical driver fields must contain strings or null")
         if any(value is not None and type(value) is not bool for value in self.is_in_pit_lane):
             raise TypeError("pit state must contain booleans or null")
+        if any(value is not None and type(value) is not bool for value in self.is_finished):
+            raise TypeError("finished state must contain booleans or null")
         if any(value is not None and (type(value) is not float or not math.isfinite(value) or value < 0) for field in (self.track_distance_meters, self.gap_to_leader_ms) for value in field):
             raise ValueError("derived continuous fields must contain non-negative finite floats or null")
         if any(value is not None and (type(value) is not int or value < 1) for value in self.position):

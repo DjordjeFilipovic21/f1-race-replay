@@ -135,6 +135,47 @@ test('switches from cumulative leader gaps to intervals between adjacent positio
   expect(rows[2].textContent).toContain('+1.766')
 })
 
+test('renders an accessible finish flag instead of timing, PIT, or raw status in both gap modes', () => {
+  const current = snapshot({
+    drivers: {
+      ...snapshot().drivers,
+      VER: { ...snapshot().drivers.VER, isFinished: true, status: 'STOPPED', isInPitLane: true, gapToLeaderMs: 0, position: 1 },
+      NOR: { ...snapshot().drivers.NOR, status: 'on_track', isInPitLane: false },
+    },
+  })
+  render(<LiveLeaderboard snapshot={current} drivers={drivers} />)
+
+  const metric = () => within(rowForDriver('VER')).getAllByRole('cell')[2]
+  expect(within(metric()).getByRole('img', { name: 'Finished' }).getAttribute('aria-label')).toBe('Finished')
+  expect(metric().textContent).toBe('🏁')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
+
+  expect(within(metric()).getByRole('img', { name: 'Finished' })).toBeTruthy()
+  expect(metric().textContent).toBe('🏁')
+})
+
+test('keeps a finished P1 leader distinct from OUT rows and in sampled order', () => {
+  const current = snapshot({
+    leaderboardOrder: ['VER', 'NOR', 'HAM'],
+    drivers: {
+      ...snapshot().drivers,
+      VER: { ...snapshot().drivers.VER, isFinished: true, status: 'OUT', position: 1, isInPitLane: false },
+      NOR: { ...snapshot().drivers.NOR, status: 'on_track', isInPitLane: false, position: 2 },
+      HAM: { ...snapshot().drivers.NOR, status: 'OUT', isInPitLane: false, position: null },
+    },
+  })
+  render(<LiveLeaderboard snapshot={current} drivers={drivers} />)
+
+  const rows = screen.getAllByRole('row').slice(1)
+  expect(rows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual(['VER', 'NOR', 'HAM'])
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[0].textContent).toBe('1')
+  expect(within(rowForDriver('VER')).getByRole('img', { name: 'Finished' })).toBeTruthy()
+  expect(rowForDriver('VER').className).not.toContain('live-leaderboard__row--terminal')
+  expect(within(rowForDriver('HAM')).getAllByRole('cell')[0].textContent).toBe('OUT')
+  expect(within(rowForDriver('HAM')).getAllByRole('cell')[2].textContent).toBe('OUT')
+})
+
 test('shows interval as unavailable when adjacent cumulative gaps cannot produce a valid delta', () => {
   const current = snapshot({
     leaderboardOrder: ['VER', 'NOR', 'HAM'],

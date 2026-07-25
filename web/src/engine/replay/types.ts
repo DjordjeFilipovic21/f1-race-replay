@@ -19,10 +19,11 @@ interface DriverSnapshotFields {
 
 export interface DriverSnapshot extends DriverSnapshotFields {
   readonly rpm: number | null
+  readonly isFinished: boolean | null
 }
 
 /** Keeps hand-authored legacy snapshots source-compatible while sampled output is normalized. */
-export type ReplayDriverSnapshot = DriverSnapshotFields & { readonly rpm?: number | null }
+export type ReplayDriverSnapshot = DriverSnapshotFields & { readonly rpm?: number | null; readonly isFinished?: boolean | null }
 
 export interface ReplaySnapshot {
   readonly sessionTimeMs: number

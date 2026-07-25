@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { parseChunk } from '../../../src/data/replay/guards'
 import { loadReplayData } from '../../../src/data/replay/loader'
 import type { DriverColumns, ReplayChunk, ReplayData, ReplaySource } from '../../../src/data/replay/types'
 import { prepareReplaySampler, samplePreparedReplayAt, sampleReplayAt } from '../../../src/engine/replay/sampler'
@@ -145,6 +146,21 @@ describe('replay-engine sampler', () => {
     const replay = syntheticReplay([0, 10], [0, 1_000], { brake: [0, 1] })
 
     expect(sampleReplayAt(replay, 500).drivers.HAM.brake).toBe(0)
+  })
+
+  test('samples isFinished before, at, and after its exact finish boundary', () => {
+    const replay = syntheticReplay([0, 10], [0, 1_000], { isFinished: [false, true] })
+
+    expect([999, 1_000, 1_500].map((timeMs) => sampleReplayAt(replay, timeMs).drivers.HAM.isFinished)).toEqual([false, true, true])
+  })
+
+  test('normalizes a legacy chunk without isFinished before sampling', () => {
+    const replay = syntheticReplay([0, 10], [0, 1_000])
+    const parsedChunk = parseChunk(replay.chunks[0])
+    const legacyReplay = { ...replay, chunks: [parsedChunk] }
+
+    expect(parsedChunk.drivers.HAM.isFinished).toEqual([null, null])
+    expect(sampleReplayAt(legacyReplay, 500).drivers.HAM.isFinished).toBeNull()
   })
 
   test('keeps brake unavailable when its lower bound is null', () => {

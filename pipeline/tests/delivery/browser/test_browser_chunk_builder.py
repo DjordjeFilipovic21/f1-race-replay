@@ -99,7 +99,7 @@ def test_alignment_is_performed_once_per_field_not_once_per_chunk(monkeypatch) -
     )
 
     assert len(chunks) == 5
-    assert calls == 18
+    assert calls == 19
 
 
 def test_empty_nominal_interval_is_merged_without_emitting_an_empty_chunk() -> None:

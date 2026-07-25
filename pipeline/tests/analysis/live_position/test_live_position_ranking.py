@@ -92,6 +92,20 @@ def test_small_regression_retains_monotonic_envelope():
     assert next(entry for entry in result.drivers if entry.driver_id == "A").effective_progress_meters == 100.0
 
 
+def test_finished_leader_freezes_order_through_later_missing_or_offtrack_progress():
+    frames = (
+        _frame(0, _input("A", 100.0), _input("B", 90.0)),
+        _frame(1, _input("A", 100.0, ProgressMode.FINISHED), _input("B", 110.0)),
+        _frame(2, _input("A", None), _input("B", 200.0)),
+    )
+
+    result = rank_timeline(frames)
+
+    assert tuple(frame.leaderboard_order for frame in result) == (("A", "B"),) * 3
+    assert next(entry for entry in result[-1].drivers if entry.driver_id == "A").effective_progress_meters == 100.0
+    assert next(entry for entry in result[-1].drivers if entry.driver_id == "A").mode is ProgressMode.FINISHED
+
+
 @pytest.mark.parametrize("inputs", [
     (DriverProgressInput("A", 1.0, ProgressMode.ACTIVE), DriverProgressInput("A", 2.0, ProgressMode.ACTIVE)),
 ])

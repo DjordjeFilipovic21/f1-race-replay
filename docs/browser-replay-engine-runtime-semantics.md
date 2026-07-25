@@ -20,8 +20,10 @@ shared-timeline rows:
   coordinates (`x`, `y`) permit a bound interval up to 1,500 ms to bridge
   bounded global position-telemetry gaps; other continuous fields retain the
   1,000 ms limit. Longer intervals produce `null`;
-- position, lap, status, pit state, tyre, and other discrete/categorical fields
-  use previous-value semantics; no forward fill or invention occurs;
+- position, lap, status, pit state, tyre, `isFinished`, and other
+  discrete/categorical fields use previous-value semantics; no interpolation,
+  forward fill, or invention occurs. `isFinished` is optional and nullable, so
+  an old chunk without the field samples as unavailable rather than false;
 - sparse events are exact-time records.
 
 Example: a null coordinate at `12,000` ms is not bridged from `10,000` to
@@ -51,11 +53,18 @@ falls back to stable classified-results order; old null-only v1 generations
 remain valid and replayable.
 
 Progress is monotonic through an envelope. Ranking ties resolve by prior order,
-then driver ID. Null progress is omitted, while pit and terminal modes freeze
-progress rather than receiving an artificial penalty. Active missing projection
-freezes the last valid progress only before the 1,000 ms stale boundary; at the
-boundary it becomes null. `OffTrack` is not terminal. Terminal inference from
-final results is conservative and only follows the final position sample.
+then driver ID. Null progress is omitted, while pit and finished modes freeze
+progress rather than receiving an artificial penalty. A finished driver remains
+in dynamic leaderboard order; later stale or `OffTrack` telemetry cannot
+displace it, including a finished leader that must remain P1. Active missing
+projection freezes the last valid progress only before the 1,000 ms stale
+boundary; at the boundary it becomes null. `OffTrack` is not terminal.
+
+The browser-derived `isFinished` marker is conservative. It becomes true at a
+finish time supported by final results identifying completion and completed-lap
+data, with the boundary following the final position sample. It is not a raw
+status and must not be converted to `OUT`. Once true, previous-value sampling
+keeps it true for later samples; unavailable evidence remains `null`.
 
 The serialized `status` remains the exact `position_telemetry.status` value.
 The UI must not infer retirement or fabricate `OUT` from a missing status.
@@ -85,9 +94,12 @@ snapshot rather than owning clock, cache, or sampling state.
 ## UI contract
 
 The dedicated responsive leaderboard is semantic and accessible. It orders
-rows from live `leaderboardOrder` when available, displays `PIT` from the pit
-flag, otherwise displays the raw exact status, and uses unavailable markers for
-null position, gap, tyre, or status. It must not fabricate `OUT`.
+rows from live `leaderboardOrder` when available and, for a finished row,
+renders an accessible finish flag instead of `GAP`, `Leader`, or `Interval`.
+Otherwise it displays `PIT` from the pit flag, the raw exact status, and
+unavailable markers for null position, gap, tyre, or status. It must not
+fabricate `OUT`; old chunks without `isFinished` continue using the existing
+fallback display.
 
 Exact elapsed-time input uses `H:MM:SS.mmm`, is relative to the delivery start,
 and rejects malformed or out-of-window values rather than clamping them. It
@@ -99,7 +111,8 @@ time and range seeking remain available.
 ## Current limitations
 
 The one-race Bahrain calibration is provisional pending a multi-circuit corpus.
-Gap availability depends on leader-history coverage. Terminal timing is inferred
-after the final position sample, not read as a canonical terminal timestamp.
+Gap availability depends on leader-history coverage. Finish timing is inferred
+after the final position sample from completion and completed-lap evidence, not
+read as a canonical terminal timestamp. Legacy chunks may omit `isFinished`.
 Quality assessment is internal `BrowserDeliveryBuild` provenance and is not in
 the serialized v1 manifest in this phase.

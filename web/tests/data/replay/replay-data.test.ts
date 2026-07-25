@@ -171,6 +171,26 @@ describe('replay-data v1 loader', () => {
     expect(replay.chunks[0].drivers.RUS.rpm).toEqual([null, 10_500, null])
   })
 
+  test('accepts an optional nullable isFinished column and normalizes legacy chunks', async () => {
+    const source = mutateFixtures({
+      'chunks/chunk-001.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { isFinished?: unknown[] }> }
+        value.drivers.HAM.isFinished = [false, null, true]
+      },
+      'chunks/chunk-002.json': (chunk) => {
+        const value = chunk as { drivers: Record<string, { isFinished?: unknown[] }> }
+        value.drivers.HAM.isFinished = [true, null, null]
+      },
+    })
+
+    const replay = await loadReplayData({ source })
+
+    expect(replay.chunks[0].drivers.HAM.isFinished).toEqual([false, null, true])
+    expect(replay.chunks[0].drivers.RUS.isFinished).toEqual([null, null, null])
+    expect(replay.chunks[1].drivers.HAM.isFinished).toEqual([true, null, null])
+    expect(replay.chunks[1].drivers.RUS.isFinished).toEqual([null, null, null])
+  })
+
   test('rejects an RPM column with non-finite values', async () => {
     const source = mutateFixture('chunks/chunk-001.json', (chunk) => {
       const value = chunk as { drivers: Record<string, { rpm?: unknown[] }> }

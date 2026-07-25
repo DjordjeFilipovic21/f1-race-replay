@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
@@ -88,10 +88,15 @@ def build_browser_delivery(
             driver_id: _with_terminal_status(fields, terminal_end_times.get(driver_id))
             for driver_id, fields in drivers.items()
         }
+        finish_end_times = _finished_end_times(snapshot, race_start_ms)
+        drivers = {
+            driver_id: _with_finished_state(fields, finish_end_times.get(driver_id))
+            for driver_id, fields in drivers.items()
+        }
         assessment = _assess_quality(snapshot, track_assets, quality_assessor)
         if assessment.passed:
             drivers, dynamic_orders = _derive_live_fields(
-                snapshot, track_assets, drivers, timeline, terminal_end_times,
+                snapshot, track_assets, drivers, timeline, terminal_end_times, finish_end_times,
             )
         else:
             dynamic_orders = None
@@ -332,7 +337,8 @@ def _assess_quality(snapshot, track_assets, assessor: ProjectionQualityAssessor)
     return assessment
 
 
-def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_times):
+def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_times, finish_end_times=None):
+    finish_end_times = {} if finish_end_times is None else finish_end_times
     geometry = _projection_geometry(track_assets)
     result_statuses = {row["driver_id"]: row["status"] for row in snapshot.frames["results"].to_dicts()}
     states = {driver_id: ProgressState() for driver_id in drivers}
@@ -347,9 +353,10 @@ def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_
             mode = _progress_mode(
                 fields.is_in_pit_lane[index], result_statuses.get(driver_id),
                 terminal_end_times.get(driver_id), time_ms,
+                finish_end_time=finish_end_times.get(driver_id),
             )
             effective_lap = lap
-            if effective_lap is None and mode in (ProgressMode.RETIRED, ProgressMode.OUT):
+            if effective_lap is None and mode in (ProgressMode.FINISHED, ProgressMode.RETIRED, ProgressMode.OUT):
                 effective_lap = states[driver_id].last_lap_number
             if effective_lap is None:
                 update = None
@@ -403,6 +410,38 @@ def _terminal_end_times(snapshot, race_start_ms: int) -> dict[str, int]:
     return values
 
 
+def _finished_end_times(snapshot, race_start_ms: int) -> dict[str, int]:
+    """Return finish boundaries only when final results and completed laps agree."""
+    laps_by_driver: dict[str, tuple[dict[str, object], ...]] = {}
+    for row in snapshot.frames["laps"].to_dicts():
+        laps_by_driver.setdefault(row["driver_id"], ())
+        laps_by_driver[row["driver_id"]] += (row,)
+
+    values: dict[str, int] = {}
+    for result in snapshot.frames["results"].to_dicts():
+        if not _is_completed_result(result["status"]):
+            continue
+        laps_completed = result["laps_completed"]
+        if type(laps_completed) is not int or laps_completed < 1:
+            continue
+        driver_laps = laps_by_driver.get(result["driver_id"], ())
+        completed_lap_numbers = {
+            row["lap_number"] for row in driver_laps if type(row["lap_number"]) is int
+        }
+        if max(completed_lap_numbers, default=None) != laps_completed:
+            continue
+        finish_times = tuple(
+            row["lap_end_time_ms"]
+            for row in driver_laps
+            if row["lap_number"] == laps_completed
+            and type(row["lap_end_time_ms"]) is int
+            and row["lap_end_time_ms"] >= race_start_ms
+        )
+        if finish_times:
+            values[result["driver_id"]] = max(finish_times)
+    return values
+
+
 def _last_lap_end_times(snapshot) -> dict[str, int]:
     return _last_times(snapshot.frames["laps"].to_dicts(), "lap_end_time_ms", lambda _: True)
 
@@ -423,10 +462,12 @@ def _last_times(rows, time_key, predicate) -> dict[str, int]:
     return values
 
 
-def _progress_mode(in_pit, result_status, terminal_end_time, time_ms) -> ProgressMode:
+def _progress_mode(in_pit, result_status, terminal_end_time, time_ms, *, finish_end_time=None) -> ProgressMode:
     terminal_mode = _terminal_mode(result_status)
     if terminal_mode is not None and terminal_end_time is not None and time_ms > terminal_end_time:
         return terminal_mode
+    if _is_completed_result(result_status) and finish_end_time is not None and time_ms >= finish_end_time:
+        return ProgressMode.FINISHED
     return ProgressMode.PIT if in_pit is True else ProgressMode.ACTIVE
 
 
@@ -441,6 +482,13 @@ def _normalized_status(value) -> str:
     return "" if not isinstance(value, str) else "".join(character for character in value.lower() if character.isalnum())
 
 
+_KNOWN_COMPLETION_STATUSES = frozenset({"finished", "lapped"})
+
+
+def _is_completed_result(value: object) -> bool:
+    return _normalized_status(value) in _KNOWN_COMPLETION_STATUSES
+
+
 _KNOWN_NON_COMPLETION_STATUSES = frozenset({
     "retired", "accident", "collision", "engine", "gearbox", "transmission", "clutch",
     "hydraulics", "electrical", "brakes", "suspension", "damage", "mechanical", "fuel",
@@ -453,18 +501,24 @@ def _with_terminal_status(fields, terminal_end_time):
         "OUT" if terminal_end_time is not None and time_ms > terminal_end_time else status
         for time_ms, status in zip(fields.time_ms, fields.status, strict=True)
     )
-    return type(fields)(
-        fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
-        fields.brake, fields.gear, fields.drs, statuses, fields.lap, fields.tyre_compound,
-        fields.is_in_pit_lane, fields.track_distance_meters, fields.gap_to_leader_ms, fields.position, fields.rpm,
+    return replace(fields, status=statuses)
+
+
+def _with_finished_state(fields, finish_end_time: int | None):
+    if finish_end_time is None:
+        return fields
+    return replace(
+        fields,
+        is_finished=tuple(time_ms >= finish_end_time for time_ms in fields.time_ms),
     )
 
 
 def _with_derived_fields(fields, distances, gaps, positions):
-    return type(fields)(
-        fields.driver_id, fields.time_ms, fields.x, fields.y, fields.speed, fields.throttle,
-        fields.brake, fields.gear, fields.drs, fields.status, fields.lap, fields.tyre_compound,
-        fields.is_in_pit_lane, tuple(distances), tuple(gaps), tuple(positions), fields.rpm,
+    return replace(
+        fields,
+        track_distance_meters=tuple(distances),
+        gap_to_leader_ms=tuple(gaps),
+        position=tuple(positions),
     )
 
 

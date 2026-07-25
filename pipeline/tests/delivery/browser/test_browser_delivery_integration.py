@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -433,6 +434,73 @@ def test_dns_is_out_from_race_start_while_finished_offtrack_driver_remains_activ
     assert _driver_value(delivery, "RUS", "status", 1_000) == "OffTrack"
 
 
+def test_finished_state_uses_completed_final_lap_and_remains_nullable_for_noncompletion(
+    tmp_path: Path,
+) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_terminal_live_frames({"HAM": "Finished", "RUS": "Retired"}),
+        target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _driver_value(delivery, "HAM", "is_finished", 500) is False
+    assert _driver_value(delivery, "HAM", "is_finished", 850) is True
+    assert all(
+        _driver_value(delivery, "RUS", "is_finished", time_ms) is None
+        for time_ms in (0, 500, 850, 900, 1_000)
+    )
+    assert all(
+        len(fields.is_finished) == len(chunk.time_ms)
+        for chunk in delivery.chunks
+        for fields in chunk.drivers.values()
+    )
+
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1", delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    serialized_chunk = _load_json(published.chunk_paths[0])
+    serialized_drivers = cast(dict[str, dict[str, object]], serialized_chunk["drivers"])
+    serialized_times = cast(list[int], serialized_chunk["timeMs"])
+    assert cast(list[bool], serialized_drivers["HAM"]["isFinished"]) == [
+        time_ms >= 800 for time_ms in serialized_times
+    ]
+
+
+def test_finished_leader_keeps_frozen_progress_and_p1_after_offtrack_data(
+    tmp_path: Path,
+) -> None:
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_terminal_live_frames(
+            {"HAM": "Finished", "RUS": "Retired"},
+            finished_leader_with_later_competitor=True,
+        ),
+        target_parent=canonical_parent,
+        generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert all(_driver_value(delivery, "HAM", "is_finished", time_ms) is True for time_ms in (850, 900, 1_000))
+    assert _driver_value(delivery, "HAM", "status", 900) == "OffTrack"
+    assert all(_driver_value(delivery, "HAM", "position", time_ms) == 1 for time_ms in (850, 900, 1_000))
+    orders = tuple(_leaderboard_value(delivery, time_ms) for time_ms in (850, 900, 1_000))
+    assert all(order is not None and order[0] == "HAM" for order in orders)
+    assert _driver_value(delivery, "HAM", "track_distance_meters", 900) == _driver_value(
+        delivery, "HAM", "track_distance_meters", 850,
+    )
+
+
 def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
@@ -565,24 +633,36 @@ def _live_frames(*, result_statuses: dict[str, str] | None = None) -> dict[str, 
     frames["laps"] = pl.DataFrame(laps, schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
     if result_statuses:
         results = [
-            _row("results", driver_id=driver, classified_position=str(index + 1), status=result_statuses.get(driver))
+            _row(
+                "results", driver_id=driver, classified_position=str(index + 1),
+                status=result_statuses.get(driver), laps_completed=1,
+            )
             for index, driver in enumerate(("HAM", "RUS"))
         ]
         frames["results"] = pl.DataFrame(results, schema=dict(CANONICAL_TABLE_SCHEMAS["results"]), strict=True)
     return frames
 
 
-def _terminal_live_frames(result_statuses: dict[str, str]) -> dict[str, pl.DataFrame]:
+def _terminal_live_frames(
+    result_statuses: dict[str, str], *, finished_leader_with_later_competitor: bool = False,
+) -> dict[str, pl.DataFrame]:
     frames = _live_frames(result_statuses=result_statuses)
     frames["car_telemetry"] = pl.DataFrame([
         _row("car_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time, speed_kph=speed)
         for driver in ("HAM", "RUS")
         for time, speed in ((0, 100.0), (900, 10.0), (1_000, 0.0))
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["car_telemetry"]), strict=True)
+    positions = {
+        "HAM": ((0, 0.0), (500, 50.0), (850, 50.0), (900, None), (1_000, None)),
+        "RUS": ((0, 0.0), (500, 50.0), (850, 75.0), (900, 75.0), (1_000, 75.0)),
+    } if finished_leader_with_later_competitor else {
+        driver: ((0, 0.0), (500, 50.0), (850, 50.0), (900, 50.0), (1_000, 50.0))
+        for driver in ("HAM", "RUS")
+    }
     frames["position_telemetry"] = pl.DataFrame([
         _row("position_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time, x=x, y=0.0, status="OffTrack")
-        for driver in ("HAM", "RUS")
-        for time, x in ((0, 0.0), (500, 50.0), (850, 50.0), (900, 50.0), (1_000, 50.0))
+        for driver, samples in positions.items()
+        for time, x in samples
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
     frames["laps"] = pl.DataFrame([
         _row("laps", driver_id=driver, lap_number=1, lap_start_time_ms=0, lap_end_time_ms=800, compound="MEDIUM")
@@ -594,6 +674,11 @@ def _terminal_live_frames(result_statuses: dict[str, str]) -> dict[str, pl.DataF
 def _driver_value(delivery, driver_id, field, time_ms):
     chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= time_ms < chunk.end_ms)
     return getattr(chunk.drivers[driver_id], field)[chunk.time_ms.index(time_ms)]
+
+
+def _leaderboard_value(delivery, time_ms):
+    chunk = next(chunk for chunk in delivery.chunks if chunk.start_ms <= time_ms < chunk.end_ms)
+    return chunk.leaderboard_order[chunk.time_ms.index(time_ms)]
 
 
 def _browser_fields(driver_id: str, laps: tuple[int, ...]):

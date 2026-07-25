@@ -300,6 +300,12 @@
           "items": {
             "$ref": "#/$defs/nullableBoolean"
           }
+        },
+        "isFinished": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableBoolean"
+          }
         }
       }
     },

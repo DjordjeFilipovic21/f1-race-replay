@@ -10,7 +10,7 @@ export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:chunk'
 export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:track-assets'
 export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
-const OPTIONAL_DRIVER_FIELDS = ['rpm'] as const
+const OPTIONAL_DRIVER_FIELDS = ['rpm', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DRIVER_ID = /^[A-Z0-9]{2,4}$/
 const SHA256 = /^[0-9a-f]{64}$/
@@ -203,7 +203,11 @@ function parseColumns(value: unknown, length: number, label: string): DriverColu
   const stringColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => string(value, field)))
   const nonNegativeNumberColumn = (field: string) => parseColumn(columns[field], length, `${label}.${field}`, (entry) => nullable(entry, (value) => { const parsed = finite(value, field); if (parsed < 0) throw new Error(`${field} must be non-negative`); return parsed }))
   const rpm = columns.rpm === undefined ? Array<null>(length).fill(null) : numberColumn('rpm')
-  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), rpm, throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })) })
+  // Legacy v1 chunks omit this optional field; null normalization preserves their shape for sampling.
+  const isFinished = columns.isFinished === undefined
+    ? Array<null>(length).fill(null)
+    : parseColumn(columns.isFinished, length, `${label}.isFinished`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('finished state must be boolean'); return value }))
+  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), rpm, throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })), isFinished })
 }
 
 function validateDerivedFields(drivers: ReplayChunk['drivers'], order: ReplayChunk['leaderboardOrder']): void {

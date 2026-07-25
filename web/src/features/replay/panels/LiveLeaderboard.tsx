@@ -1,4 +1,4 @@
-import { memo, useState, type CSSProperties } from 'react'
+import { memo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DriverMetadata } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 
@@ -18,6 +18,7 @@ interface LeaderboardRow {
   readonly gapToLeaderMs: number | null
   readonly status: string | null
   readonly isInPitLane: boolean | null
+  readonly isFinished: boolean
 }
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
@@ -61,10 +62,10 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
 function LeaderboardTableRow({ row, ahead, gapMode, isSelected, onDriverSelect }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly gapMode: GapMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined }) {
   const identity = row.metadata?.displayName ?? row.id
   const code = row.metadata?.id ?? row.id
-  const terminal = isTerminalStatus(row.status)
+  const terminal = isTerminalRow(row)
   return (
     <tr className={[terminal ? 'live-leaderboard__row--terminal' : '', isSelected ? 'live-leaderboard__row--selected' : ''].filter(Boolean).join(' ') || undefined} style={teamAccentStyle(row.metadata?.colorHex)}>
-      <td className="live-leaderboard__position">{formatPosition(row.position, row.status)}</td>
+      <td className="live-leaderboard__position">{formatPosition(row.position, row.status, row.isFinished)}</td>
       <td className="live-leaderboard__team-accent" aria-label={`Team colour for ${identity}`} />
       <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}><button type="button" aria-label={`Select ${identity}`} aria-pressed={isSelected} title={identity} onClick={() => onDriverSelect?.(row.id)}>{code}</button></th>
       <td className="live-leaderboard__gap">{formatMetric(row, ahead, gapMode)}</td>
@@ -89,8 +90,8 @@ export function createLeaderboardRows(snapshot: ReplaySnapshot | null, drivers: 
     .map((driver) => createRow(driver.id, driver, snapshot))
   const rows = [...participatingRows, ...remainingRows]
   return [
-    ...rows.filter((row) => !isTerminalStatus(row.status)),
-    ...rows.filter((row) => isTerminalStatus(row.status)),
+    ...rows.filter((row) => !isTerminalRow(row)),
+    ...rows.filter((row) => isTerminalRow(row)),
   ]
 }
 
@@ -103,13 +104,19 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
     gapToLeaderMs: sampled?.gapToLeaderMs ?? null,
     status: sampled?.status ?? null,
     isInPitLane: sampled?.isInPitLane ?? null,
+    isFinished: sampled?.isFinished === true,
   }
 }
 
-function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, gapMode: GapMode): string {
+function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, gapMode: GapMode): ReactNode {
+  if (row.isFinished) return <FinishFlag />
   const status = formatMetricStatus(row.status, row.isInPitLane)
   if (status !== null) return status
   return gapMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs) : formatIntervalGap(row, ahead)
+}
+
+function FinishFlag() {
+  return <span className="live-leaderboard__finish-flag" role="img" aria-label="Finished">🏁</span>
 }
 
 function formatMetricStatus(status: string | null, isInPitLane: boolean | null): string | null {
@@ -127,7 +134,7 @@ export function formatGap(position: number | null, gapToLeaderMs: number | null,
 }
 
 function formatIntervalGap(row: LeaderboardRow, ahead: LeaderboardRow | null): string {
-  if (isTerminalStatus(row.status) || isTerminalStatus(ahead?.status ?? null)) return '—'
+  if (isTerminalRow(row) || (ahead !== null && isTerminalRow(ahead))) return '—'
   if (row.position === 1) return 'Interval'
   if (
     row.position === null
@@ -141,9 +148,13 @@ function formatIntervalGap(row: LeaderboardRow, ahead: LeaderboardRow | null): s
 
 function formatGapMilliseconds(gapMs: number): string { return `+${(gapMs / 1000).toFixed(3)}` }
 
-function formatPosition(position: number | null, status: string | null): string {
-  if (isTerminalStatus(status)) return 'OUT'
+function formatPosition(position: number | null, status: string | null, isFinished = false): string {
+  if (!isFinished && isTerminalStatus(status)) return 'OUT'
   return position === null || !Number.isFinite(position) ? '—' : String(position)
+}
+
+function isTerminalRow(row: LeaderboardRow): boolean {
+  return !row.isFinished && isTerminalStatus(row.status)
 }
 
 function isTerminalStatus(status: string | null): boolean {

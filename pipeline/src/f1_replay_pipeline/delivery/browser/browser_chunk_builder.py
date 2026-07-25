@@ -27,7 +27,8 @@ CONTINUOUS_FIELD_SEMANTICS = MappingProxyType({
 PREVIOUS_VALUE_FIELD_SEMANTICS = MappingProxyType({
     "lap": "previous", "position": "previous", "gear": "previous", "drs": "previous",
     "tyreCompound": "previous", "status": "previous", "isInPitLane": "previous",
-    "trackStatusCode": "previous", "weatherState": "previous", "leaderboardOrder": "previous",
+    "isFinished": "previous", "trackStatusCode": "previous", "weatherState": "previous",
+    "leaderboardOrder": "previous",
 })
 
 
@@ -271,6 +272,7 @@ def _align_driver(fields: BrowserDriverFields, timeline: tuple[int, ...]) -> Bro
         is_in_pit_lane=_align(fields.time_ms, fields.is_in_pit_lane, timeline),
         track_distance_meters=_align(fields.time_ms, fields.track_distance_meters, timeline), gap_to_leader_ms=_align(fields.time_ms, fields.gap_to_leader_ms, timeline),
         position=_align(fields.time_ms, fields.position, timeline),
+        is_finished=_align(fields.time_ms, fields.is_finished, timeline),
     )
 
 
@@ -285,6 +287,7 @@ def _slice_driver(fields: BrowserDriverFields, left: int, right: int) -> Browser
         is_in_pit_lane=fields.is_in_pit_lane[left:right],
         track_distance_meters=fields.track_distance_meters[left:right],
         gap_to_leader_ms=fields.gap_to_leader_ms[left:right], position=fields.position[left:right],
+        is_finished=fields.is_finished[left:right],
     )
 
 

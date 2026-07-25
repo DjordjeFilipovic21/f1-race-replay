@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_left
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 
 from f1_replay_pipeline.analysis.live_position.live_position_progress import ProgressMode
@@ -29,9 +29,12 @@ class DriverProgressInput:
 class DriverHistory:
     driver_id: str
     points: tuple[tuple[int, float], ...]
+    is_finished: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "points", tuple((time_ms, float(progress)) for time_ms, progress in self.points))
+        if type(self.is_finished) is not bool:
+            raise TypeError("is_finished must be a boolean")
         _validate_history(self)
 
 
@@ -157,7 +160,7 @@ def rank_timeline(frames: tuple[RankingTimelineFrame, ...]) -> tuple[BatchRankin
     frozen ranking values leave the function.
     """
     _validate_timeline(frames)
-    histories: dict[str, tuple[list[int], list[float]]] = {}
+    histories: dict[str, tuple[list[int], list[float], bool]] = {}
     previous_order: tuple[str, ...] = ()
     results: list[BatchRankingFrame] = []
     for frame in frames:
@@ -178,17 +181,23 @@ def _validate_timeline(frames: tuple[RankingTimelineFrame, ...]) -> None:
 def _batch_effective(frame, histories):
     effective = []
     for item in sorted(frame.inputs, key=lambda value: value.driver_id):
+        times, progress_values, was_finished = histories.setdefault(item.driver_id, ([], [], False))
+        is_finished = was_finished or item.mode is ProgressMode.FINISHED
+        if is_finished:
+            item = replace(item, mode=ProgressMode.FINISHED)
         if item.race_progress_meters is None:
-            effective.append((item, None))
-            continue
-        times, progress_values = histories.setdefault(item.driver_id, ([], []))
-        progress = item.race_progress_meters if not progress_values else max(progress_values[-1], item.race_progress_meters)
-        if not progress_values or progress > progress_values[-1]:
+            progress = progress_values[-1] if is_finished and progress_values else None
+        else:
+            progress = item.race_progress_meters if not progress_values else max(progress_values[-1], item.race_progress_meters)
+            if is_finished and progress_values:
+                progress = progress_values[-1]
+        if progress is not None and (not progress_values or progress > progress_values[-1]):
             if times and times[-1] == frame.session_time_ms:
                 progress_values[-1] = progress
             else:
                 times.append(frame.session_time_ms)
                 progress_values.append(progress)
+        histories[item.driver_id] = (times, progress_values, is_finished)
         effective.append((item, progress))
     return effective
 
@@ -197,7 +206,7 @@ def _batch_order(effective, previous_order):
     previous_index = {driver_id: index for index, driver_id in enumerate(previous_order)}
     return tuple(item.driver_id for item, progress in sorted(
         ((item, progress) for item, progress in effective if progress is not None),
-        key=lambda value: (-value[1], previous_index.get(value[0].driver_id, len(previous_index)), value[0].driver_id),
+        key=lambda value: _order_key(value[0], value[1], previous_index),
     ))
 
 
@@ -224,7 +233,7 @@ def _batch_gap(driver_id, progress, leader_id, leader_progress, histories, time_
         return None
     if driver_id == leader_id or progress == leader_progress:
         return 0.0
-    times, progress_values = histories[leader_id]
+    times, progress_values, _ = histories[leader_id]
     index = bisect_left(progress_values, progress)
     if index == len(progress_values) or index == 0:
         return None
@@ -249,6 +258,11 @@ def _validate_batch(state, time_ms, inputs):
 
 
 def _effective_input(item, history, time_ms):
+    if history is not None and history.is_finished:
+        prior = None if not history.points else history.points[-1][1]
+        return replace(item, mode=ProgressMode.FINISHED), None if prior is None else (time_ms, prior)
+    if item.mode is ProgressMode.FINISHED and history is not None and history.points:
+        return item, (time_ms, history.points[-1][1])
     if item.race_progress_meters is None:
         return item, None
     prior = None if history is None or not history.points else history.points[-1][1]
@@ -260,20 +274,35 @@ def _next_histories(histories, effective):
     next_histories = dict(histories)
     for item, point in effective:
         if point is None:
+            prior = next_histories.get(item.driver_id)
+            if item.mode is ProgressMode.FINISHED and prior is not None:
+                next_histories[item.driver_id] = DriverHistory(item.driver_id, prior.points, True)
             continue
         prior = next_histories.get(item.driver_id)
         points = () if prior is None else prior.points
+        finished = item.mode is ProgressMode.FINISHED or (prior is not None and prior.is_finished)
+        updated = points
         if not points or point[1] > points[-1][1]:
             updated = points[:-1] + (point,) if points and point[0] == points[-1][0] else points + (point,)
-            next_histories[item.driver_id] = DriverHistory(item.driver_id, updated)
+        if prior is None or updated != points or finished != prior.is_finished:
+            next_histories[item.driver_id] = DriverHistory(
+                item.driver_id, updated, finished,
+            )
     return next_histories
+
+
+def _order_key(item, progress, previous_index):
+    prior = previous_index.get(item.driver_id, len(previous_index))
+    if item.mode is ProgressMode.FINISHED:
+        return 0, prior, -progress, item.driver_id
+    return 1, -progress, prior, item.driver_id
 
 
 def _leaderboard_order(effective, previous_order):
     previous_index = {driver_id: index for index, driver_id in enumerate(previous_order)}
     known = [(item, point) for item, point in effective if point is not None]
     return tuple(item.driver_id for item, point in sorted(
-        known, key=lambda value: (-value[1][1], previous_index.get(value[0].driver_id, len(previous_index)), value[0].driver_id),
+        known, key=lambda value: _order_key(value[0], value[1][1], previous_index),
     ))
 
 
