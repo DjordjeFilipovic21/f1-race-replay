@@ -249,6 +249,38 @@ def test_complete_validator_rejects_a_timeline_summary_digest_mismatch(tmp_path:
     assert "checksum disagrees for timeline-summary.json" in str(error.value.__cause__)
 
 
+@pytest.mark.parametrize(("field", "value"), [("startMs", 1), ("endMs", 1_999)])
+def test_complete_validator_rejects_a_redigested_timeline_summary_with_mismatched_replay_bounds(
+    tmp_path: Path, field: str, value: int,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(timeline_summary=_timeline_summary()), schema_root=SCHEMA_ROOT,
+    )
+    summary_path = result.generation_path / "timeline-summary.json"
+    summary = json.loads(summary_path.read_bytes())
+    summary[field] = value
+    summary_bytes = json.dumps(summary, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    summary_path.write_bytes(summary_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["timelineSummary"]["sha256"] = hashlib.sha256(summary_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "bounds disagree with replay bounds" in str(error.value.__cause__)
+
+
 def test_complete_validator_rejects_a_schema_invalid_timeline_summary(tmp_path: Path) -> None:
     result = publish_browser_delivery(
         browser_parent=tmp_path / "browser", delivery_version="delivery-one",

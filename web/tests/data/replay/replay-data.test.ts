@@ -85,7 +85,7 @@ describe('replay-data v1 loader', () => {
     await expect(loadReplayIndex({ source: boundsSource.source, pointerPath: 'browser-current.json' })).rejects.toThrow('bounds disagree')
   })
 
-  test('rejects unordered intervals and duplicate DNF markers in a timeline summary', () => {
+  test('rejects unordered intervals, unordered DNF markers, and duplicate DNF markers in a timeline summary', () => {
     const unorderedIntervals = timelineSummaryPayload()
     unorderedIntervals.intervals = [
       { kind: 'sc', startMs: 1_200, endMs: 1_300 },
@@ -96,8 +96,14 @@ describe('replay-data v1 loader', () => {
       { driverId: 'HAM', timeMs: 2_000 },
       { driverId: 'HAM', timeMs: 3_000 },
     ]
+    const unorderedMarkers = timelineSummaryPayload()
+    unorderedMarkers.dnfMarkers = [
+      { driverId: 'VER', timeMs: 3_000 },
+      { driverId: 'HAM', timeMs: 2_000 },
+    ]
 
     expect(() => parseTimelineSummary(unorderedIntervals)).toThrow('intervals must be deterministically ordered')
+    expect(() => parseTimelineSummary(unorderedMarkers)).toThrow('DNF markers must be deterministically ordered')
     expect(() => parseTimelineSummary(duplicateMarkers)).toThrow('must have unique drivers')
   })
 
