@@ -26,6 +26,22 @@ FORBIDDEN_MODULE_PREFIXES = (
     "pyglet",
     "tkinter",
 )
+LAZY_CLI_MODULES = (
+    "fastf1",
+    "f1_replay_pipeline.adapters.fastf1.resolver",
+    "f1_replay_pipeline.delivery.browser.browser_delivery_service",
+    "f1_replay_pipeline.storage.canonical_writer",
+)
+
+
+def _expected_pipeline_modules() -> list[str]:
+    package_root = Path(__file__).parents[1] / "src" / "f1_replay_pipeline"
+    names = {"f1_replay_pipeline"}
+    for source in package_root.rglob("*.py"):
+        relative = source.relative_to(package_root)
+        parts = relative.parts[:-1] if relative.name == "__init__.py" else relative.with_suffix("").parts
+        names.add(".".join(("f1_replay_pipeline", *parts)))
+    return sorted(names)
 
 
 def _run_isolated_python(snippet: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -40,9 +56,8 @@ def _run_isolated_python(snippet: str, tmp_path: Path) -> subprocess.CompletedPr
     )
 
 
-def test_public_pipeline_modules_import_from_editable_install_without_side_effects(tmp_path):
+def test_public_pipeline_modules_import_from_installed_package_without_side_effects(tmp_path):
     # Arrange
-    package_root = Path(__file__).parents[1] / "src" / "f1_replay_pipeline"
     project_root = Path(__file__).parents[2]
     snippet = dedent(
         f"""
@@ -63,11 +78,11 @@ def test_public_pipeline_modules_import_from_editable_install_without_side_effec
 
         modules = {list(PUBLIC_MODULES)!r}
         forbidden_prefixes = {FORBIDDEN_MODULE_PREFIXES!r}
-        package_root = Path({str(package_root.resolve())!r})
         project_root = str(Path({str(project_root.resolve())!r}))
 
         assert project_root not in sys.path, sys.path
         imported = {{name: importlib.import_module(name) for name in modules}}
+        package_root = Path(imported["f1_replay_pipeline"].__file__).resolve().parent
         module_files = {{name: Path(module.__file__).resolve() for name, module in imported.items()}}
         assert all(path.is_relative_to(package_root) for path in module_files.values())
 
@@ -87,20 +102,78 @@ def test_public_pipeline_modules_import_from_editable_install_without_side_effec
     assert result.returncode == 0, result.stderr
 
 
-def test_top_level_pipeline_import_does_not_load_polars_or_fastf1(tmp_path):
-    package_root = Path(__file__).parents[1] / "src" / "f1_replay_pipeline"
+def test_every_shipped_pipeline_module_imports_from_the_installed_package(tmp_path):
+    expected_modules = _expected_pipeline_modules()
     snippet = dedent(
         f"""
         import importlib
-        import sys
         from pathlib import Path
+        import pkgutil
+        import socket
+
+        def deny_network(*args, **kwargs):
+            raise AssertionError("network access is forbidden during imports")
+
+        socket.create_connection = deny_network
+        socket.socket.connect = deny_network
+        socket.socket.connect_ex = deny_network
+
+        package = importlib.import_module("f1_replay_pipeline")
+        package_root = Path(package.__file__).resolve().parent
+        module_names = ["f1_replay_pipeline", *sorted(
+            module.name
+            for module in pkgutil.walk_packages(package.__path__, package.__name__ + ".")
+        )]
+        assert module_names == {expected_modules!r}
+
+        imported = [importlib.import_module(name) for name in module_names]
+        module_files = [
+            Path(module.__file__).resolve()
+            for module in imported
+            if getattr(module, "__file__", None)
+        ]
+        assert all(path.is_relative_to(package_root) for path in module_files)
+        """
+    )
+
+    result = _run_isolated_python(snippet, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_top_level_pipeline_import_does_not_load_polars_or_fastf1(tmp_path):
+    snippet = dedent(
+        """
+        import importlib
+        import sys
 
         module = importlib.import_module("f1_replay_pipeline")
-        assert Path(module.__file__).resolve().is_relative_to(Path({str(package_root.resolve())!r}))
+        assert module.__file__
         forbidden = ("polars", "fastf1")
         loaded = sorted(
             name for name in sys.modules
             if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+        )
+        assert not loaded, loaded
+        """
+    )
+
+    result = _run_isolated_python(snippet, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_cli_import_keeps_runtime_composition_modules_lazy(tmp_path):
+    snippet = dedent(
+        f"""
+        import importlib
+        import sys
+
+        importlib.import_module("f1_replay_pipeline.app.cli")
+        lazy_modules = {LAZY_CLI_MODULES!r}
+        loaded = sorted(
+            name for name in sys.modules
+            if any(name == module or name.startswith(module + ".") for module in lazy_modules)
         )
         assert not loaded, loaded
         """
