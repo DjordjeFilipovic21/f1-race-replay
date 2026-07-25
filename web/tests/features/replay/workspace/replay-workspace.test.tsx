@@ -117,6 +117,24 @@ test('shows a static panel snapshot and blurs the source while dragging', () => 
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
 })
 
+test('slides a panel body out and back in when its visibility changes', () => {
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Player panel' }))
+
+  const panel = screen.getByRole('region', { name: 'Player' })
+  const body = panel.querySelector('.replay-panel-frame__body')
+  expect(panel.classList.contains('replay-panel-frame--hidden')).toBe(true)
+  expect(body?.classList.contains('replay-panel-frame__body--exiting')).toBe(true)
+  expect(body?.getAttribute('aria-hidden')).toBe('true')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show Player panel' }))
+
+  expect(panel.classList.contains('replay-panel-frame--hidden')).toBe(false)
+  expect(body?.classList.contains('replay-panel-frame__body--exiting')).toBe(false)
+  expect(body?.getAttribute('aria-hidden')).toBe('false')
+})
+
 function workspacePanelLabels(): string[] {
   return Array.from(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).map((panel) => panel.getAttribute('aria-label') ?? '')
 }

@@ -146,6 +146,49 @@ test('hides only markers sampled with terminal OUT status', () => {
   expect(marker.getAttribute('visibility')).toBe('visible')
 })
 
+test('updates the accessible flag status and boundary semantics without rerendering the map', () => {
+  const replay = {
+    ...snapshot(),
+    leaderboardOrder: ['VER'],
+    trackStatusCode: 4,
+    drivers: { ...snapshot().drivers, VER: { ...snapshot().drivers.VER, position: 1, trackDistanceMeters: 250 } },
+  }
+  const { controller, setReplay } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
+
+  const status = screen.getByRole('status', { name: 'Track status: Safety Car' })
+  const marker = screen.getByRole('img', { name: 'Safety Car (SC)' })
+  expect(status.textContent).toBe('Safety Car')
+  expect(document.querySelectorAll('.live-track-map__boundary--yellow')).toHaveLength(2)
+  expect(marker.getAttribute('visibility')).toBe('visible')
+  expect(marker.getAttribute('transform')).toBe('translate(0 9)')
+  expect(marker.querySelector('text')?.textContent).toBe('SC')
+
+  const setStatusAttribute = vi.spyOn(status, 'setAttribute')
+  setReplay(replay)
+  expect(setStatusAttribute).not.toHaveBeenCalled()
+
+  setReplay({ ...replay, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, x: 8, y: 2 } } })
+  expect(marker.getAttribute('transform')).not.toBe('translate(0 9)')
+
+  setReplay({ ...replay, trackStatusCode: 5 })
+
+  expect(screen.getByRole('status', { name: 'Track status: Red Flag' }).textContent).toBe('Red Flag')
+  expect(document.querySelectorAll('.live-track-map__boundary--red')).toHaveLength(2)
+  expect(marker.getAttribute('visibility')).toBe('hidden')
+})
+
+test('uses leader coordinates without requiring derived track progress', () => {
+  const replay = { ...snapshot(), leaderboardOrder: ['VER'], trackStatusCode: 4 }
+  const { controller } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
+
+  expect(screen.getByRole('status', { name: 'Track status: Safety Car' })).toBeTruthy()
+  const marker = screen.getByRole('img', { name: 'Safety Car (SC)' })
+  expect(marker.getAttribute('visibility')).toBe('visible')
+  expect(marker.getAttribute('transform')).toBe('translate(0 9)')
+})
+
 test('renders the selected marker last with glow styling on its driver dot', () => {
   const { controller } = createController(snapshot())
   render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} selectedDriverId="VER" />)

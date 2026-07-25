@@ -52,7 +52,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .replay-panel-frame--drag-source { filter: blur(2px); opacity: .35; }
 .replay-panel-frame__header { align-items: center; background: linear-gradient(90deg, #171d22, #121619); border-bottom: 1px solid var(--border); display: flex; gap: .5rem; justify-content: space-between; padding: .5rem .75rem; }
 .replay-panel-frame__header h2, .replay-panel-frame__header span { font-size: .72rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-.replay-panel-frame__body { background: linear-gradient(180deg, rgb(255 255 255 / 1%), transparent 5rem); padding: .75rem; }
+.replay-panel-frame__body { background: linear-gradient(180deg, rgb(255 255 255 / 1%), transparent 5rem); display: grid; grid-template-rows: minmax(0, 1fr); padding: .75rem; }
+.replay-panel-frame__body > * { min-height: 0; overflow: hidden; }
+.replay-panel-frame__body--entering, .replay-panel-frame__body--exiting { grid-template-rows: minmax(0, 0fr); opacity: 0; padding-block: 0; pointer-events: none; transform: translateY(-.5rem); }
 .replay-panel-drag-overlay { pointer-events: none; }
 .replay-panel-drag-snapshot { background: var(--surface); box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 45%); color: inherit; opacity: .94; overflow: hidden; }
 .replay-panel-drag-snapshot > .replay-panel-frame { background: var(--surface); height: 100%; width: 100%; }
@@ -140,11 +142,18 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-leaderboard__row--terminal .live-leaderboard__position { background: #838b93 !important; }
 .live-leaderboard__empty { color: var(--text-muted); font-size: .9rem; }
 .live-track-map { min-width: 0; }
+.live-track-map__status { align-items: center; background: #1a2025; border: 1px solid var(--border); color: var(--text-muted); display: inline-flex; font-family: var(--font-display); font-size: .65rem; font-weight: 800; letter-spacing: .07em; margin: 0 0 .5rem; min-height: 1.75rem; padding: .3rem .5rem; text-transform: uppercase; width: fit-content; }
+.live-track-map__status--yellow { background: rgb(240 188 83 / 14%); border-color: rgb(240 188 83 / 55%); color: #f0bc53; }
+.live-track-map__status--red { background: rgb(255 49 56 / 15%); border-color: rgb(255 49 56 / 60%); color: #ff8589; }
 .live-track-map__svg { background: radial-gradient(circle at 50% 45%, #1b2329, #101417 72%); border: 1px solid var(--border); box-shadow: inset 0 0 2rem rgb(0 0 0 / 24%); display: block; height: auto; min-height: 16rem; width: 100%; }
 .live-track-map__boundary { fill: none; stroke: var(--border); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.live-track-map__boundary--yellow { stroke: #f0bc53; }
+.live-track-map__boundary--red { stroke: #ff3138; }
 .live-track-map__center-line { fill: none; stroke: var(--text-muted); stroke-dasharray: 5 6; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .live-track-map__start-finish { stroke: var(--focus); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .live-track-map__marker circle { stroke: #111315; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.live-track-map__safety-car-marker circle { fill: #f0bc53; stroke: #111315; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.live-track-map__safety-car-marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 900; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__marker--selected .live-track-map__driver-dot { filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 6px currentColor); }
 .live-track-map__marker--selected text { fill: #f5f6f7; font-weight: 900; }
 .live-track-map__marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
@@ -232,6 +241,7 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
   .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
   .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
   .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
+  .replay-panel-frame__body { transition: grid-template-rows 240ms ease, opacity 180ms ease, padding 240ms ease, transform 240ms ease; }
 }
 
 @media (prefers-reduced-motion: reduce) {
