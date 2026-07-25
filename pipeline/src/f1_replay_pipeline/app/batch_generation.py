@@ -34,6 +34,7 @@ from f1_replay_pipeline.app.orchestration import PipelineRequest, PipelineResult
 
 if TYPE_CHECKING:
     from f1_replay_pipeline.delivery.browser.browser_delivery_publication import BrowserValidationProgress
+    from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class GranularBrowserService(BrowserService, Protocol):
     def publish_with_progress(
         self,
         request: BrowserPublishRequest,
-        progress: Callable[[str | BrowserValidationProgress], None],
+        progress: Callable[[str | BrowserReadProgress | BrowserValidationProgress], None],
     ) -> BrowserPublishResult: ...
 
 

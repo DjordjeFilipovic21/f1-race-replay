@@ -40,6 +40,7 @@ from f1_replay_pipeline.domain.generation_identity import validate_generation_id
 
 if TYPE_CHECKING:
     from f1_replay_pipeline.delivery.browser.browser_delivery_publication import BrowserValidationProgress
+    from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress
 
 
 class PipelineService(Protocol):
@@ -98,7 +99,7 @@ class DefaultBrowserService:
     def publish_with_progress(
         self,
         request: BrowserPublishRequest,
-        progress: Callable[[str | BrowserValidationProgress], None],
+        progress: Callable[[str | BrowserReadProgress | BrowserValidationProgress], None],
     ) -> BrowserPublishResult:
         from f1_replay_pipeline.delivery.browser.browser_delivery_service import publish_browser_delivery_from_canonical
 
@@ -144,12 +145,33 @@ def main(
         request = BrowserPublishRequest(
             namespace.canonical, namespace.output, namespace.delivery_version, namespace.schema_root,
         )
+        selected_browser_service = browser_service or DefaultBrowserService()
+        publish_with_progress = getattr(selected_browser_service, "publish_with_progress", None)
+        renderer = _browser_progress_renderer(request.delivery_version) if callable(publish_with_progress) else None
+        browser_result: BrowserPublishResult | None = None
+        browser_failure: BrowserDeliveryServiceError | None = None
+        cancelled = False
         try:
-            result = (browser_service or DefaultBrowserService())(request)
+            published = publish_with_progress(request, renderer) if renderer is not None and callable(publish_with_progress) else selected_browser_service(request)
+            assert isinstance(published, BrowserPublishResult)
+            browser_result = published
+            if renderer is not None:
+                renderer.complete()
+        except KeyboardInterrupt:
+            cancelled = True
         except BrowserDeliveryServiceError as error:
-            print(f"error: {error}", file=sys.stderr)
+            browser_failure = error
+        finally:
+            if renderer is not None:
+                renderer.close()
+        if cancelled:
+            print("Browser generation cancelled safely.", file=sys.stderr)
+            return 130
+        if browser_failure is not None:
+            print(f"error: {browser_failure}", file=sys.stderr)
             return 1
-        print(f"delivery_version={result.delivery_version}")
+        assert browser_result is not None
+        print(f"delivery_version={browser_result.delivery_version}")
         return 0
     if namespace.mode == "generate":
         season_root = Path("artifacts") / "seasons" / str(namespace.year)
@@ -293,7 +315,7 @@ def _add_verify_parser(commands: argparse._SubParsersAction[argparse.ArgumentPar
 class _TerminalProgressRenderer:
     """Render a live bar on terminals and stable progress lines when redirected."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, profile: str = "batch", unit_label: str = "race") -> None:
         self._started = monotonic()
         self._interactive = sys.stderr.isatty()
         self._latest: BatchProgressEvent | None = None
@@ -305,6 +327,8 @@ class _TerminalProgressRenderer:
         self._phase_started = self._started
         self._activity_durations: list[tuple[str, str, float]] = []
         self._failures: list[tuple[str, str]] = []
+        self._profile = profile
+        self._unit_label = unit_label
         if self._interactive:
             sys.stderr.write("\033[?1049h\033[H\033[2J")
             sys.stderr.flush()
@@ -371,6 +395,8 @@ class _TerminalProgressRenderer:
             now - self._started,
             phase_elapsed=max(0.0, now - self._phase_started),
             suffix=suffix,
+            profile=self._profile,
+            unit_label=self._unit_label,
         )
         if self._interactive:
             sys.stderr.write(f"\033[H\033[2J{text}\n")
@@ -385,6 +411,8 @@ def _format_progress(
     *,
     phase_elapsed: float = 0.0,
     suffix: str = "",
+    profile: str = "batch",
+    unit_label: str = "race",
 ) -> str:
     completed = (
         event.race_index
@@ -393,13 +421,13 @@ def _format_progress(
     )
     total = event.race_total
     width = 24
-    percent = _progress_percent(event, phase_elapsed=phase_elapsed)
+    percent = _progress_percent(event, phase_elapsed=phase_elapsed, profile=profile)
     filled = round(width * percent / 100)
     bar = "█" * filled + "░" * (width - filled)
     identity = event.race_id or "finishing"
     detail = f" | {event.detail}" if event.detail else ""
     minutes, seconds = divmod(int(elapsed), 60)
-    return f"[{bar}] progress {percent:02d}% | race {completed}/{total} | {minutes:02d}:{seconds:02d} | {identity} | {event.phase}{suffix}{detail}"
+    return f"[{bar}] progress {percent:02d}% | {unit_label} {completed}/{total} | {minutes:02d}:{seconds:02d} | {identity} | {event.phase}{suffix}{detail}"
 
 
 _PHASE_SECONDS = {
@@ -415,9 +443,10 @@ _PHASE_SECONDS = {
 }
 _PHASE_WEIGHT_TOTAL = sum(_PHASE_SECONDS.values())
 _PHASE_ORDER = tuple(_PHASE_SECONDS)
+_BROWSER_PHASE_SECONDS = {phase: seconds for phase, seconds in _PHASE_SECONDS.items() if phase != "canonical_generating"}
 
 
-def _progress_percent(event: BatchProgressEvent, *, phase_elapsed: float = 0.0) -> int:
+def _progress_percent(event: BatchProgressEvent, *, phase_elapsed: float = 0.0, profile: str = "batch") -> int:
     """Return wizard-style estimated progress; only completion may report 100%."""
     if event.phase == "batch_completed":
         return 100
@@ -425,20 +454,23 @@ def _progress_percent(event: BatchProgressEvent, *, phase_elapsed: float = 0.0) 
         return 99
     if event.race_total == 0:
         return 0
+    phase_seconds = _BROWSER_PHASE_SECONDS if profile == "browser" else _PHASE_SECONDS
+    phase_order = tuple(phase_seconds)
+    phase_weight_total = sum(phase_seconds.values())
     completed = event.race_index if event.phase in {"race_succeeded", "race_failed"} else max(0, event.race_index - 1)
     fraction = completed / event.race_total
     if event.race_id is not None:
         prior_weight = sum(
-            seconds for phase, seconds in _PHASE_SECONDS.items() if _phase_precedes(phase, event.phase)
+            seconds for phase, seconds in phase_seconds.items() if _phase_precedes(phase, event.phase, phase_order)
         )
-        current_weight = _PHASE_SECONDS.get(event.phase, 0.0)
+        current_weight = phase_seconds.get(event.phase, 0.0)
         phase_fraction = _phase_fraction(event, phase_elapsed, current_weight)
-        fraction += (prior_weight + current_weight * phase_fraction) / _PHASE_WEIGHT_TOTAL / event.race_total
+        fraction += (prior_weight + current_weight * phase_fraction) / phase_weight_total / event.race_total
     return min(99, int(fraction * 100))
 
 
-def _phase_precedes(candidate: str, phase: str) -> bool:
-    return _PHASE_ORDER.index(candidate) < _PHASE_ORDER.index(phase) if phase in _PHASE_SECONDS else False
+def _phase_precedes(candidate: str, phase: str, phase_order: tuple[str, ...] = _PHASE_ORDER) -> bool:
+    return phase_order.index(candidate) < phase_order.index(phase) if phase in phase_order else False
 
 
 def _phase_fraction(event: BatchProgressEvent, elapsed: float, expected_seconds: float) -> float:
@@ -465,6 +497,48 @@ def _suppress_fastf1_info() -> Iterator[None]:
 
 def _terminal_progress_renderer() -> _TerminalProgressRenderer:
     return _TerminalProgressRenderer()
+
+
+class _BrowserProgressRenderer:
+    """Adapt browser operation events to the existing percentage progress bar."""
+
+    def __init__(self, delivery_version: str) -> None:
+        self._delivery_version = delivery_version
+        self._renderer = _TerminalProgressRenderer(profile="browser", unit_label="delivery")
+
+    def __call__(self, update: str | BrowserReadProgress | BrowserValidationProgress) -> None:
+        phase = getattr(update, "phase", update)
+        if not isinstance(phase, str):
+            raise TypeError(f"unknown browser progress phase: {phase}")
+        phase = _BROWSER_PROGRESS_PHASE_ALIASES.get(phase, phase)
+        if phase not in _BROWSER_PROGRESS_STAGE_INDICES:
+            raise TypeError(f"unknown browser progress phase: {phase}")
+        self._renderer(BatchProgressEvent(
+            0, self._delivery_version, 1, 1, phase,
+            detail=getattr(update, "detail", None),
+            stage_index=_BROWSER_PROGRESS_STAGE_INDICES[phase],
+            stage_total=len(_BROWSER_PROGRESS_PHASES),
+            phase_completed=getattr(update, "completed", None),
+            phase_total=getattr(update, "total", None),
+        ))
+
+    def complete(self) -> None:
+        self._renderer(BatchProgressEvent(
+            0, self._delivery_version, 1, 1, "batch_completed",
+            stage_index=len(_BROWSER_PROGRESS_PHASES), stage_total=len(_BROWSER_PROGRESS_PHASES),
+        ))
+
+    def close(self) -> None:
+        self._renderer.close()
+
+
+_BROWSER_PROGRESS_PHASES = tuple(_BROWSER_PHASE_SECONDS)
+_BROWSER_PROGRESS_STAGE_INDICES = {phase: index for index, phase in enumerate(_BROWSER_PROGRESS_PHASES, start=1)}
+_BROWSER_PROGRESS_PHASE_ALIASES = {"browser_publishing": "browser_payload_preparing"}
+
+
+def _browser_progress_renderer(delivery_version: str) -> _BrowserProgressRenderer:
+    return _BrowserProgressRenderer(delivery_version)
 
 
 def _add_backend_option(parser: argparse.ArgumentParser, choices: tuple[str, ...]) -> None:

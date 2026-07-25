@@ -15,7 +15,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     PublishedBrowserDelivery,
     publish_browser_delivery,
 )
-from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserDeliveryReadError, read_validated_canonical_generation
+from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserDeliveryReadError, BrowserReadProgress, read_validated_canonical_generation
 from f1_replay_pipeline.delivery.browser.browser_delivery_request import (
     BrowserDeliveryServiceError,
     BrowserPublishRequest,
@@ -33,7 +33,7 @@ Reader = Callable[[Path], CanonicalGenerationSnapshot]
 AssetGenerator = Callable[[CanonicalGenerationSnapshot], Mapping[str, object]]
 Builder = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], BrowserDeliveryBuild]
 Publisher = Callable[..., PublishedBrowserDelivery]
-ProgressCallback = Callable[[str | BrowserValidationProgress], None]
+ProgressCallback = Callable[[str | BrowserReadProgress | BrowserValidationProgress], None]
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ def publish_browser_delivery_from_canonical(
     emit = progress or (lambda _stage: None)
     try:
         emit("canonical_snapshot_reading")
-        snapshot = dependencies.reader(request.canonical_parent)
+        snapshot = _read_snapshot(request.canonical_parent, dependencies.reader, emit)
         emit("track_assets_generating")
         assets = dependencies.asset_generator(snapshot)
         emit("browser_building")
@@ -64,6 +64,12 @@ def publish_browser_delivery_from_canonical(
     except (BrowserDeliveryReadError, BrowserDeliveryBuildError, TrackAssetsGenerationError, BrowserDeliveryPublicationError) as error:
         raise BrowserDeliveryServiceError(str(error)) from error
     return BrowserPublishResult(request, publication.delivery_version, publication)
+
+
+def _read_snapshot(canonical_parent: Path, reader: Reader, emit: ProgressCallback) -> CanonicalGenerationSnapshot:
+    if reader is read_validated_canonical_generation:
+        return read_validated_canonical_generation(canonical_parent, progress=emit)
+    return reader(canonical_parent)
 
 
 def _publish_delivery(

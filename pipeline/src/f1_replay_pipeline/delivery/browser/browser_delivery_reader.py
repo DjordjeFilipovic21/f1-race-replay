@@ -32,6 +32,17 @@ from f1_replay_pipeline.domain.validators import validate_canonical_table
 GenerationResolver = Callable[[Path], GenerationPublicationResult]
 GenerationValidator = Callable[..., DatasetManifest]
 TableReader = Callable[[Path, tuple[str, ...]], pl.DataFrame]
+@dataclass(frozen=True)
+class BrowserReadProgress:
+    """Progress through canonical table integrity checks."""
+
+    phase: str
+    completed: int
+    total: int
+    detail: str
+
+
+ProgressCallback = Callable[[BrowserReadProgress], None]
 
 
 class BrowserDeliveryReadError(ValueError):
@@ -49,6 +60,7 @@ class CanonicalReaderDependencies:
 
 def read_validated_canonical_generation(
     target_parent: Path, *, dependencies: CanonicalReaderDependencies = CanonicalReaderDependencies(),
+    progress: ProgressCallback | None = None,
 ) -> CanonicalGenerationSnapshot:
     """Resolve ``current.json``, validate its generation, then read its ten tables.
 
@@ -58,6 +70,7 @@ def read_validated_canonical_generation(
     """
     if not isinstance(target_parent, Path):
         raise TypeError("target_parent must be a pathlib.Path")
+    emit = progress or (lambda _stage: None)
     try:
         resolved = dependencies.resolver(target_parent)
         manifest = dependencies.validator(
@@ -67,10 +80,11 @@ def read_validated_canonical_generation(
         )
         reader = _read_projected_table if dependencies.table_reader is None else dependencies.table_reader
         entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
-        frames = {
-            entry.name: _read_and_verify_table(resolved.generation_path, entry, reader)
-            for entry in entries
-        }
+        frames = {}
+        for index, entry in enumerate(entries, start=1):
+            emit(BrowserReadProgress("canonical_snapshot_reading", index - 1, len(entries), entry.name))
+            frames[entry.name] = _read_and_verify_table(resolved.generation_path, entry, reader)
+            emit(BrowserReadProgress("canonical_snapshot_reading", index, len(entries), entry.name))
     except (GenerationPublicationError, ValueError) as error:
         raise BrowserDeliveryReadError(str(error)) from error
     return CanonicalGenerationSnapshot(resolved.generation_path.name, resolved.manifest_sha256, frames)
@@ -236,5 +250,5 @@ def _browser_coordinate(value: object) -> float | None:
 
 __all__ = [
     "CanonicalReaderDependencies", "GenerationResolver", "GenerationValidator", "TableReader",
-    "BrowserDeliveryReadError", "derive_browser_driver_fields", "read_validated_canonical_generation",
+    "BrowserDeliveryReadError", "BrowserReadProgress", "derive_browser_driver_fields", "read_validated_canonical_generation",
 ]

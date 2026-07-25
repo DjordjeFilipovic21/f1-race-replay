@@ -16,6 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_request import (
     BrowserPublishRequest,
     BrowserPublishResult,
 )
+from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress
 from f1_replay_pipeline.app.orchestration import (
     PipelineRequest,
     PipelineResult,
@@ -76,6 +77,61 @@ def test_browser_command_builds_request_and_prints_delivery_version(
         Path("contracts/replay-data/v1/schemas"),
     )]
     assert capsys.readouterr().out == "delivery_version=bahrain-v1\n"
+
+
+def test_browser_command_flushes_granular_progress_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class GranularBrowserService:
+        def __call__(self, request: BrowserPublishRequest) -> BrowserPublishResult:
+            del request
+            raise AssertionError("browser CLI should use granular publication when available")
+
+        def publish_with_progress(self, request: BrowserPublishRequest, progress) -> BrowserPublishResult:
+            progress("canonical_snapshot_reading")
+            progress(BrowserReadProgress("canonical_snapshot_reading", 2, 10, "drivers"))
+            progress("browser_publishing")
+            return BrowserPublishResult(request, request.delivery_version, object())
+
+    status = main([
+        "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
+        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+    ], browser_service=GranularBrowserService())
+
+    captured = capsys.readouterr()
+    assert status == 0
+    progress_lines = [line for line in captured.err.splitlines() if line.startswith("[")]
+    assert "progress 00%" in progress_lines[0]
+    assert "delivery 0/1" in progress_lines[0]
+    assert "canonical_snapshot_reading" in progress_lines[0]
+    assert any("drivers" in line for line in progress_lines)
+    assert any("browser_payload_preparing" in line for line in progress_lines)
+    assert "progress 100%" in progress_lines[-1]
+    assert "delivery 1/1" in progress_lines[-1]
+
+
+def test_browser_keyboard_interrupt_closes_progress_without_traceback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class InterruptedBrowserService:
+        def __call__(self, request: BrowserPublishRequest) -> BrowserPublishResult:
+            del request
+            raise AssertionError("browser CLI should use granular publication when available")
+
+        def publish_with_progress(self, request: BrowserPublishRequest, progress) -> BrowserPublishResult:
+            del request
+            progress(BrowserReadProgress("canonical_snapshot_reading", 2, 10, "car_telemetry"))
+            raise KeyboardInterrupt
+
+    status = main([
+        "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
+        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+    ], browser_service=InterruptedBrowserService())
+
+    captured = capsys.readouterr()
+    assert status == 130
+    assert "Browser generation cancelled safely." in captured.err
+    assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize(
