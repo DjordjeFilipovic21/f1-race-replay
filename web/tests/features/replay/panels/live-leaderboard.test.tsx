@@ -105,6 +105,15 @@ test('announces unavailable loading state and exposes labelled semantic table wh
   expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Position', 'Team colour', 'Driver', 'Leader gap'])
 })
 
+test('does not create a leaderboard row for an active safety-car track status', () => {
+  render(<LiveLeaderboard snapshot={snapshot({ trackStatusCode: 4 })} drivers={drivers} />)
+
+  const rows = screen.getAllByRole('row').slice(1)
+  expect(rows).toHaveLength(3)
+  expect(rows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual(['VER', 'NOR', 'HAM'])
+  expect(screen.queryByRole('rowheader', { name: 'Safety Car' })).toBeNull()
+})
+
 test('switches from cumulative leader gaps to intervals between adjacent positions', () => {
   const current = snapshot({
     leaderboardOrder: ['VER', 'NOR', 'HAM'],

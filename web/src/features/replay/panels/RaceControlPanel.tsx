@@ -1,18 +1,12 @@
 import { memo } from 'react'
 import type { ReplayEvent } from '../../../data/replay/types'
 import type { ReplayControllerSnapshot } from '../../../engine/replay'
+import { formatTrackStatus } from './track-status'
+
+export { formatTrackStatus } from './track-status'
 
 export const RACE_CONTROL_MESSAGE_DURATION_MS = 5_000
 export const RACE_CONTROL_MESSAGE_EXIT_DURATION_MS = 240
-
-const TRACK_STATUS_LABELS: Readonly<Record<number, string>> = {
-  1: 'All Clear',
-  2: 'Yellow Flag',
-  4: 'Safety Car',
-  5: 'Red Flag',
-  6: 'Virtual Safety Car',
-  7: 'Virtual Safety Car Ending',
-}
 
 export interface RaceControlPanelProps {
   readonly snapshot: ReplayControllerSnapshot
@@ -51,11 +45,6 @@ export const RaceControlPanel = memo(function RaceControlPanel({ snapshot, activ
     </article>
   )
 })
-
-export function formatTrackStatus(trackStatusCode: number | null): string {
-  if (trackStatusCode === null || !Number.isFinite(trackStatusCode)) return 'Unavailable'
-  return TRACK_STATUS_LABELS[trackStatusCode] ?? `Code ${trackStatusCode}`
-}
 
 export function formatWeatherState(weatherState: string | null): string {
   const normalized = weatherState?.trim() ?? ''

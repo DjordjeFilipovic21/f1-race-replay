@@ -11,6 +11,7 @@ import {
   formatWeatherState,
   RaceControlPanel,
 } from '../../../../src/features/replay/panels/RaceControlPanel'
+import { describeTrackStatus } from '../../../../src/features/replay/panels/track-status'
 
 const event = (sessionTimeMs: number, eventType: string, description: string): ReplayEvent => ({ sessionTimeMs, eventType, description })
 
@@ -24,12 +25,23 @@ afterEach(cleanup)
 test('formats active state and event values without losing unavailable data', () => {
   expect(formatTrackStatus(4)).toBe('Safety Car')
   expect(formatTrackStatus(null)).toBe('Unavailable')
+  expect(formatTrackStatus(99)).toBe('Unknown (Code 99)')
   expect(formatWeatherState(' clear ')).toBe('Clear')
   expect(formatWeatherState('RAIN')).toBe('Rain')
   expect(formatWeatherState(null)).toBe('Unavailable')
   expect(formatRaceControlMessage(event(1_250, 'yellow_flag', 'Turn 1 - Impeding - Noted'))).toEqual({
     headline: 'RACE CONTROL: YELLOW FLAG', detail: 'TURN 1 - IMPEDING - NOTED', isPenalty: false,
   })
+})
+
+test('shares yellow and red track-status semantics with the track map', () => {
+  expect(describeTrackStatus(1)).toMatchObject({ label: 'All Clear', tone: 'neutral', isSafetyCar: false })
+  expect(describeTrackStatus(2)).toMatchObject({ label: 'Yellow Flag', tone: 'yellow' })
+  expect(describeTrackStatus(4)).toMatchObject({ label: 'Safety Car', tone: 'yellow', isSafetyCar: true })
+  expect(describeTrackStatus(5)).toMatchObject({ label: 'Red Flag', tone: 'red' })
+  expect(describeTrackStatus(6)).toMatchObject({ label: 'Virtual Safety Car', tone: 'yellow', isVirtualSafetyCar: true })
+  expect(describeTrackStatus(7)).toMatchObject({ label: 'Virtual Safety Car Ending', tone: 'yellow', isVirtualSafetyCar: true })
+  expect(describeTrackStatus(null)).toMatchObject({ label: 'Unavailable', tone: 'neutral' })
 })
 
 test('formats FIA-style incident headings and identifies penalties', () => {
