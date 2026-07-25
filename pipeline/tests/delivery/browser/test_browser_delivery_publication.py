@@ -422,7 +422,7 @@ def test_publication_rejects_a_symlinked_generations_directory(tmp_path: Path) -
 
 def test_complete_validator_rejects_chunk_bytes_that_disagree_with_manifest_digest() -> None:
     delivery = _delivery()
-    payloads = list(_artifact_payloads("delivery-one", delivery))
+    payloads = list(_artifact_payloads("delivery-one", delivery, SCHEMA_ROOT))
     index = next(index for index, artifact in enumerate(payloads) if artifact.path.startswith("chunks/"))
     artifact = payloads[index]
     payloads[index] = replace(artifact, payload=artifact.payload.replace(b'"startMs":0', b'"startMs":1'))

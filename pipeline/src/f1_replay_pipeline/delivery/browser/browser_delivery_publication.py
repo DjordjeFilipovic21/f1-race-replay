@@ -343,9 +343,13 @@ def _prepared_artifacts(
     )
 
 
-def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[PreparedArtifact, ...]:
+def _artifact_payloads(
+    version: str,
+    delivery: BrowserDeliveryBuild,
+    schema_root: Path,
+) -> tuple[PreparedArtifact, ...]:
     """Prepare fully validated artifacts for focused tests."""
-    schemas, registry = _load_contract_schemas(Path(__file__).parents[5] / "contracts" / "replay-data" / "v1" / "schemas")
+    schemas, registry = _load_contract_schemas(schema_root)
     return _prepared_artifacts(version, delivery, _contract_validators(schemas, registry))
 
 
