@@ -43,6 +43,49 @@ this index. The JSON Schema validates each marker's structure; the pipeline
 manifest/publication models and browser guard enforce cross-entry ordering and
 require every timestamp to fall inside the half-open replay interval.
 
+### Optional timeline summary
+
+The manifest may include a compact, optional `timelineSummary` reference. It
+lets the browser render full-race status intervals and DNF markers without
+loading telemetry chunks:
+
+```json
+"timelineSummary": {
+  "path": "timeline-summary.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `timeline-summary.json` is a `v1` object whose bounds and
+entries use absolute integer milliseconds:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "bahrain-2024",
+  "startMs": 1000,
+  "endMs": 2000,
+  "intervals": [{"kind": "yellow", "startMs": 1100, "endMs": 1200}],
+  "dnfMarkers": [{"driverId": "VER", "timeMs": 1500}]
+}
+```
+
+- Intervals are half-open, `[startMs, endMs)`, and must fit within the
+  summary bounds. Status codes map to `yellow` (2), `sc` (4), `red` (5), and
+  `vsc` (6 or 7). Adjacent intervals of the same kind are merged and all
+  intervals are clipped to the replay bounds.
+- DNF markers come from final non-completion results and the established
+  terminal-time derivation, not transient position status. Each driver has at
+  most one marker, within the replay bounds.
+- Intervals are deterministically ordered by `startMs`, `endMs`, then `kind`;
+  markers by `timeMs`, then `driverId`. Publication serializes the artifact
+  deterministically and verifies its SHA-256 digest against the manifest
+  reference before schema and semantic validation.
+- The summary contains no lap markers and no telemetry samples. It is optional:
+  older deliveries and manifests without `timelineSummary` remain valid and
+  loadable.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

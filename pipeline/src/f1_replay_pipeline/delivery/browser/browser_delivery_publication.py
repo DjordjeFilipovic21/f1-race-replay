@@ -16,7 +16,10 @@ from typing import cast
 import jsonschema_rs
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChunk, BrowserEvent
-from f1_replay_pipeline.delivery.browser.browser_delivery_models import BrowserDriverFields
+from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
+    BrowserDriverFields,
+    TIMELINE_SUMMARY_SCHEMA_ID,
+)
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 from f1_replay_pipeline.domain.dataset_manifest import ManifestValidationError, serialize_deterministic_json
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
@@ -39,6 +42,7 @@ _NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CHUNK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:chunk"
 _TRACK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
+_TIMELINE_SUMMARY_SCHEMA = TIMELINE_SUMMARY_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 
 _make_contract_validator = jsonschema_rs.Draft202012Validator
@@ -79,6 +83,7 @@ class PublishedBrowserDelivery:
     track_assets_path: Path
     chunk_paths: tuple[Path, ...]
     artifact_digests: Mapping[str, str]
+    timeline_summary_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -132,7 +137,12 @@ def validate_complete_browser_delivery(
             or manifest.get("sourceManifestSha256") != expected_manifest_sha256
         ):
             raise ValueError("browser delivery provenance disagrees with canonical generation")
-        references = (manifest.get("trackAssets"), *(manifest.get("chunks") or ()))
+        timeline_reference = manifest.get("timelineSummary")
+        references = (
+            manifest.get("trackAssets"),
+            *((timeline_reference,) if timeline_reference is not None else ()),
+            *(manifest.get("chunks") or ()),
+        )
         payloads = [("manifest.json", manifest_file.data)]
         for reference in references:
             if not isinstance(reference, dict):
@@ -197,8 +207,9 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
     track = json.loads(encoded["track-assets.json"])
     if not isinstance(manifest, dict) or not isinstance(track, dict):
         raise BrowserDeliveryPublicationError("delivery metadata must be JSON objects")
-    refs = manifest.get("chunks")
-    if not isinstance(refs, list):
+    _validate_schema_instance(validators["manifest"], manifest, "manifest")
+    chunk_refs = manifest.get("chunks")
+    if not isinstance(chunk_refs, list):
         raise BrowserDeliveryPublicationError("manifest chunks must be an array")
     track_reference = manifest.get("trackAssets")
     if not isinstance(track_reference, dict) or track_reference.get("path") != "track-assets.json":
@@ -210,14 +221,29 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
     driver_ids = {driver["id"] for driver in manifest["drivers"]}
     expected_paths = {"manifest.json", "track-assets.json"}
-    total = len(refs) + 2
-    _validate_schema_instance(validators["manifest"], manifest, "manifest")
+    timeline_reference = manifest.get("timelineSummary")
+    if timeline_reference is not None:
+        if not isinstance(timeline_reference, dict) or timeline_reference.get("path") != "timeline-summary.json":
+            raise BrowserDeliveryPublicationError("manifest timeline summary reference is invalid")
+        expected_paths.add("timeline-summary.json")
+    total = len(chunk_refs) + 2 + (1 if timeline_reference is not None else 0)
     _emit_validation_progress(emit, 1, total, "manifest schema")
-    _validate_lap_starts(manifest.get("lapStarts", []), refs)
+    _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
     _validate_schema_instance(validators["track-assets"], track, "track assets")
     _emit_validation_progress(emit, 2, total, "track assets schema")
+    completed = 2
+    if timeline_reference is not None:
+        timeline = json.loads(encoded["timeline-summary.json"])
+        if not isinstance(timeline, dict):
+            raise BrowserDeliveryPublicationError("timeline summary must be a JSON object")
+        _validate_schema_instance(
+            validators["timeline-summary"], timeline, "timeline summary",
+        )
+        _validate_timeline_summary_contract(timeline, manifest)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "timeline summary schema")
     previous = None
-    for sequence, reference in enumerate(refs, start=1):
+    for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
         expected_paths.add(path)
         chunk = json.loads(encoded[path])
@@ -226,7 +252,7 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_chunk_contract(chunk, reference, driver_ids, previous)
         _validate_schema_instance(validators["chunk"], chunk, "chunk")
         previous = reference
-        _emit_validation_progress(emit, sequence + 2, total, f"chunk schema {sequence}/{len(refs)}")
+        _emit_validation_progress(emit, completed + sequence, total, f"chunk schema {sequence}/{len(chunk_refs)}")
     if set(encoded) != expected_paths:
         raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
 
@@ -241,7 +267,8 @@ def _prepared_artifacts(
     emit = progress or (lambda _update: None)
     chunks = delivery.chunks
     _validate_chunks(chunks)
-    total = 2 * len(chunks) + 4
+    summary = delivery.timeline_summary
+    total = 2 * len(chunks) + 4 + (2 if summary is not None else 0)
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
     schema_track_assets = _schema_compatible_value(delivery.track_assets)
@@ -251,6 +278,20 @@ def _prepared_artifacts(
     _emit_validation_progress(emit, 2, total, "track assets schema")
     track = _prepare_artifact("track-assets.json", delivery.track_assets)
 
+    timeline_artifact: PreparedArtifact | None = None
+    timeline_contract = None
+    completed = 2
+    if summary is not None:
+        timeline_contract = _schema_compatible_value(summary.as_dict())
+        _validate_schema_instance(
+            validators["timeline-summary"], timeline_contract, "timeline summary",
+        )
+        timeline_artifact = _prepare_artifact("timeline-summary.json", timeline_contract)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "timeline summary")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "timeline summary schema")
+
     previous = None
     chunk_artifacts = []
     references = []
@@ -259,9 +300,10 @@ def _prepared_artifacts(
         contract = _chunk_dict(chunk, fixture_id)
         reference = _chunk_reference(chunk, "")
         _validate_chunk_contract(contract, reference, driver_ids, previous)
-        _emit_validation_progress(emit, 2 * chunk.sequence + 1, total, f"chunk {chunk.sequence}/{len(chunks)}")
+        chunk_completed = completed + 2 * (chunk.sequence - 1) + 1
+        _emit_validation_progress(emit, chunk_completed, total, f"chunk {chunk.sequence}/{len(chunks)}")
         _validate_schema_instance(validators["chunk"], contract, "chunk")
-        _emit_validation_progress(emit, 2 * chunk.sequence + 2, total, f"chunk schema {chunk.sequence}/{len(chunks)}")
+        _emit_validation_progress(emit, chunk_completed + 1, total, f"chunk schema {chunk.sequence}/{len(chunks)}")
         artifact = _prepare_artifact(f"chunks/{chunk.chunk_id}.json", contract)
         reference = _chunk_reference(chunk, artifact.sha256)
         chunk_artifacts.append(artifact)
@@ -277,11 +319,28 @@ def _prepared_artifacts(
         "trackAssets": {"path": "track-assets.json", "schemaId": _TRACK_SCHEMA, "sha256": track.sha256},
         "chunks": references,
     })
-    _validate_manifest_contract(manifest, delivery, references)
+    if timeline_artifact is not None:
+        manifest["timelineSummary"] = {
+            "path": timeline_artifact.path,
+            "schemaId": _TIMELINE_SUMMARY_SCHEMA,
+            "sha256": timeline_artifact.sha256,
+        }
+    elif "timelineSummary" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest timeline summary reference has no summary payload"
+        )
+    if timeline_contract is not None:
+        _validate_timeline_summary_contract(timeline_contract, manifest)
+    _validate_manifest_contract(manifest, delivery, references, timeline_artifact)
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
     _emit_validation_progress(emit, total, total, "manifest schema")
-    return (_prepare_artifact("manifest.json", manifest), track, *chunk_artifacts)
+    return (
+        _prepare_artifact("manifest.json", manifest),
+        track,
+        *((timeline_artifact,) if timeline_artifact is not None else ()),
+        *chunk_artifacts,
+    )
 
 
 def _artifact_payloads(version: str, delivery: BrowserDeliveryBuild) -> tuple[PreparedArtifact, ...]:
@@ -304,16 +363,36 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         raise BrowserDeliveryPublicationError("delivery metadata is incomplete") from error
     if hashlib.sha256(manifest.payload).hexdigest() != manifest.sha256 or hashlib.sha256(track.payload).hexdigest() != track.sha256:
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
-    expected_paths = {"manifest.json", "track-assets.json", *(f"chunks/{chunk.chunk_id}.json" for chunk in delivery.chunks)}
+    expected_paths = {
+        "manifest.json", "track-assets.json",
+        *(f"chunks/{chunk.chunk_id}.json" for chunk in delivery.chunks),
+    }
+    if delivery.timeline_summary is not None:
+        expected_paths.add("timeline-summary.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
 
-def _validate_manifest_contract(manifest, delivery: BrowserDeliveryBuild, refs) -> None:
+def _validate_manifest_contract(
+    manifest,
+    delivery: BrowserDeliveryBuild,
+    refs,
+    timeline_artifact: PreparedArtifact | None = None,
+) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
     if len(refs) != len(delivery.chunks):
         raise BrowserDeliveryPublicationError("manifest chunk count disagrees")
+    timeline_reference = manifest.get("timelineSummary")
+    if timeline_artifact is None:
+        if timeline_reference is not None or delivery.timeline_summary is not None:
+            raise BrowserDeliveryPublicationError("timeline summary reference disagrees with its payload")
+    elif timeline_reference != {
+        "path": timeline_artifact.path,
+        "schemaId": _TIMELINE_SUMMARY_SCHEMA,
+        "sha256": timeline_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError("timeline summary reference disagrees with its payload")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -335,6 +414,61 @@ def _validate_track_contract(track, manifest) -> None:
         raise BrowserDeliveryPublicationError("track assets disagree with the manifest")
 
 
+def _validate_timeline_summary_contract(summary, manifest) -> None:
+    """Apply semantic checks not expressible in the compact JSON schema."""
+    if summary.get("contractVersion") != "v1" or summary.get("fixtureId") != manifest.get("fixtureId"):
+        raise BrowserDeliveryPublicationError("timeline summary disagrees with the manifest")
+    start_ms, end_ms = summary.get("startMs"), summary.get("endMs")
+    if any(type(value) is not int or value < 0 for value in (start_ms, end_ms)):
+        raise BrowserDeliveryPublicationError("timeline summary bounds are invalid")
+    start_ms, end_ms = cast(int, start_ms), cast(int, end_ms)
+    if start_ms >= end_ms:
+        raise BrowserDeliveryPublicationError("timeline summary bounds are invalid")
+    chunks = manifest.get("chunks")
+    if (
+        not isinstance(chunks, list)
+        or not chunks
+        or start_ms != chunks[0].get("startMs")
+        or end_ms != chunks[-1].get("endMs")
+    ):
+        raise BrowserDeliveryPublicationError("timeline summary bounds disagree with replay bounds")
+    intervals = summary.get("intervals")
+    markers = summary.get("dnfMarkers")
+    if not isinstance(intervals, list) or not isinstance(markers, list):
+        raise BrowserDeliveryPublicationError("timeline summary collections are invalid")
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            raise BrowserDeliveryPublicationError("timeline summary interval is invalid")
+        interval_start, interval_end = interval.get("startMs"), interval.get("endMs")
+        if (
+            interval.get("kind") not in {"yellow", "sc", "red", "vsc"}
+            or any(type(value) is not int for value in (interval_start, interval_end))
+        ):
+            raise BrowserDeliveryPublicationError("timeline summary interval bounds are invalid")
+        interval_start, interval_end = cast(int, interval_start), cast(int, interval_end)
+        if not start_ms <= interval_start < interval_end <= end_ms:
+            raise BrowserDeliveryPublicationError("timeline summary interval bounds are invalid")
+    if intervals != sorted(intervals, key=lambda value: (value["startMs"], value["endMs"], value["kind"])):
+        raise BrowserDeliveryPublicationError("timeline summary intervals are not deterministically ordered")
+    driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
+    marker_ids = set()
+    for marker in markers:
+        if not isinstance(marker, dict):
+            raise BrowserDeliveryPublicationError("timeline summary DNF marker is invalid")
+        driver_id, time_ms = marker.get("driverId"), marker.get("timeMs")
+        if (
+            not isinstance(driver_id, str)
+            or driver_id not in driver_ids
+            or type(time_ms) is not int
+            or not start_ms <= time_ms < end_ms
+            or driver_id in marker_ids
+        ):
+            raise BrowserDeliveryPublicationError("timeline summary DNF markers are invalid")
+        marker_ids.add(driver_id)
+    if markers != sorted(markers, key=lambda value: (value["timeMs"], value["driverId"])):
+        raise BrowserDeliveryPublicationError("timeline summary DNF markers are not deterministically ordered")
+
+
 def _validate_lap_starts(markers, refs) -> None:
     if any(
         following["lap"] <= current["lap"] or following["startMs"] < current["startMs"]
@@ -352,7 +486,7 @@ def _load_contract_schemas(
         raise TypeError("schema_root must be a pathlib.Path")
     schemas: dict[str, Mapping[str, object]] = {}
     try:
-        for name in ("manifest", "chunk", "track-assets"):
+        for name in ("manifest", "chunk", "track-assets", "timeline-summary"):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
             )
@@ -521,7 +655,21 @@ def _publish_payloads(
     generation = root / "generations" / version
     digests = {artifact.path: artifact.sha256 for artifact in artifacts}
     chunk_paths = tuple(generation / artifact.path for artifact in artifacts if artifact.path.startswith("chunks/"))
-    return PublishedBrowserDelivery(version, generation, generation / "manifest.json", root / "browser-current.json", generation / "track-assets.json", chunk_paths, digests)
+    timeline_summary_path = (
+        generation / "timeline-summary.json"
+        if "timeline-summary.json" in digests
+        else None
+    )
+    return PublishedBrowserDelivery(
+        version,
+        generation,
+        generation / "manifest.json",
+        root / "browser-current.json",
+        generation / "track-assets.json",
+        chunk_paths,
+        digests,
+        timeline_summary_path,
+    )
 
 
 def _write_at(directory_fd: int, name: str, payload: bytes) -> None:

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapStart, ReplayEvent, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapStart, ReplayEvent, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
@@ -18,12 +18,13 @@ export interface ReplayControlsProps {
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
+  readonly timelineSummary?: TimelineSummary
   readonly trackAssets: TrackAssets
   readonly coordinateInterpolation?: CoordinateInterpolationStrategy
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, trackAssets }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, timelineSummary, trackAssets }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -119,6 +120,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
         onSeekPreview={handleSeekPreview}
         snapshot={snapshot}
         startMs={startMs}
+        timelineSummary={timelineSummary}
       />,
     },
     {

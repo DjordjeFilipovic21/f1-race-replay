@@ -7,6 +7,11 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 from referencing import Registry, Resource
 
+from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
+    BrowserManifest,
+    BrowserTimelineSummaryReference,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
@@ -51,6 +56,7 @@ def load_contract_bundle():
         "manifest": load_json(SCHEMA_ROOT / "manifest.schema.json"),
         "chunk": load_json(SCHEMA_ROOT / "chunk.schema.json"),
         "trackAssets": load_json(SCHEMA_ROOT / "track-assets.schema.json"),
+        "timelineSummary": load_json(SCHEMA_ROOT / "timeline-summary.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -301,6 +307,130 @@ def test_replay_contract_invalid_manifest_format_is_rejected(contract_bundle, sc
     # Act / Assert
     with pytest.raises(ValidationError):
         validate_instance(contract_bundle["schemas"]["manifest"], invalid_manifest, schema_registry)
+
+
+def timeline_summary_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "startMs": 0,
+        "endMs": 4_000,
+        "intervals": [
+            {"kind": "yellow", "startMs": 500, "endMs": 1_000},
+            {"kind": "sc", "startMs": 1_200, "endMs": 1_300},
+            {"kind": "red", "startMs": 1_600, "endMs": 1_700},
+            {"kind": "vsc", "startMs": 2_000, "endMs": 2_500},
+        ],
+        "dnfMarkers": [{"driverId": "HAM", "timeMs": 3_000}],
+    }
+
+
+def timeline_summary_reference() -> dict[str, str]:
+    return {
+        "path": "timeline-summary.json",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+        "sha256": "a" * 64,
+    }
+
+
+def assert_timeline_summary_semantics(summary):
+    assert summary["startMs"] < summary["endMs"]
+    for interval in summary["intervals"]:
+        assert summary["startMs"] <= interval["startMs"] < interval["endMs"] <= summary["endMs"]
+    for marker in summary["dnfMarkers"]:
+        assert summary["startMs"] <= marker["timeMs"] < summary["endMs"]
+
+
+def test_replay_contract_timeline_summary_validates_and_is_optional(contract_bundle, schema_registry):
+    summary = timeline_summary_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["timelineSummary"] = timeline_summary_reference()
+
+    validate_instance(contract_bundle["schemas"]["timelineSummary"], summary, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+    assert_timeline_summary_semantics(summary)
+
+
+def test_browser_manifest_serializes_optional_timeline_summary_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        timeline_summary=BrowserTimelineSummaryReference(
+            "timeline-summary.json",
+            "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+            "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["timelineSummary"] == timeline_summary_reference()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_replay_contract_timeline_summary_reference_rejects_invalid_schema_or_digest(
+    contract_bundle, schema_registry, field, value
+):
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    reference = timeline_summary_reference()
+    reference[field] = value
+    manifest["timelineSummary"] = reference
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+@pytest.mark.parametrize(
+    "invalid_summary",
+    [
+        {"kind": "yellow", "startMs": 1_000, "endMs": 1_000},
+        {"kind": "red", "startMs": 2_000, "endMs": 1_000},
+        {"kind": "blue", "startMs": 0, "endMs": 1_000},
+    ],
+)
+def test_replay_contract_timeline_summary_detects_invalid_interval_bounds(
+    contract_bundle, schema_registry, invalid_summary
+):
+    summary = timeline_summary_payload()
+    summary["intervals"] = [invalid_summary]
+
+    if invalid_summary["kind"] not in {"yellow", "sc", "red", "vsc"}:
+        with pytest.raises(ValidationError):
+            validate_instance(contract_bundle["schemas"]["timelineSummary"], summary, schema_registry)
+    else:
+        validate_instance(contract_bundle["schemas"]["timelineSummary"], summary, schema_registry)
+        with pytest.raises(AssertionError):
+            assert_timeline_summary_semantics(summary)
+
+
+@pytest.mark.parametrize(
+    "invalid_marker",
+    [
+        {"timeMs": 3_000},
+        {"driverId": "ham", "timeMs": 3_000},
+        {"driverId": "HAM", "timeMs": -1},
+        {"driverId": "HAM", "timeMs": 3_000, "unexpected": True},
+    ],
+)
+def test_replay_contract_timeline_summary_rejects_invalid_dnf_markers(
+    contract_bundle, schema_registry, invalid_marker
+):
+    summary = timeline_summary_payload()
+    summary["dnfMarkers"] = [invalid_marker]
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["timelineSummary"], summary, schema_registry)
 
 
 def test_replay_contract_schema_accepts_a_general_ordered_three_chunk_manifest(

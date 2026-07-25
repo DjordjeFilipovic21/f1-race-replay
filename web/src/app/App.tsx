@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { loadReplayIndex } from '../data/replay/loader'
 import { createFetchSource } from '../data/replay/source'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../engine/replay'
-import type { DriverMetadata, LapStart, TrackAssets } from '../data/replay/types'
+import type { DriverMetadata, LapStart, TimelineSummary, TrackAssets } from '../data/replay/types'
 import { ReplayControls } from '../features/replay/shell/ReplayControls'
 
 interface ReadyReplay {
@@ -11,6 +11,7 @@ interface ReadyReplay {
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
+  readonly timelineSummary?: TimelineSummary
   readonly trackAssets: TrackAssets
   readonly coordinateInterpolation: CoordinateInterpolationStrategy
 }
@@ -34,7 +35,7 @@ export default function App() {
         if (stale) return
         controller = createReplayController({ index, coordinateInterpolation })
         const chunks = index.manifest.chunks
-        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, lapStarts: index.manifest.lapStarts, trackAssets: index.trackAssets, coordinateInterpolation })
+        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, lapStarts: index.manifest.lapStarts, ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }), trackAssets: index.trackAssets, coordinateInterpolation })
       },
       (loadError: unknown) => {
         if (!stale) setError(loadError)

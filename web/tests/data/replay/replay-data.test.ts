@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { sha256Hex } from '../../../src/data/replay/digest'
+import { parseManifest, parseTimelineSummary } from '../../../src/data/replay/guards'
 import { loadReplayData, loadReplayIndex } from '../../../src/data/replay/loader'
 import { assertSafeRelativePath, resolveRelativePath } from '../../../src/data/replay/source'
 import type { ReplaySource } from '../../../src/data/replay/types'
@@ -35,6 +36,69 @@ describe('replay-data v1 loader', () => {
     expect(Object.isFrozen(chunks[1].events[0].payload)).toBe(true)
     expect(() => { (chunks[1].timeMs as number[])[0] = -1 }).toThrow(TypeError)
     expect(() => { (chunks[1].events[0].payload as Record<string, unknown>).forPosition = 2 }).toThrow(TypeError)
+  })
+
+  test('loads and verifies an optional timeline summary after manifest and track assets', async () => {
+    const summary = timelineSummaryPayload()
+    const { source, reads } = await publishedFixtureSource({ timelineSummary: summary })
+
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    expect(index.timelineSummary).toEqual(summary)
+    expect(reads).toEqual([
+      'browser-current.json', 'generations/demo/manifest.json',
+      'generations/demo/track-assets.json', 'generations/demo/timeline-summary.json',
+    ])
+    expect(index.timelineSummary && Object.isFrozen(index.timelineSummary)).toBe(true)
+  })
+
+  test('parses only the defined timeline reference and summary fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.timelineSummary = timelineSummaryReference()
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.timelineSummary).toEqual(timelineSummaryReference())
+    expect(parseTimelineSummary(timelineSummaryPayload())).toEqual(timelineSummaryPayload())
+    expect(() => parseTimelineSummary({ ...timelineSummaryPayload(), unexpected: true })).toThrow('not allowed')
+    expect(() => parseManifest({ ...manifest, timelineSummary: { ...timelineSummaryReference(), unexpected: true } })).toThrow('not allowed')
+  })
+
+  test('rejects a malformed timeline summary and a summary digest mismatch', async () => {
+    const malformed = timelineSummaryPayload()
+    malformed.intervals = [{ kind: 'yellow', startMs: 1_000, endMs: 1_000 }]
+    const malformedSource = await publishedFixtureSource({ timelineSummary: malformed })
+    await expect(loadReplayIndex({ source: malformedSource.source, pointerPath: 'browser-current.json' })).rejects.toThrow('outside summary bounds')
+
+    const invalidDigest = await publishedFixtureSource({ timelineSummary: timelineSummaryPayload(), corruptTimelineSummaryDigest: true })
+    await expect(loadReplayIndex({ source: invalidDigest.source, pointerPath: 'browser-current.json' })).rejects.toThrow('digest does not match')
+  })
+
+  test('rejects a timeline summary with mismatched fixture identity or replay bounds', async () => {
+    const wrongFixture = timelineSummaryPayload()
+    wrongFixture.fixtureId = 'other-race'
+    const fixtureSource = await publishedFixtureSource({ timelineSummary: wrongFixture })
+    await expect(loadReplayIndex({ source: fixtureSource.source, pointerPath: 'browser-current.json' })).rejects.toThrow('fixture identities disagree')
+
+    const wrongBounds = timelineSummaryPayload()
+    wrongBounds.endMs = 3_999
+    const boundsSource = await publishedFixtureSource({ timelineSummary: wrongBounds })
+    await expect(loadReplayIndex({ source: boundsSource.source, pointerPath: 'browser-current.json' })).rejects.toThrow('bounds disagree')
+  })
+
+  test('rejects unordered intervals and duplicate DNF markers in a timeline summary', () => {
+    const unorderedIntervals = timelineSummaryPayload()
+    unorderedIntervals.intervals = [
+      { kind: 'sc', startMs: 1_200, endMs: 1_300 },
+      { kind: 'yellow', startMs: 500, endMs: 1_000 },
+    ]
+    const duplicateMarkers = timelineSummaryPayload()
+    duplicateMarkers.dnfMarkers = [
+      { driverId: 'HAM', timeMs: 2_000 },
+      { driverId: 'HAM', timeMs: 3_000 },
+    ]
+
+    expect(() => parseTimelineSummary(unorderedIntervals)).toThrow('intervals must be deterministically ordered')
+    expect(() => parseTimelineSummary(duplicateMarkers)).toThrow('must have unique drivers')
   })
 
   test('loads the exact production pointer layout relative to its manifest', async () => {
@@ -277,11 +341,12 @@ function mutateFixtures(mutations: Readonly<Record<string, (value: unknown) => v
   }
 }
 
-async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; corruptChunkDigest?: boolean } = {}) {
+async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; corruptChunkDigest?: boolean; timelineSummary?: Record<string, unknown>; corruptTimelineSummaryDigest?: boolean } = {}) {
   const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
   const track = await fixtureSource.read('track-assets.json')
   const chunkOne = await fixtureSource.read('chunks/chunk-001.json')
   const chunkTwo = await fixtureSource.read('chunks/chunk-002.json')
+  const timelineSummary = options.timelineSummary === undefined ? undefined : encoder.encode(JSON.stringify(options.timelineSummary))
   const trackReference = manifest.trackAssets as Record<string, unknown>
   trackReference.sha256 = options.corruptTrackDigest ? '0'.repeat(64) : await sha256Hex(track)
   const chunkReferences = manifest.chunks as Array<Record<string, unknown>>
@@ -289,6 +354,9 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
   chunkReferences[1].sha256 = await sha256Hex(chunkTwo)
   manifest.formatVersion = 'browser-delivery-v1'
   manifest.deliveryVersion = 'demo-v1'
+  if (timelineSummary) {
+    manifest.timelineSummary = { ...timelineSummaryReference(), sha256: options.corruptTimelineSummaryDigest ? '0'.repeat(64) : await sha256Hex(timelineSummary) }
+  }
   const manifestBytes = encoder.encode(JSON.stringify(manifest))
   const files = new Map<string, Uint8Array>([
     ['generations/demo/manifest.json', manifestBytes],
@@ -296,12 +364,34 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
     ['generations/demo/chunks/chunk-001.json', chunkOne],
     ['generations/demo/chunks/chunk-002.json', chunkTwo],
   ])
+  if (timelineSummary) files.set('generations/demo/timeline-summary.json', timelineSummary)
   files.set('browser-current.json', encoder.encode(JSON.stringify({
     formatVersion: 'browser-delivery-v1', deliveryVersion: 'demo-v1',
     manifestPath: 'generations/demo/manifest.json', manifestSha256: await sha256Hex(manifestBytes),
   })))
   const reads: string[] = []
   return { files, reads, source: mapSource(files, reads) }
+}
+
+function timelineSummaryPayload(): Record<string, unknown> {
+  return {
+    contractVersion: 'v1', fixtureId: 'deterministic-race', startMs: 0, endMs: 4_000,
+    intervals: [
+      { kind: 'yellow', startMs: 500, endMs: 1_000 },
+      { kind: 'sc', startMs: 1_200, endMs: 1_300 },
+      { kind: 'red', startMs: 1_600, endMs: 1_700 },
+      { kind: 'vsc', startMs: 2_000, endMs: 2_500 },
+    ],
+    dnfMarkers: [{ driverId: 'HAM', timeMs: 3_000 }],
+  }
+}
+
+function timelineSummaryReference(): Record<string, string> {
+  return {
+    path: 'timeline-summary.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary',
+    sha256: 'a'.repeat(64),
+  }
 }
 
 function mapSource(files: Map<string, Uint8Array>, reads?: string[]): ReplaySource {

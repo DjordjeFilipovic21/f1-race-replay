@@ -1,7 +1,7 @@
 import { verifyDigest } from './digest'
-import { parseChunk, parseManifest, parsePointer, parseTrackAssets } from './guards'
+import { parseChunk, parseManifest, parsePointer, parseTimelineSummary, parseTrackAssets } from './guards'
 import { assertSafeRelativePath, readJson, resolveRelativePath } from './source'
-import type { ChunkReference, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource } from './types'
+import type { ChunkReference, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary } from './types'
 
 export interface LoadReplayDataOptions {
   readonly source: ReplaySource
@@ -22,6 +22,9 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
   if (manifest.trackAssets.sha256) await verifyDigest(trackBytes, manifest.trackAssets.sha256)
   const trackAssets = parseTrackAssets(decodeJson(trackBytes, trackPath))
   if (trackAssets.fixtureId !== manifest.fixtureId) throw new Error('Track assets and manifest fixture identities disagree')
+  const timelineSummary = manifest.timelineSummary === undefined
+    ? undefined
+    : await loadTimelineSummary(options.source, manifestPath, manifest)
 
   const loadChunk = async (sequence: number): Promise<ReplayChunk> => {
     const reference = manifest.chunks[sequence - 1]
@@ -39,13 +42,33 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
     validateBundle(manifest, chunks)
     return Object.freeze(chunks)
   }
-  return Object.freeze({ ...(pointer ? { pointer } : {}), manifest, trackAssets, loadChunk, loadAllChunks })
+  return Object.freeze({ ...(pointer ? { pointer } : {}), manifest, trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), loadChunk, loadAllChunks })
 }
 
 export async function loadReplayData(options: LoadReplayDataOptions): Promise<ReplayData> {
   const index = await loadReplayIndex(options)
   const chunks = await index.loadAllChunks()
-  return Object.freeze({ ...(index.pointer ? { pointer: index.pointer } : {}), manifest: index.manifest, trackAssets: index.trackAssets, chunks })
+  return Object.freeze({ ...(index.pointer ? { pointer: index.pointer } : {}), manifest: index.manifest, trackAssets: index.trackAssets, ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }), chunks })
+}
+
+async function loadTimelineSummary(source: ReplaySource, manifestPath: string, manifest: ReplayManifest): Promise<TimelineSummary> {
+  const reference = manifest.timelineSummary
+  if (reference === undefined) throw new Error('Timeline summary reference is missing')
+  const path = resolveRelativePath(manifestPath, reference.path)
+  const bytes = await source.read(path)
+  await verifyDigest(bytes, reference.sha256)
+  const summary = parseTimelineSummary(decodeJson(bytes, path))
+  validateTimelineSummary(manifest, summary)
+  return summary
+}
+
+function validateTimelineSummary(manifest: ReplayManifest, summary: TimelineSummary): void {
+  if (summary.fixtureId !== manifest.fixtureId) throw new Error('Timeline summary and manifest fixture identities disagree')
+  const startMs = manifest.chunks[0].startMs
+  const endMs = manifest.chunks[manifest.chunks.length - 1].endMs
+  if (summary.startMs !== startMs || summary.endMs !== endMs) throw new Error('Timeline summary bounds disagree with manifest')
+  const driverIds = new Set(manifest.drivers.map(({ id }) => id))
+  if (summary.dnfMarkers.some(({ driverId }) => !driverIds.has(driverId))) throw new Error('Timeline summary drivers disagree with manifest')
 }
 
 async function loadPointer(source: ReplaySource, path: string) { return parsePointer(await readJson(source, path)) }

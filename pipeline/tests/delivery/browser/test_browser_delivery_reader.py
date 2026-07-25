@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
 import pytest
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import CanonicalGenerationSnapshot
+from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import build_timeline_summary
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import (
     CanonicalReaderDependencies,
     derive_browser_driver_fields,
@@ -50,6 +52,29 @@ def test_field_mapping_uses_exact_timestamp_order_and_preserves_nulls() -> None:
     assert fields.gear == (None, None, 6)
     assert fields.status == (None, None, None)
     assert fields.track_distance_meters == (None, None, None)
+
+
+def test_timeline_summary_uses_final_result_and_terminal_activity_not_position_status() -> None:
+    frames = _frames()
+    frames["session_metadata"] = pl.DataFrame([{
+        "session_id": "race", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS["session_metadata"]), strict=True)
+    frames["results"] = pl.DataFrame([{
+        "session_id": "race", "driver_id": "HAM", "classified_position": None,
+        "grid_position": 1, "status": "Retired", "points": 0.0,
+        "laps_completed": 1, "result_time_ms": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS["results"]), strict=True)
+    frames["position_telemetry"] = frames["position_telemetry"].with_columns(
+        pl.lit("Retired").alias("status"),
+    )
+
+    summary = build_timeline_summary(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames), 1_000, 1_100,
+    )
+
+    assert summary.as_dict()["dnfMarkers"] == [{"driverId": "HAM", "timeMs": 1_000}]
 
 
 def test_field_mapping_preserves_raw_invalid_gear_in_canonical_but_exposes_null() -> None:

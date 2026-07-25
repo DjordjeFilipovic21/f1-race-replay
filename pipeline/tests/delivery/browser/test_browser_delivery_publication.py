@@ -16,7 +16,14 @@ import jsonschema_rs
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChunk, BrowserEvent, BrowserOverlap
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
-    BrowserDriverFields, BrowserLapStart, BrowserManifest, CanonicalGenerationSnapshot,
+    BrowserDnfMarker,
+    BrowserDriverFields,
+    BrowserLapStart,
+    BrowserManifest,
+    BrowserTimelineInterval,
+    BrowserTimelineSummary,
+    CanonicalGenerationSnapshot,
+    TIMELINE_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 import f1_replay_pipeline.delivery.browser.browser_delivery_publication as publication
@@ -47,7 +54,10 @@ def _chunk() -> BrowserChunk:
     )
 
 
-def _delivery(track_assets: dict[str, object] | None = None) -> BrowserDeliveryBuild:
+def _delivery(
+    track_assets: dict[str, object] | None = None,
+    timeline_summary: BrowserTimelineSummary | None = None,
+) -> BrowserDeliveryBuild:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
@@ -63,7 +73,19 @@ def _delivery(track_assets: dict[str, object] | None = None) -> BrowserDeliveryB
     }
     if track_assets is not None:
         assets.update(track_assets)
-    return BrowserDeliveryBuild(_snapshot(), manifest, assets, (_chunk(),))
+    return BrowserDeliveryBuild(
+        _snapshot(), manifest, assets, (_chunk(),), timeline_summary=timeline_summary,
+    )
+
+
+def _timeline_summary() -> BrowserTimelineSummary:
+    return BrowserTimelineSummary(
+        "race-one",
+        0,
+        2_000,
+        (BrowserTimelineInterval("yellow", 100, 200),),
+        (BrowserDnfMarker("HAM", 1_500),),
+    )
 
 
 def _publish(browser: Path):
@@ -80,6 +102,65 @@ def test_publication_is_byte_identical(tmp_path: Path) -> None:
     assert [path.read_bytes() for path in (first.manifest_path, first.track_assets_path, *first.chunk_paths)] == [
         path.read_bytes() for path in (second.manifest_path, second.track_assets_path, *second.chunk_paths)
     ]
+
+
+def test_publication_writes_and_references_timeline_summary(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-one",
+        delivery=_delivery(timeline_summary=_timeline_summary()),
+        schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+    summary_path = tmp_path / "browser" / "generations" / "delivery-one" / "timeline-summary.json"
+    summary = json.loads(summary_path.read_bytes())
+
+    assert summary == _timeline_summary().as_dict()
+    assert manifest["timelineSummary"] == {
+        "path": "timeline-summary.json",
+        "schemaId": TIMELINE_SUMMARY_SCHEMA_ID,
+        "sha256": hashlib.sha256(summary_path.read_bytes()).hexdigest(),
+    }
+    assert result.timeline_summary_path == summary_path
+    assert result.artifact_digests["timeline-summary.json"] == manifest["timelineSummary"]["sha256"]
+
+
+def test_publication_rejects_timeline_summary_with_mismatched_replay_bounds(tmp_path: Path) -> None:
+    summary = BrowserTimelineSummary(
+        "race-one", 1, 2_000, (BrowserTimelineInterval("yellow", 100, 200),), (),
+    )
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="bounds disagree with replay bounds"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=_delivery(timeline_summary=summary), schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_timeline_summary_publication_is_byte_identical(tmp_path: Path) -> None:
+    delivery = _delivery(timeline_summary=_timeline_summary())
+    first = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-one", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    second = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-two", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+
+    first_paths = (
+        first.manifest_path,
+        first.track_assets_path,
+        first.generation_path / "timeline-summary.json",
+        *first.chunk_paths,
+    )
+    second_paths = (
+        second.manifest_path,
+        second.track_assets_path,
+        second.generation_path / "timeline-summary.json",
+        *second.chunk_paths,
+    )
+    assert [path.read_bytes() for path in first_paths] == [path.read_bytes() for path in second_paths]
 
 
 def test_manifest_references_are_ordered_and_digested(tmp_path: Path) -> None:
@@ -130,6 +211,7 @@ def test_prepared_digests_bind_manifest_references_pointer_and_result(tmp_path: 
 
 def test_complete_validator_uses_secure_stored_delivery_validation(tmp_path: Path) -> None:
     result = _publish(tmp_path / "browser")
+    assert "timelineSummary" not in json.loads(result.manifest_path.read_bytes())
     progress: list[str | BrowserValidationProgress] = []
 
     validate_complete_browser_delivery(
@@ -147,6 +229,53 @@ def test_complete_validator_uses_secure_stored_delivery_validation(tmp_path: Pat
         BrowserValidationProgress("browser_schema_artifact_validating", 3, 3, "chunk schema 1/1"),
     ]
     assert result.pointer_path.exists()
+
+
+def test_complete_validator_rejects_a_timeline_summary_digest_mismatch(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(timeline_summary=_timeline_summary()), schema_root=SCHEMA_ROOT,
+    )
+    summary_path = result.generation_path / "timeline-summary.json"
+    summary_path.write_bytes(summary_path.read_bytes().replace(b'"endMs":2000', b'"endMs":1999'))
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "checksum disagrees for timeline-summary.json" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_a_schema_invalid_timeline_summary(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(timeline_summary=_timeline_summary()), schema_root=SCHEMA_ROOT,
+    )
+    summary_path = result.generation_path / "timeline-summary.json"
+    summary = json.loads(summary_path.read_bytes())
+    summary["intervals"][0]["kind"] = "blue"
+    summary_bytes = json.dumps(summary, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    summary_path.write_bytes(summary_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["timelineSummary"]["sha256"] = hashlib.sha256(summary_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "timeline summary fails replay-data v1 schema validation" in str(error.value.__cause__)
 
 
 @pytest.mark.parametrize("pointer", [
@@ -399,7 +528,7 @@ def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_pat
 
     _publish(tmp_path / "browser")
 
-    assert calls == 3
+    assert calls == 4
 
 
 def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:

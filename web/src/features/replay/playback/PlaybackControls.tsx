@@ -1,5 +1,5 @@
 import type { FormEvent } from 'react'
-import type { LapStart } from '../../../data/replay/types'
+import type { DnfMarker, LapStart, TimelineInterval, TimelineSummary } from '../../../data/replay/types'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../engine/replay'
 import { ExactLapNavigation } from './ExactLapNavigation'
 import { ExactTimeEditor } from './ExactTimeEditor'
@@ -20,10 +20,11 @@ export interface PlaybackControlsProps {
   readonly onSeekPreview: (event: FormEvent<HTMLInputElement>) => void
   readonly snapshot: ReplayControllerSnapshot
   readonly startMs: number
+  readonly timelineSummary?: TimelineSummary
 }
 
 /** Renders playback actions and controller status while delegating seek preview state to the adapter. */
-export function PlaybackControls({ controller, currentLap, displayedTimeMs, durationMs, elapsedMs, endMs, isReady, lapStarts, onCommitSeek, onSeek, onSeekPreview, snapshot, startMs }: PlaybackControlsProps) {
+export function PlaybackControls({ controller, currentLap, displayedTimeMs, durationMs, elapsedMs, endMs, isReady, lapStarts, onCommitSeek, onSeek, onSeekPreview, snapshot, startMs, timelineSummary }: PlaybackControlsProps) {
   const handlePlaybackToggle = () => {
     if (snapshot.isPlaying) controller.pause()
     else controller.start()
@@ -63,7 +64,10 @@ export function PlaybackControls({ controller, currentLap, displayedTimeMs, dura
         </div>
 
         <div className="seek-control">
-          <input type="range" min={startMs} max={endMs} step="1" value={displayedTimeMs} aria-label="Seek replay" aria-valuetext={formatTime(elapsedMs)} disabled={!isReady} onInput={onSeekPreview} onPointerUp={onCommitSeek} onKeyUp={onCommitSeek} onBlur={onCommitSeek} />
+          <div className="seek-control__track">
+            {timelineSummary !== undefined && <RaceTimeline summary={timelineSummary} displayedTimeMs={displayedTimeMs} startMs={startMs} endMs={endMs} />}
+            <input type="range" min={startMs} max={endMs} step="1" value={displayedTimeMs} aria-label="Seek replay" aria-valuetext={formatTime(elapsedMs)} disabled={!isReady} onInput={onSeekPreview} onPointerUp={onCommitSeek} onKeyUp={onCommitSeek} onBlur={onCommitSeek} />
+          </div>
         </div>
 
         <div className="speed-control">
@@ -77,6 +81,50 @@ export function PlaybackControls({ controller, currentLap, displayedTimeMs, dura
       {snapshot.status === 'error' && <div className="replay-message replay-message--error" role="alert"><p>Replay data could not be loaded: {errorMessage(snapshot.error)}</p><button className="retry-button" type="button" onClick={() => void controller.retry()}>Retry loading</button></div>}
     </div>
   )
+}
+
+interface RaceTimelineProps {
+  readonly displayedTimeMs: number
+  readonly summary: TimelineSummary
+  readonly startMs: number
+  readonly endMs: number
+}
+
+/** Visual context for the native seek control; it deliberately has no seek handlers. */
+function RaceTimeline({ displayedTimeMs, summary, startMs, endMs }: RaceTimelineProps) {
+  const elapsedWidth = `${timelinePercentage(displayedTimeMs, startMs, endMs)}%`
+  return (
+    <div className="race-timeline" role="group" aria-label="Race status timeline">
+      <span className="race-timeline__elapsed" style={{ width: elapsedWidth }} aria-hidden="true" />
+      <span className="race-timeline__remaining" style={{ left: elapsedWidth }} aria-hidden="true" />
+      {summary.intervals.map((interval) => <TimelineBand key={`${interval.kind}-${interval.startMs}-${interval.endMs}`} interval={interval} startMs={startMs} endMs={endMs} />)}
+      {summary.dnfMarkers.map((marker) => <DnfTimelineMarker key={`${marker.driverId}-${marker.timeMs}`} marker={marker} startMs={startMs} endMs={endMs} />)}
+    </div>
+  )
+}
+
+function TimelineBand({ interval, startMs, endMs }: { readonly interval: TimelineInterval; readonly startMs: number; readonly endMs: number }) {
+  const label = `${timelineKindLabel(interval.kind)} from ${formatTime(interval.startMs - startMs)} to ${formatTime(interval.endMs - startMs)}`
+  return <span className={`race-timeline__band race-timeline__band--${interval.kind}`} role="img" style={timelineIntervalStyle(interval, startMs, endMs)} aria-label={label} title={label} />
+}
+
+function DnfTimelineMarker({ marker, startMs, endMs }: { readonly marker: DnfMarker; readonly startMs: number; readonly endMs: number }) {
+  const label = `DNF: ${marker.driverId} at ${formatTime(marker.timeMs - startMs)}`
+  return <span className="race-timeline__dnf-marker" role="img" style={{ left: `${timelinePercentage(marker.timeMs, startMs, endMs)}%` }} aria-label={label} title={label} />
+}
+
+function timelineIntervalStyle(interval: TimelineInterval, startMs: number, endMs: number) {
+  const left = timelinePercentage(interval.startMs, startMs, endMs)
+  return { left: `${left}%`, width: `${Math.max(timelinePercentage(interval.endMs, startMs, endMs) - left, 0)}%` }
+}
+
+function timelinePercentage(timeMs: number, startMs: number, endMs: number): number {
+  if (endMs <= startMs) return 0
+  return Math.min(Math.max(((timeMs - startMs) / (endMs - startMs)) * 100, 0), 100)
+}
+
+function timelineKindLabel(kind: TimelineInterval['kind']): string {
+  return ({ yellow: 'Yellow flag', sc: 'Safety car', red: 'Red flag', vsc: 'Virtual safety car' })[kind]
 }
 
 function PlayIcon() {

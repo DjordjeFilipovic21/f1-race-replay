@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+  "title": "Compact replay timeline summary",
+  "description": "Schema for the optional full-race status and DNF summary used by browser replay controls.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "startMs",
+    "endMs",
+    "intervals",
+    "dnfMarkers"
+  ],
+  "$defs": {
+    "sessionTimeMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "driverCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "interval": {
+      "type": "object",
+      "$comment": "Contract semantic validation requires startMs < endMs and bounds within the replay interval.",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "startMs",
+        "endMs"
+      ],
+    "properties": {
+        "kind": {
+          "enum": ["yellow", "sc", "red", "vsc"]
+        },
+        "startMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "endMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        }
+      }
+    },
+    "dnfMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "driverId",
+        "timeMs"
+      ],
+      "properties": {
+        "driverId": {
+          "$ref": "#/$defs/driverCode"
+        },
+        "timeMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        }
+      }
+    },
+    "timelineSummaryFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "timeline-summary.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "startMs": {
+      "$ref": "#/$defs/sessionTimeMs"
+    },
+    "endMs": {
+      "$ref": "#/$defs/sessionTimeMs"
+    },
+    "intervals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/interval"
+      }
+    },
+    "dnfMarkers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dnfMarker"
+      }
+    }
+  }
+}

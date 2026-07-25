@@ -21,12 +21,13 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     _delivery_timeline,
     _leader_lap_starts,
     build_browser_delivery,
+    build_timeline_summary,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryPublicationError,
     publish_browser_delivery,
 )
-from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
+from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress, read_validated_canonical_generation
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.storage.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
@@ -47,9 +48,18 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     published_canonical = publish_canonical_generation(
         frames=_canonical_frames(), target_parent=canonical_parent, generation_id="canonical-v1"
     )
-    snapshot = read_validated_canonical_generation(canonical_parent)
+    reader_progress: list[BrowserReadProgress] = []
+    snapshot = read_validated_canonical_generation(canonical_parent, progress=reader_progress.append)
+    table_names = list(snapshot.frames)
+    assert reader_progress[0] == BrowserReadProgress("canonical_snapshot_reading", 0, len(table_names), table_names[0])
+    assert reader_progress[-1] == BrowserReadProgress("canonical_snapshot_reading", len(table_names), len(table_names), table_names[-1])
+    assert [progress.detail for progress in reader_progress[1::2]] == table_names
     track_assets = _track_assets()
     delivery = build_browser_delivery(snapshot, track_assets)
+    assert delivery.timeline_summary is not None
+    assert delivery.timeline_summary.as_dict()["intervals"] == [
+        {"kind": "sc", "startMs": 5_000, "endMs": 20_001},
+    ]
 
     # Act: build the identical delivery twice at independent publication targets.
     first = publish_browser_delivery(
@@ -246,6 +256,43 @@ def test_delivery_timeline_unions_canonical_timestamps_and_filters_pre_race_valu
     timeline = _delivery_timeline(snapshot, 5_000)
 
     assert timeline == (5_001, 5_101, 5_201, 5_301, 5_401, 5_501, 5_601, 5_701)
+
+
+def test_timeline_summary_maps_clips_merges_and_sorts_status_intervals() -> None:
+    frames = _canonical_frames()
+    status_rows = [
+        _row("track_status_intervals", start_time_ms=0, end_time_ms=1_500, status="2"),
+        _row("track_status_intervals", start_time_ms=1_500, end_time_ms=2_000, status="2"),
+        _row("track_status_intervals", start_time_ms=2_000, end_time_ms=2_500, status="4"),
+        _row("track_status_intervals", start_time_ms=2_500, end_time_ms=3_500, status="5"),
+        _row("track_status_intervals", start_time_ms=3_500, end_time_ms=4_000, status="6"),
+        _row("track_status_intervals", start_time_ms=4_000, end_time_ms=None, status="7"),
+    ]
+    frames["track_status_intervals"] = pl.DataFrame(
+        status_rows, schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True,
+    )
+    snapshot = CanonicalGenerationSnapshot("generation", "a" * 64, frames)
+
+    summary = build_timeline_summary(snapshot, 1_000, 5_000)
+    reversed_summary = build_timeline_summary(
+        CanonicalGenerationSnapshot(
+            "generation", "a" * 64,
+            {**frames, "track_status_intervals": pl.DataFrame(
+                list(reversed(status_rows)),
+                schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True,
+            )},
+        ),
+        1_000,
+        5_000,
+    )
+
+    assert summary == reversed_summary
+    assert summary.as_dict()["intervals"] == [
+        {"kind": "yellow", "startMs": 1_000, "endMs": 2_000},
+        {"kind": "sc", "startMs": 2_000, "endMs": 2_500},
+        {"kind": "red", "startMs": 2_500, "endMs": 3_500},
+        {"kind": "vsc", "startMs": 3_500, "endMs": 5_000},
+    ]
 
 
 def test_browser_delivery_derives_each_driver_once_on_the_final_timeline(tmp_path: Path, monkeypatch) -> None:
@@ -576,7 +623,10 @@ def _delivery_source_times(snapshot) -> set[int]:
 
 
 def _artifact_bytes(result: object) -> tuple[bytes, ...]:
-    return tuple(path.read_bytes() for path in (result.manifest_path, result.track_assets_path, *result.chunk_paths))
+    paths = (result.manifest_path, result.track_assets_path, *result.chunk_paths)
+    if result.timeline_summary_path is not None:
+        paths = (*paths, result.timeline_summary_path)
+    return tuple(path.read_bytes() for path in paths)
 
 
 def _load_json(path: Path) -> dict[str, object]:
@@ -584,7 +634,7 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def _registry() -> tuple[dict[str, object], Registry]:
-    schemas = {name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json") for name in ("manifest", "chunk", "track-assets")}
+    schemas = {name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json") for name in ("manifest", "chunk", "track-assets", "timeline-summary")}
     registry = Registry()
     for schema in schemas.values():
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))

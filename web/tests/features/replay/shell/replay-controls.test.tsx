@@ -75,6 +75,28 @@ test('wires icon transport, seek, and speed controls to the controller', async (
   expect(screen.queryByText('Replay samples ready.')).toBeNull()
 })
 
+test('renders status bands and DNF markers behind the sole native seek control', () => {
+  const { controller } = createController({ ...readySnapshot, timeMs: 15_000 })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} trackAssets={trackAssets} timelineSummary={{ contractVersion: 'v1', fixtureId: 'test-grand-prix', startMs: 10_000, endMs: 20_000, intervals: [{ kind: 'yellow', startMs: 11_000, endMs: 12_500 }, { kind: 'sc', startMs: 13_000, endMs: 14_000 }, { kind: 'red', startMs: 15_000, endMs: 16_000 }, { kind: 'vsc', startMs: 17_000, endMs: 19_000 }], dnfMarkers: [{ driverId: 'VER', timeMs: 17_500 }] }} />)
+
+  const timeline = screen.getByRole('group', { name: 'Race status timeline' })
+  expect(timeline.querySelector('.race-timeline__band--yellow')?.getAttribute('style')).toContain('left: 10%')
+  expect(timeline.querySelector('.race-timeline__band--yellow')?.getAttribute('style')).toContain('width: 15%')
+  expect(timeline.querySelector('.race-timeline__elapsed')?.getAttribute('style')).toContain('width: 50%')
+  expect(timeline.querySelector('.race-timeline__remaining')?.getAttribute('style')).toContain('left: 50%')
+  expect(screen.getByLabelText('Safety car from 0:00:03.000 to 0:00:04.000')).toBeTruthy()
+  expect(screen.getByLabelText('DNF: VER at 0:00:07.500').getAttribute('class')).toContain('race-timeline__dnf-marker')
+  expect(timeline.querySelector('[class*="lap-marker"]')).toBeNull()
+  expect(screen.getAllByRole('slider', { name: 'Seek replay' })).toHaveLength(1)
+})
+
+test('omits the race timeline when no optional summary is delivered', () => {
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+})
+
 test('toggles replay playback with Space outside editable controls', () => {
   const { controller, setSnapshot } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)

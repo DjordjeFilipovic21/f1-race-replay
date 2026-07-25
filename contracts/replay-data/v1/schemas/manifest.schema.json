@@ -102,6 +102,9 @@
     "trackAssets": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:track-assets#/$defs/trackAssetsFileReference"
     },
+    "timelineSummary": {
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary#/$defs/timelineSummaryFileReference"
+    },
     "chunks": {
       "type": "array",
       "minItems": 1,

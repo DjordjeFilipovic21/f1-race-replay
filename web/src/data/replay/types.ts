@@ -20,6 +20,12 @@ export interface ArtifactReference {
   readonly sha256?: string
 }
 
+export interface TimelineSummaryReference extends ArtifactReference {
+  readonly path: 'timeline-summary.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
+  readonly sha256: string
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -46,6 +52,7 @@ export interface ReplayManifest {
   readonly fixtureName: string
   readonly schemas: Readonly<{ readonly manifest: string; readonly chunk: string; readonly trackAssets: string }>
   readonly trackAssets: ArtifactReference
+  readonly timelineSummary?: TimelineSummaryReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
@@ -56,6 +63,28 @@ export interface ReplayManifest {
   readonly sourceManifestSha256?: string
   readonly goldenSnapshots?: Readonly<{ readonly path: 'golden-snapshots.json' }>
   readonly createdAt?: string
+}
+
+export type TimelineIntervalKind = 'yellow' | 'sc' | 'red' | 'vsc'
+
+export interface TimelineInterval {
+  readonly kind: TimelineIntervalKind
+  readonly startMs: number
+  readonly endMs: number
+}
+
+export interface DnfMarker {
+  readonly driverId: string
+  readonly timeMs: number
+}
+
+export interface TimelineSummary {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly startMs: number
+  readonly endMs: number
+  readonly intervals: readonly TimelineInterval[]
+  readonly dnfMarkers: readonly DnfMarker[]
 }
 
 export interface TrackPoint { readonly x: number; readonly y: number }
@@ -130,6 +159,7 @@ export interface ReplayData {
   readonly pointer?: BrowserPointer
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
+  readonly timelineSummary?: TimelineSummary
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -137,6 +167,7 @@ export interface ReplayIndex {
   readonly pointer?: BrowserPointer
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
+  readonly timelineSummary?: TimelineSummary
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

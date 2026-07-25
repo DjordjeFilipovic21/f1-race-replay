@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 import re
 from types import MappingProxyType
-from typing import cast
+from typing import Literal, cast
 
 import polars as pl
 
@@ -15,6 +15,8 @@ import polars as pl
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
+TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
+TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
 def deep_freeze_json(value: object) -> object:
@@ -133,6 +135,128 @@ class BrowserLapStart:
 
 
 @dataclass(frozen=True)
+class BrowserTimelineInterval:
+    """One half-open, absolute-time status interval in the compact summary."""
+
+    kind: TimelineSummaryKind
+    start_ms: int
+    end_ms: int
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"yellow", "sc", "red", "vsc"}:
+            raise ValueError("timeline interval kind is invalid")
+        if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in (self.start_ms, self.end_ms)):
+            raise ValueError("timeline interval times must be non-negative signed Int64 integers")
+        if self.start_ms >= self.end_ms:
+            raise ValueError("timeline intervals must be half-open and non-empty")
+
+    def as_dict(self) -> dict[str, object]:
+        return {"kind": self.kind, "startMs": self.start_ms, "endMs": self.end_ms}
+
+
+@dataclass(frozen=True)
+class BrowserDnfMarker:
+    """One final-result DNF marker at an absolute replay time."""
+
+    driver_id: str
+    time_ms: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.driver_id, str) or not self.driver_id:
+            raise ValueError("DNF marker driver_id must be a non-empty string")
+        if type(self.time_ms) is not int or not 0 <= self.time_ms <= MAX_INT64:
+            raise ValueError("DNF marker time must be a non-negative signed Int64 integer")
+
+    def as_dict(self) -> dict[str, object]:
+        return {"driverId": self.driver_id, "timeMs": self.time_ms}
+
+
+@dataclass(frozen=True)
+class BrowserTimelineSummary:
+    """Immutable, deterministic status and DNF data for one browser replay."""
+
+    fixture_id: str
+    start_ms: int
+    end_ms: int
+    intervals: tuple[BrowserTimelineInterval, ...] = ()
+    dnf_markers: tuple[BrowserDnfMarker, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("timeline summary fixture_id must be a non-empty string")
+        if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in (self.start_ms, self.end_ms)):
+            raise ValueError("timeline summary bounds must be non-negative signed Int64 integers")
+        if self.start_ms >= self.end_ms:
+            raise ValueError("timeline summary bounds must be a non-empty interval")
+        intervals = tuple(self.intervals)
+        markers = tuple(self.dnf_markers)
+        if any(not isinstance(interval, BrowserTimelineInterval) for interval in intervals):
+            raise TypeError("timeline intervals must contain BrowserTimelineInterval values")
+        if any(not isinstance(marker, BrowserDnfMarker) for marker in markers):
+            raise TypeError("DNF markers must contain BrowserDnfMarker values")
+        if any(
+            interval.start_ms < self.start_ms or interval.end_ms > self.end_ms
+            for interval in intervals
+        ):
+            raise ValueError("timeline intervals must be within replay bounds")
+        if any(
+            marker.time_ms < self.start_ms or marker.time_ms >= self.end_ms
+            for marker in markers
+        ):
+            raise ValueError("DNF markers must be within replay bounds")
+        if intervals != tuple(sorted(intervals, key=lambda value: (value.start_ms, value.end_ms, value.kind))):
+            raise ValueError("timeline intervals must be deterministically ordered")
+        if markers != tuple(sorted(markers, key=lambda value: (value.time_ms, value.driver_id))):
+            raise ValueError("DNF markers must be deterministically ordered")
+        if len({marker.driver_id for marker in markers}) != len(markers):
+            raise ValueError("DNF markers must contain one marker per driver")
+        object.__setattr__(self, "intervals", intervals)
+        object.__setattr__(self, "dnf_markers", markers)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "startMs": self.start_ms,
+            "endMs": self.end_ms,
+            "intervals": [interval.as_dict() for interval in self.intervals],
+            "dnfMarkers": [marker.as_dict() for marker in self.dnf_markers],
+        }
+
+
+@dataclass(frozen=True)
+class BrowserArtifactReference:
+    """Immutable manifest reference for a digested browser artifact."""
+
+    path: str
+    schema_id: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, str) or not self.path:
+            raise ValueError("artifact path must be a non-empty string")
+        if not isinstance(self.schema_id, str) or not self.schema_id:
+            raise ValueError("artifact schema_id must be a non-empty string")
+        if not isinstance(self.sha256, str) or not _SHA256.fullmatch(self.sha256):
+            raise ValueError("artifact sha256 must be a SHA-256 hexadecimal digest")
+
+    def as_dict(self) -> dict[str, str]:
+        return {"path": self.path, "schemaId": self.schema_id, "sha256": self.sha256}
+
+
+@dataclass(frozen=True)
+class BrowserTimelineSummaryReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional compact timeline artifact."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "timeline-summary.json":
+            raise ValueError("timeline summary path must be timeline-summary.json")
+        if self.schema_id != TIMELINE_SUMMARY_SCHEMA_ID:
+            raise ValueError("timeline summary schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -140,6 +264,7 @@ class BrowserManifest:
     fixture_name: str
     drivers: tuple[Mapping[str, object], ...]
     lap_starts: tuple[BrowserLapStart, ...] = ()
+    timeline_summary: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -162,8 +287,25 @@ class BrowserManifest:
             for current, following in zip(lap_starts, lap_starts[1:], strict=False)
         ):
             raise ValueError("lap starts must have increasing laps and nondecreasing timestamps")
+        timeline_summary = self.timeline_summary
+        if isinstance(timeline_summary, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(timeline_summary) != required:
+                raise ValueError("timeline_summary must contain path, schemaId, and sha256")
+            timeline_summary = BrowserTimelineSummaryReference(
+                cast(str, timeline_summary["path"]),
+                cast(str, timeline_summary["schemaId"]),
+                cast(str, timeline_summary["sha256"]),
+            )
+        elif isinstance(timeline_summary, BrowserArtifactReference):
+            timeline_summary = BrowserTimelineSummaryReference(
+                timeline_summary.path, timeline_summary.schema_id, timeline_summary.sha256,
+            )
+        elif timeline_summary is not None:
+            raise TypeError("timeline_summary must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
+        object.__setattr__(self, "timeline_summary", timeline_summary)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -179,10 +321,17 @@ class BrowserManifest:
         }
         if self.lap_starts:
             value["lapStarts"] = [marker.as_dict() for marker in self.lap_starts]
+        if self.timeline_summary is not None:
+            value["timelineSummary"] = cast(
+                BrowserArtifactReference, self.timeline_summary,
+            ).as_dict()
         return value
 
 
 __all__ = [
-    "BrowserDriverFields", "BrowserLapStart", "BrowserManifest", "CanonicalGenerationSnapshot",
-    "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "deep_freeze_json",
+    "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields", "BrowserLapStart",
+    "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserTimelineSummaryReference", "CanonicalGenerationSnapshot",
+    "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "TIMELINE_SUMMARY_SCHEMA_ID",
+    "TimelineSummaryKind", "deep_freeze_json",
 ]

@@ -1,17 +1,21 @@
 import type {
-  ArtifactReference, BrowserPointer, ChunkReference, DriverColumns, DriverMetadata,
-  ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap, TrackAssets, TrackPoint,
+  ArtifactReference, BrowserPointer, ChunkReference, DnfMarker, DriverColumns, DriverMetadata,
+  ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap, TimelineInterval, TimelineIntervalKind,
+  TimelineSummary, TimelineSummaryReference, TrackAssets, TrackPoint,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
 
 export const MANIFEST_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:manifest'
 export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:chunk'
 export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:track-assets'
+export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const DRIVER_ID = /^[A-Z0-9]{2,4}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+const TIMELINE_INTERVAL_KINDS = ['yellow', 'sc', 'red', 'vsc'] as const
 
 function artifact(value: unknown, label: string, extraFields: readonly string[] = []): ArtifactReference {
   const item = object(value, label)
@@ -31,13 +35,14 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
   if (schemas.manifest !== MANIFEST_SCHEMA || schemas.chunk !== CHUNK_SCHEMA || schemas.trackAssets !== TRACK_SCHEMA) throw new Error('manifest schema identities are unsupported')
   const trackAssets = artifact(item.trackAssets, 'manifest.trackAssets')
   if (trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity is unsupported')
+  const timelineSummary = item.timelineSummary === undefined ? undefined : parseTimelineSummaryReference(item.timelineSummary)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
@@ -56,7 +61,64 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+}
+
+export function parseTimelineSummaryReference(value: unknown): TimelineSummaryReference {
+  const item = object(value, 'manifest.timelineSummary')
+  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.timelineSummary')
+  if (item.path !== 'timeline-summary.json') throw new Error('timeline summary path is unsupported')
+  if (item.schemaId !== TIMELINE_SUMMARY_SCHEMA) throw new Error('timeline summary schema identity is unsupported')
+  const sha256 = item.sha256
+  if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.timelineSummary.sha256 is invalid')
+  return freeze({ path: 'timeline-summary.json', schemaId: TIMELINE_SUMMARY_SCHEMA, sha256 })
+}
+
+export function parseTimelineSummary(value: unknown): TimelineSummary {
+  const item = object(value, 'timeline summary')
+  exact(item, ['contractVersion', 'fixtureId', 'startMs', 'endMs', 'intervals', 'dnfMarkers'], [], 'timeline summary')
+  if (item.contractVersion !== 'v1') throw new Error('timeline summary must be contract version v1')
+  const fixtureId = string(item.fixtureId, 'timeline summary fixture id')
+  if (!FIXTURE_ID.test(fixtureId)) throw new Error('timeline summary fixture ID is invalid')
+  const startMs = integer(item.startMs, 'timeline summary start')
+  const endMs = integer(item.endMs, 'timeline summary end')
+  if (endMs <= startMs) throw new Error('timeline summary bounds are invalid')
+  const intervals = array(item.intervals, 'timeline summary intervals').map((entry, index) => parseTimelineInterval(entry, index, startMs, endMs))
+  const dnfMarkers = array(item.dnfMarkers, 'timeline summary DNF markers').map((entry, index) => parseDnfMarker(entry, index, startMs, endMs))
+  if (intervals.some((interval, index) => index > 0 && compareTimelineIntervals(intervals[index - 1], interval) > 0)) throw new Error('timeline summary intervals must be deterministically ordered')
+  if (dnfMarkers.some((marker, index) => index > 0 && compareDnfMarkers(dnfMarkers[index - 1], marker) > 0)) throw new Error('timeline summary DNF markers must be deterministically ordered')
+  if (new Set(dnfMarkers.map(({ driverId }) => driverId)).size !== dnfMarkers.length) throw new Error('timeline summary DNF markers must have unique drivers')
+  return freeze({ contractVersion: 'v1', fixtureId, startMs, endMs, intervals: freeze(intervals), dnfMarkers: freeze(dnfMarkers) })
+}
+
+function compareTimelineIntervals(left: TimelineInterval, right: TimelineInterval): number {
+  return left.startMs - right.startMs || left.endMs - right.endMs || left.kind.localeCompare(right.kind)
+}
+
+function compareDnfMarkers(left: DnfMarker, right: DnfMarker): number {
+  return left.timeMs - right.timeMs || left.driverId.localeCompare(right.driverId)
+}
+
+function parseTimelineInterval(value: unknown, index: number, summaryStartMs: number, summaryEndMs: number): TimelineInterval {
+  const label = `timeline summary intervals[${index}]`
+  const item = object(value, label)
+  exact(item, ['kind', 'startMs', 'endMs'], [], label)
+  if (!TIMELINE_INTERVAL_KINDS.includes(item.kind as TimelineIntervalKind)) throw new Error(`${label}.kind is invalid`)
+  const startMs = integer(item.startMs, `${label}.startMs`)
+  const endMs = integer(item.endMs, `${label}.endMs`)
+  if (startMs < summaryStartMs || endMs > summaryEndMs || endMs <= startMs) throw new Error(`${label} is outside summary bounds`)
+  return freeze({ kind: item.kind as TimelineIntervalKind, startMs, endMs })
+}
+
+function parseDnfMarker(value: unknown, index: number, summaryStartMs: number, summaryEndMs: number): DnfMarker {
+  const label = `timeline summary dnfMarkers[${index}]`
+  const item = object(value, label)
+  exact(item, ['driverId', 'timeMs'], [], label)
+  const driverId = string(item.driverId, `${label}.driverId`)
+  if (!DRIVER_ID.test(driverId)) throw new Error(`${label}.driverId is invalid`)
+  const timeMs = integer(item.timeMs, `${label}.timeMs`)
+  if (timeMs < summaryStartMs || timeMs >= summaryEndMs) throw new Error(`${label} is outside summary bounds`)
+  return freeze({ driverId, timeMs })
 }
 
 function parseLapStart(value: unknown, index: number) {

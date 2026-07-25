@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { act, render } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '../../src/app/App'
@@ -35,6 +35,10 @@ const trackAssets: TrackAssets = {
 const index = {
   manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] },
   trackAssets,
+  timelineSummary: {
+    contractVersion: 'v1', fixtureId: 'test-race', startMs: 0, endMs: 3000,
+    intervals: [{ kind: 'yellow', startMs: 500, endMs: 1000 }], dnfMarkers: [],
+  },
 } as unknown as ReplayIndex
 
 function createController(): ReplayController {
@@ -67,6 +71,7 @@ test('does not create a controller for StrictMode’s stale index resolution and
   await act(async () => { activeLoad.resolve(index) })
   expect(createReplayControllerMock).toHaveBeenCalledOnce()
   expect(createReplayControllerMock).toHaveBeenCalledWith({ index, coordinateInterpolation: 'smooth' })
+  expect(screen.getByRole('group', { name: 'Race status timeline' })).toBeTruthy()
 
   unmount()
   expect(activeController.dispose).toHaveBeenCalledOnce()

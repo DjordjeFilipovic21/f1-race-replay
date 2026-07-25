@@ -13,9 +13,13 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
     build_browser_chunks,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
+    BrowserDnfMarker,
     BrowserManifest,
     BrowserLapStart,
+    BrowserTimelineInterval,
+    BrowserTimelineSummary,
     CanonicalGenerationSnapshot,
+    TimelineSummaryKind,
     deep_freeze_json,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
@@ -42,12 +46,15 @@ class BrowserDeliveryBuild:
     track_assets: Mapping[str, object]
     chunks: tuple[BrowserChunk, ...]
     projection_quality_assessment: ProjectionQualityAssessment | None = None
+    timeline_summary: BrowserTimelineSummary | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
         object.__setattr__(self, "chunks", tuple(self.chunks))
         if self.projection_quality_assessment is not None and not isinstance(self.projection_quality_assessment, ProjectionQualityAssessment):
             raise TypeError("projection_quality_assessment must be a ProjectionQualityAssessment or None")
+        if self.timeline_summary is not None and not isinstance(self.timeline_summary, BrowserTimelineSummary):
+            raise TypeError("timeline_summary must be a BrowserTimelineSummary or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -100,6 +107,7 @@ def build_browser_delivery(
             chunk_duration_ms=chunk_duration_ms,
             overlap_ms=overlap_ms,
         )
+        timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
@@ -108,7 +116,9 @@ def build_browser_delivery(
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
-    return BrowserDeliveryBuild(snapshot, manifest, track_assets, chunks, assessment)
+    return BrowserDeliveryBuild(
+        snapshot, manifest, track_assets, chunks, assessment, timeline_summary,
+    )
 
 
 def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
@@ -142,6 +152,79 @@ def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int
         for time_ms in snapshot.frames[table].get_column(column).drop_nulls().to_list()
     }
     return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
+
+
+def build_timeline_summary(
+    snapshot: CanonicalGenerationSnapshot, replay_start_ms: int, replay_end_ms: int,
+) -> BrowserTimelineSummary:
+    """Build the deterministic, chunk-independent browser timeline summary."""
+    _validate_summary_bounds(replay_start_ms, replay_end_ms)
+    intervals = _timeline_status_intervals(snapshot, replay_start_ms, replay_end_ms)
+    markers = _timeline_dnf_markers(snapshot, replay_start_ms, replay_end_ms)
+    fixture_id = cast(str, snapshot.frames["session_metadata"].row(0, named=True)["session_id"])
+    return BrowserTimelineSummary(fixture_id, replay_start_ms, replay_end_ms, intervals, markers)
+
+
+def _timeline_status_intervals(
+    snapshot: CanonicalGenerationSnapshot, replay_start_ms: int, replay_end_ms: int,
+) -> tuple[BrowserTimelineInterval, ...]:
+    clipped = []
+    for row in snapshot.frames["track_status_intervals"].to_dicts():
+        kind = _timeline_status_kind(row["status"])
+        if kind is None:
+            continue
+        start_ms = row["start_time_ms"]
+        end_ms = replay_end_ms if row["end_time_ms"] is None else row["end_time_ms"]
+        if type(start_ms) is not int or type(end_ms) is not int:
+            continue
+        start_ms = max(replay_start_ms, start_ms)
+        end_ms = min(replay_end_ms, end_ms)
+        if start_ms < end_ms:
+            clipped.append(BrowserTimelineInterval(kind, start_ms, end_ms))
+    ordered = sorted(clipped, key=lambda interval: (interval.start_ms, interval.end_ms, interval.kind))
+    merged: list[BrowserTimelineInterval] = []
+    for interval in ordered:
+        if merged and merged[-1].kind == interval.kind and interval.start_ms <= merged[-1].end_ms:
+            previous = merged[-1]
+            merged[-1] = BrowserTimelineInterval(
+                previous.kind, previous.start_ms, max(previous.end_ms, interval.end_ms),
+            )
+        else:
+            merged.append(interval)
+    return tuple(merged)
+
+
+def _timeline_status_kind(value: object) -> TimelineSummaryKind | None:
+    if type(value) is int:
+        code = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        code = int(value.strip())
+    else:
+        return None
+    kind = {2: "yellow", 4: "sc", 5: "red", 6: "vsc", 7: "vsc"}.get(code)
+    return cast(TimelineSummaryKind | None, kind)
+
+
+def _timeline_dnf_markers(
+    snapshot: CanonicalGenerationSnapshot, replay_start_ms: int, replay_end_ms: int,
+) -> tuple[BrowserDnfMarker, ...]:
+    terminal_end_times = _terminal_end_times(snapshot, replay_start_ms)
+    markers = []
+    for row in snapshot.frames["results"].to_dicts():
+        if _terminal_mode(row["status"]) is None:
+            continue
+        driver_id = row["driver_id"]
+        terminal_time = terminal_end_times.get(driver_id, replay_start_ms)
+        marker_time = min(replay_end_ms - 1, max(replay_start_ms, terminal_time))
+        markers.append(BrowserDnfMarker(driver_id, marker_time))
+    return tuple(sorted(markers, key=lambda marker: (marker.time_ms, marker.driver_id)))
+
+
+def _validate_summary_bounds(replay_start_ms: int, replay_end_ms: int) -> None:
+    if any(type(value) is not int or value < 0 for value in (replay_start_ms, replay_end_ms)):
+        raise ValueError("timeline summary bounds must be non-negative integer milliseconds")
+    if replay_start_ms >= replay_end_ms:
+        raise ValueError("timeline summary bounds must be a non-empty interval")
 
 
 def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[str, ...] | None, ...] | None = None) -> BrowserGlobalFields:
@@ -361,7 +444,7 @@ def _normalized_status(value) -> str:
 _KNOWN_NON_COMPLETION_STATUSES = frozenset({
     "retired", "accident", "collision", "engine", "gearbox", "transmission", "clutch",
     "hydraulics", "electrical", "brakes", "suspension", "damage", "mechanical", "fuel",
-    "tyre", "wheel", "overheating", "withdrawn",
+    "tyre", "wheel", "overheating", "withdrawn", "didnotfinish", "dnf", "notclassified",
 })
 
 
@@ -385,4 +468,7 @@ def _with_derived_fields(fields, distances, gaps, positions):
     )
 
 
-__all__ = ["BrowserDeliveryBuild", "BrowserDeliveryBuildError", "ProjectionQualityAssessor", "build_browser_delivery"]
+__all__ = [
+    "BrowserDeliveryBuild", "BrowserDeliveryBuildError", "ProjectionQualityAssessor",
+    "build_browser_delivery", "build_timeline_summary",
+]
