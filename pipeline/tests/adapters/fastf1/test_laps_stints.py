@@ -1,6 +1,7 @@
 from datetime import timedelta
 import math
 
+import pandas as pd
 import pytest
 
 from f1_replay_pipeline.domain.canonical_schema import LAPS_SCHEMA, STINTS_SCHEMA
@@ -130,3 +131,156 @@ def test_adapter_accepts_dataframe_like_records_without_telemetry_operations():
 def test_adapter_rejects_an_unvalidated_driver_mapping_value():
     with pytest.raises(NormalizationError, match="invalid canonical driver ID"):
         adapt_laps(LapsOnlySession([_lap()]), "2026-03-race", {"44": "Hamilton"})
+
+
+# ── Sector normalization positive tests ──
+
+
+def test_adapt_laps_normalizes_all_sector_durations_from_timedelta_to_ms():
+    """All three sector durations populated become Int64 millisecond values."""
+    session = LapsOnlySession([_lap(
+        Sector1Time=timedelta(seconds=28, microseconds=500_000),
+        Sector2Time=timedelta(seconds=35, microseconds=200_000),
+        Sector3Time=timedelta(seconds=27, microseconds=800_000),
+    )])
+
+    frame = adapt_laps(session, "2026-03-race", {"44": "HAM"})
+    row = frame.row(0, named=True)
+
+    assert row["sector_1_duration_ms"] == 28_500
+    assert row["sector_2_duration_ms"] == 35_200
+    assert row["sector_3_duration_ms"] == 27_800
+
+
+def test_adapt_laps_normalizes_all_sector_session_timestamps_from_timedelta_to_ms():
+    """All three sector session timestamps populated become Int64 millisecond values."""
+    session = LapsOnlySession([_lap(
+        Sector1SessionTime=timedelta(seconds=28, microseconds=500_000),
+        Sector2SessionTime=timedelta(seconds=63, microseconds=700_000),
+        Sector3SessionTime=timedelta(seconds=91, microseconds=500_000),
+    )])
+
+    frame = adapt_laps(session, "2026-03-race", {"44": "HAM"})
+    row = frame.row(0, named=True)
+
+    assert row["sector_1_session_time_ms"] == 28_500
+    assert row["sector_2_session_time_ms"] == 63_700
+    assert row["sector_3_session_time_ms"] == 91_500
+
+
+def test_adapt_laps_rounds_sector_times_half_up_at_millisecond_boundary():
+    """Sector duration times round half-up at the millisecond boundary."""
+    session = LapsOnlySession([_lap(
+        Sector1Time=timedelta(seconds=12, microseconds=499_500),
+        Sector2Time=timedelta(seconds=12, microseconds=499_499),
+    )])
+
+    frame = adapt_laps(session, "2026-03-race", {"44": "HAM"})
+    row = frame.row(0, named=True)
+
+    assert row["sector_1_duration_ms"] == 12_500
+    assert row["sector_2_duration_ms"] == 12_499
+
+
+# ── Sector normalization negative / edge-case tests ──
+
+
+def test_adapt_laps_sets_missing_sector_fields_to_null():
+    """Subset of sector fields omitted from the source record become null."""
+    session = LapsOnlySession([_lap(
+        Sector1Time=timedelta(seconds=28, microseconds=500_000),
+        Sector2Time=None,
+        # Sector3Time deliberately omitted from the record
+        Sector1SessionTime=timedelta(seconds=28, microseconds=500_000),
+        Sector2SessionTime=None,
+        Sector3SessionTime=timedelta(seconds=91, microseconds=500_000),
+    )])
+
+    frame = adapt_laps(session, "2026-03-race", {"44": "HAM"})
+    row = frame.row(0, named=True)
+
+    assert row["sector_1_duration_ms"] == 28_500
+    assert row["sector_2_duration_ms"] is None
+    assert row["sector_3_duration_ms"] is None
+    assert row["sector_1_session_time_ms"] == 28_500
+    assert row["sector_2_session_time_ms"] is None
+    assert row["sector_3_session_time_ms"] == 91_500
+
+
+def test_adapt_laps_converts_nonfinite_and_nat_sector_values_to_null():
+    """NaN, inf, and NaT sector values become null instead of raising or storing garbage."""
+    session = LapsOnlySession([_lap(
+        Sector1Time=math.nan,
+        Sector2Time=math.inf,
+        Sector3Time=pd.NaT,
+        Sector1SessionTime=math.nan,
+        Sector2SessionTime=-math.inf,
+        Sector3SessionTime=pd.NaT,
+    )])
+
+    frame = adapt_laps(session, "2026-03-race", {"44": "HAM"})
+    row = frame.row(0, named=True)
+
+    assert row["sector_1_duration_ms"] is None
+    assert row["sector_2_duration_ms"] is None
+    assert row["sector_3_duration_ms"] is None
+    assert row["sector_1_session_time_ms"] is None
+    assert row["sector_2_session_time_ms"] is None
+    assert row["sector_3_session_time_ms"] is None
+
+
+def test_adapt_laps_rejects_negative_sector_duration():
+    """A negative sector duration raises NormalizationError."""
+    session = LapsOnlySession([_lap(
+        Sector1Time=timedelta(seconds=-1),
+    )])
+
+    with pytest.raises(NormalizationError, match="invalid sector 1 duration"):
+        adapt_laps(session, "2026-03-race", {"44": "HAM"})
+
+
+def test_adapt_laps_rejects_negative_sector_session_timestamp():
+    """A negative sector session timestamp raises NormalizationError."""
+    session = LapsOnlySession([_lap(
+        Sector1SessionTime=timedelta(seconds=-1),
+    )])
+
+    with pytest.raises(NormalizationError, match="invalid sector 1 session time"):
+        adapt_laps(session, "2026-03-race", {"44": "HAM"})
+
+
+def test_adapt_laps_rejects_non_numeric_sector_value():
+    """A non-numeric sector value (e.g. a string) raises NormalizationError."""
+    session = LapsOnlySession([_lap(
+        Sector1Time="not a time",
+    )])
+
+    with pytest.raises(NormalizationError, match="invalid sector 1 duration"):
+        adapt_laps(session, "2026-03-race", {"44": "HAM"})
+
+
+def test_adapt_laps_sector_values_are_deterministic_regardless_of_input_order():
+    """Sector normalization produces identical results regardless of input record order."""
+    rows = [
+        _lap(LapNumber=2, LapStartTime=timedelta(seconds=100), Time=timedelta(seconds=190),
+             Sector1Time=timedelta(seconds=28, microseconds=500_000),
+             Sector2Time=timedelta(seconds=35, microseconds=200_000),
+             Sector3Time=timedelta(seconds=27, microseconds=800_000)),
+        _lap(LapNumber=1, LapStartTime=timedelta(seconds=0), Time=timedelta(seconds=90),
+             Sector1Time=timedelta(seconds=29, microseconds=100_000),
+             Sector2Time=timedelta(seconds=34, microseconds=900_000),
+             Sector3Time=timedelta(seconds=28, microseconds=300_000)),
+    ]
+
+    ordered = adapt_laps(LapsOnlySession(rows), "2026-03-race", {"44": "HAM"})
+    reversed_frame = adapt_laps(LapsOnlySession(list(reversed(rows))), "2026-03-race", {"44": "HAM"})
+
+    assert ordered.equals(reversed_frame)
+
+    ordered_rows = ordered.sort("lap_number").to_dicts()
+    assert ordered_rows[0]["sector_1_duration_ms"] == 29_100
+    assert ordered_rows[0]["sector_2_duration_ms"] == 34_900
+    assert ordered_rows[0]["sector_3_duration_ms"] == 28_300
+    assert ordered_rows[1]["sector_1_duration_ms"] == 28_500
+    assert ordered_rows[1]["sector_2_duration_ms"] == 35_200
+    assert ordered_rows[1]["sector_3_duration_ms"] == 27_800

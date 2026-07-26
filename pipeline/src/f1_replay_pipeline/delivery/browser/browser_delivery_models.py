@@ -13,9 +13,11 @@ import polars as pl
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_DRIVER_ID = re.compile(r"[A-Z0-9]{2,4}\Z")
 MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
+BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -125,6 +127,95 @@ class BrowserDriverFields:
             raise ValueError("derived continuous fields must contain non-negative finite floats or null")
         if any(value is not None and (type(value) is not int or value < 1) for value in self.position):
             raise ValueError("position must contain positive integers or null")
+
+
+@dataclass(frozen=True)
+class BrowserDriverLapSector:
+    """Columnar completed lap and sector timings for one driver.
+
+    Completed laps are required to have both ``lap_start_ms`` and ``lap_end_ms``;
+    sector durations and completion timestamps remain nullable and propagate from
+    the canonical source.
+    """
+
+    lap_number: tuple[int, ...]
+    lap_start_ms: tuple[int, ...]
+    lap_end_ms: tuple[int, ...]
+    lap_duration_ms: tuple[int | None, ...]
+    sector_1_duration_ms: tuple[int | None, ...]
+    sector_2_duration_ms: tuple[int | None, ...]
+    sector_3_duration_ms: tuple[int | None, ...]
+    sector_1_session_time_ms: tuple[int | None, ...]
+    sector_2_session_time_ms: tuple[int | None, ...]
+    sector_3_session_time_ms: tuple[int | None, ...]
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(field, tuple) for field in (
+            self.lap_number, self.lap_start_ms, self.lap_end_ms, self.lap_duration_ms,
+            self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+            self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms,
+        )):
+            raise TypeError("every driver lap sector field must be a tuple")
+        size = len(self.lap_number)
+        fields = (
+            self.lap_start_ms, self.lap_end_ms, self.lap_duration_ms,
+            self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+            self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms,
+        )
+        if any(len(field) != size for field in fields):
+            raise ValueError("every driver lap sector field must be aligned to lap_number")
+        if any(type(value) is not int or value < 1 for value in self.lap_number):
+            raise TypeError("lap_number must contain positive integers")
+        for field in (self.lap_start_ms, self.lap_end_ms):
+            if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in field):
+                raise TypeError("lap start/end times must contain non-negative signed Int64 integers")
+        for field in (self.lap_duration_ms,
+                      self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+                      self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms):
+            if any(value is not None and (type(value) is not int or not 0 <= value <= MAX_INT64) for value in field):
+                raise TypeError("nullable timing fields must contain non-negative signed Int64 integers or null")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "lapNumber": list(self.lap_number),
+            "lapStartMs": [value for value in self.lap_start_ms],
+            "lapEndMs": [value for value in self.lap_end_ms],
+            "lapDurationMs": [value for value in self.lap_duration_ms],
+            "sector1DurationMs": [value for value in self.sector_1_duration_ms],
+            "sector2DurationMs": [value for value in self.sector_2_duration_ms],
+            "sector3DurationMs": [value for value in self.sector_3_duration_ms],
+            "sector1SessionTimeMs": [value for value in self.sector_1_session_time_ms],
+            "sector2SessionTimeMs": [value for value in self.sector_2_session_time_ms],
+            "sector3SessionTimeMs": [value for value in self.sector_3_session_time_ms],
+        }
+
+
+@dataclass(frozen=True)
+class BrowserLapSectorSidecar:
+    """Compact optional columnar lap and sector data for one browser replay."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserDriverLapSector]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("lap sector sidecar fixture_id must be a non-empty string")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("driver IDs must match the canonical identifier pattern")
+        if len(set(self.drivers)) != len(self.drivers):
+            raise ValueError("driver IDs must be unique")
+        if any(not isinstance(value, BrowserDriverLapSector) for value in self.drivers.values()):
+            raise TypeError("drivers must map to BrowserDriverLapSector values")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
+        }
 
 
 @dataclass(frozen=True)
@@ -267,6 +358,18 @@ class BrowserTimelineSummaryReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserLapSectorSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional compact lap sector sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "lap-sector-sidecar.json":
+            raise ValueError("lap sector sidecar path must be lap-sector-sidecar.json")
+        if self.schema_id != BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID:
+            raise ValueError("lap sector sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -275,6 +378,7 @@ class BrowserManifest:
     drivers: tuple[Mapping[str, object], ...]
     lap_starts: tuple[BrowserLapStart, ...] = ()
     timeline_summary: BrowserArtifactReference | Mapping[str, object] | None = None
+    lap_sector_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -313,9 +417,26 @@ class BrowserManifest:
             )
         elif timeline_summary is not None:
             raise TypeError("timeline_summary must be a BrowserArtifactReference or mapping")
+        lap_sector_sidecar = self.lap_sector_sidecar
+        if isinstance(lap_sector_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(lap_sector_sidecar) != required:
+                raise ValueError("lap_sector_sidecar must contain path, schemaId, and sha256")
+            lap_sector_sidecar = BrowserLapSectorSidecarReference(
+                cast(str, lap_sector_sidecar["path"]),
+                cast(str, lap_sector_sidecar["schemaId"]),
+                cast(str, lap_sector_sidecar["sha256"]),
+            )
+        elif isinstance(lap_sector_sidecar, BrowserArtifactReference):
+            lap_sector_sidecar = BrowserLapSectorSidecarReference(
+                lap_sector_sidecar.path, lap_sector_sidecar.schema_id, lap_sector_sidecar.sha256,
+            )
+        elif lap_sector_sidecar is not None:
+            raise TypeError("lap_sector_sidecar must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
+        object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -335,13 +456,18 @@ class BrowserManifest:
             value["timelineSummary"] = cast(
                 BrowserArtifactReference, self.timeline_summary,
             ).as_dict()
+        if self.lap_sector_sidecar is not None:
+            value["lapSectorSidecar"] = cast(
+                BrowserArtifactReference, self.lap_sector_sidecar,
+            ).as_dict()
         return value
 
 
 __all__ = [
-    "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields", "BrowserLapStart",
-    "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields",
+    "BrowserDriverLapSector", "BrowserLapSectorSidecar", "BrowserLapSectorSidecarReference",
+    "BrowserLapStart", "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserTimelineSummaryReference", "CanonicalGenerationSnapshot",
-    "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "TIMELINE_SUMMARY_SCHEMA_ID",
-    "TimelineSummaryKind", "deep_freeze_json",
+    "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
+    "TIMELINE_SUMMARY_SCHEMA_ID", "TimelineSummaryKind", "deep_freeze_json",
 ]

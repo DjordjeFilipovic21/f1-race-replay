@@ -742,7 +742,13 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def _registry() -> tuple[dict[str, object], Registry]:
-    schemas = {name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json") for name in ("manifest", "chunk", "track-assets", "timeline-summary")}
+    schemas = {
+        name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json")
+        for name in (
+            "manifest", "chunk", "track-assets", "timeline-summary",
+            "browser-lap-sector-sidecar",
+        )
+    }
     registry = Registry()
     for schema in schemas.values():
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))

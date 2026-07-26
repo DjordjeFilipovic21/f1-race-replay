@@ -88,6 +88,66 @@ entries use absolute integer milliseconds:
   older deliveries and manifests without `timelineSummary` remain valid and
   loadable.
 
+### Optional lap/sector sidecar
+
+The manifest may include a compact, optional `lapSectorSidecar` reference to
+a dedicated columnar artifact that exposes completed lap and sector timing
+records for every driver:
+
+```json
+"lapSectorSidecar": {
+  "path": "lap-sector-sidecar.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `lap-sector-sidecar.json` is a `v1` object whose drivers map
+to equal-length column arrays sorted by ascending lap number:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "bahrain-2024",
+  "drivers": {
+    "HAM": {
+      "lapNumber": [1, 2],
+      "lapStartMs": [1000, 78000],
+      "lapEndMs": [77000, 155000],
+      "lapDurationMs": [76000, 77000],
+      "sector1DurationMs": [25000, 26000],
+      "sector2DurationMs": [27000, 28000],
+      "sector3DurationMs": [24000, 23000],
+      "sector1SessionTimeMs": [1000, 78000],
+      "sector2SessionTimeMs": [26000, 104000],
+      "sector3SessionTimeMs": [53000, 132000]
+    }
+  }
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`). Lap numbers
+  are positive integers; `lapStartMs` and `lapEndMs` are non-nullable
+  non-negative integers (absolute session time).
+- `lapDurationMs`, sector durations (`sector1DurationMs`–`sector3DurationMs`),
+  and sector completion timestamps (`sector1SessionTimeMs`–
+  `sector3SessionTimeMs`) are nullable. Nulls propagate from missing canonical
+  data; the pipeline never invents values.
+- Sector durations are paired with their completion timestamps so consumers
+  can reveal only sector records completed by the current replay time (causal
+  completion). All timing values are integer milliseconds; no float seconds
+  are used.
+- The sidecar duplicates no values present in telemetry chunks. It is a
+  dedicated artifact produced alongside chunks without embedding lap or sector
+  data into them.
+- Publication serializes the sidecar deterministically, verifies its SHA-256
+  digest against the manifest reference, and validates both the JSON Schema
+  (`browser-lap-sector-sidecar.schema.json`) and semantic contract rules
+  (fixture agreement, driver set identity).
+- The reference is optional: older deliveries and manifests without
+  `lapSectorSidecar` remain valid and loadable. Strict parsers must explicitly
+  allow its absence.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

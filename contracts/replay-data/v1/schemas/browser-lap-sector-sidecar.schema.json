@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+  "title": "Browser lap and sector sidecar",
+  "description": "Compact optional columnar lap and sector timing data for browser replay. Each driver entry is a set of equal-length arrays describing completed laps and their sector timings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "drivers"
+  ],
+  "$defs": {
+    "driverCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "sessionTimeMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nullableSessionTimeMs": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "nullableDurationMs": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "lapNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "driverLapSectorColumns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lapNumber",
+        "lapStartMs",
+        "lapEndMs",
+        "lapDurationMs",
+        "sector1DurationMs",
+        "sector2DurationMs",
+        "sector3DurationMs",
+        "sector1SessionTimeMs",
+        "sector2SessionTimeMs",
+        "sector3SessionTimeMs"
+      ],
+      "properties": {
+        "lapNumber": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lapNumber"
+          }
+        },
+        "lapStartMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sessionTimeMs"
+          }
+        },
+        "lapEndMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sessionTimeMs"
+          }
+        },
+        "lapDurationMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableDurationMs"
+          }
+        },
+        "sector1DurationMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableDurationMs"
+          }
+        },
+        "sector2DurationMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableDurationMs"
+          }
+        },
+        "sector3DurationMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableDurationMs"
+          }
+        },
+        "sector1SessionTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableSessionTimeMs"
+          }
+        },
+        "sector2SessionTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableSessionTimeMs"
+          }
+        },
+        "sector3SessionTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableSessionTimeMs"
+          }
+        }
+      }
+    },
+    "browserLapSectorSidecarFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "lap-sector-sidecar.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/driverCode"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/driverLapSectorColumns"
+      }
+    }
+  }
+}

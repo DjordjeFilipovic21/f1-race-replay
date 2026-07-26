@@ -122,3 +122,31 @@ multi-circuit corpus, including varied pit layouts and close/grade-separated
 geometry. Gap quality depends on available leader history. Terminal timing is
 inferred only after the final position sample; it is not a direct canonical
 retirement timestamp.
+
+## 7. Optional lap/sector sidecar
+
+Canonical laps now include nullable sector 1/2/3 duration and completion
+session-time columns. A compact optional sidecar artifact exposes these for
+every driver without duplicating values into replay chunks:
+
+- The manifest may carry a `lapSectorSidecar` reference (`path`,
+  `schemaId`, `sha256`) pointing to `lap-sector-sidecar.json`.
+- The sidecar is columnar per driver: equal-length arrays of
+  `lapNumber`, `lapStartMs`, `lapEndMs`, `lapDurationMs`,
+  `sector1DurationMs`–`sector3DurationMs`, and
+  `sector1SessionTimeMs`–`sector3SessionTimeMs`, all integer milliseconds.
+- Sector durations and their completion timestamps are nullable; nulls
+  propagate from the canonical source. Start and end times are never null.
+- The sidecar is produced alongside chunks by `build_browser_delivery` and
+  validated against
+  `urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar`.
+- **Core chunks are unchanged**: no lap, sector, or driver-completion data is
+  embedded in chunk payloads. The sidecar is an independent artifact.
+- **Backward compatibility**: consumers must accept manifests without
+  `lapSectorSidecar`. Strict parsers must explicitly allow its absence.
+  All existing v1 chunks, timeline summaries, and navigation markers remain
+  valid and replayable.
+
+See [Replay Data Contract — Optional lap/sector sidecar](replay-data-contract.md#optional-lapsector-sidecar)
+for the full contract including serialization rules, causal completion
+semantics, and semantic validation.

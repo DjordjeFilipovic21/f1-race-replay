@@ -14,6 +14,7 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDnfMarker,
+    BrowserLapSectorSidecar,
     BrowserManifest,
     BrowserLapStart,
     BrowserTimelineInterval,
@@ -23,6 +24,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     deep_freeze_json,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
+from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
 from f1_replay_pipeline.analysis.live_position.live_position_progress import ProgressMode, ProgressState, advance_progress
 from f1_replay_pipeline.analysis.live_position.live_position_projection import ProjectionGeometry, ProjectionGeometryError, project_meters
 from f1_replay_pipeline.analysis.live_position.live_position_quality import (
@@ -47,6 +49,7 @@ class BrowserDeliveryBuild:
     chunks: tuple[BrowserChunk, ...]
     projection_quality_assessment: ProjectionQualityAssessment | None = None
     timeline_summary: BrowserTimelineSummary | None = None
+    lap_sector_sidecar: BrowserLapSectorSidecar | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -55,6 +58,8 @@ class BrowserDeliveryBuild:
             raise TypeError("projection_quality_assessment must be a ProjectionQualityAssessment or None")
         if self.timeline_summary is not None and not isinstance(self.timeline_summary, BrowserTimelineSummary):
             raise TypeError("timeline_summary must be a BrowserTimelineSummary or None")
+        if self.lap_sector_sidecar is not None and not isinstance(self.lap_sector_sidecar, BrowserLapSectorSidecar):
+            raise TypeError("lap_sector_sidecar must be a BrowserLapSectorSidecar or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -113,6 +118,7 @@ def build_browser_delivery(
             overlap_ms=overlap_ms,
         )
         timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
+        lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
@@ -122,7 +128,7 @@ def build_browser_delivery(
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
-        snapshot, manifest, track_assets, chunks, assessment, timeline_summary,
+        snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
     )
 
 

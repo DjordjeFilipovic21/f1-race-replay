@@ -79,6 +79,12 @@ LAPS_SCHEMA: Schema = MappingProxyType(
         "is_accurate": pl.Boolean,
         "deleted": pl.Boolean,
         "deleted_reason": pl.String,
+        "sector_1_duration_ms": pl.Int64,
+        "sector_2_duration_ms": pl.Int64,
+        "sector_3_duration_ms": pl.Int64,
+        "sector_1_session_time_ms": pl.Int64,
+        "sector_2_session_time_ms": pl.Int64,
+        "sector_3_session_time_ms": pl.Int64,
     }
 )
 

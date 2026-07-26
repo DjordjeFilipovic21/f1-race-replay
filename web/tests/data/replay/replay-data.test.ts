@@ -63,6 +63,46 @@ describe('replay-data v1 loader', () => {
     expect(() => parseManifest({ ...manifest, timelineSummary: { ...timelineSummaryReference(), unexpected: true } })).toThrow('not allowed')
   })
 
+  test('parses the optional lapSectorSidecar reference with frozen fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = lapSectorSidecarReference()
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.lapSectorSidecar).toEqual(lapSectorSidecarReference())
+    expect(Object.isFrozen(parsedManifest.lapSectorSidecar)).toBe(true)
+  })
+
+  test('parses a manifest without lapSectorSidecar and exposes no sidecar property', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest).not.toHaveProperty('lapSectorSidecar')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid sha256', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), sha256: 'bad' }
+    expect(() => parseManifest(manifest)).toThrow('sha256 is invalid')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid path', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), path: 'wrong.json' }
+    expect(() => parseManifest(manifest)).toThrow('lap sector sidecar path is unsupported')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid schemaId', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), schemaId: 'urn:wrong' }
+    expect(() => parseManifest(manifest)).toThrow('lap sector sidecar schema identity is unsupported')
+  })
+
+  test('rejects a lapSectorSidecar reference with extra fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), unexpected: true }
+    expect(() => parseManifest(manifest)).toThrow('not allowed')
+  })
+
   test('rejects a malformed timeline summary and a summary digest mismatch', async () => {
     const malformed = timelineSummaryPayload()
     malformed.intervals = [{ kind: 'yellow', startMs: 1_000, endMs: 1_000 }]
@@ -419,6 +459,14 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
   })))
   const reads: string[] = []
   return { files, reads, source: mapSource(files, reads) }
+}
+
+function lapSectorSidecarReference(): Record<string, string> {
+  return {
+    path: 'lap-sector-sidecar.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar',
+    sha256: 'a'.repeat(64),
+  }
 }
 
 function timelineSummaryPayload(): Record<string, unknown> {

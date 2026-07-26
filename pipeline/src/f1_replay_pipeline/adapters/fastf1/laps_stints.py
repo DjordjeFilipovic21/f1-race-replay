@@ -114,6 +114,12 @@ def _lap_row(record: Mapping[str, object], session_id: str, driver_ids: Mapping[
         "is_accurate": _nullable_bool(record.get("IsAccurate"), "accuracy flag"),
         "deleted": _nullable_bool(record.get("Deleted"), "deleted flag"),
         "deleted_reason": _nullable_text(record.get("DeletedReason"), "deleted reason"),
+        "sector_1_duration_ms": _nullable_time(record.get("Sector1Time"), "sector 1 duration"),
+        "sector_2_duration_ms": _nullable_time(record.get("Sector2Time"), "sector 2 duration"),
+        "sector_3_duration_ms": _nullable_time(record.get("Sector3Time"), "sector 3 duration"),
+        "sector_1_session_time_ms": _nullable_time(record.get("Sector1SessionTime"), "sector 1 session time"),
+        "sector_2_session_time_ms": _nullable_time(record.get("Sector2SessionTime"), "sector 2 session time"),
+        "sector_3_session_time_ms": _nullable_time(record.get("Sector3SessionTime"), "sector 3 session time"),
     }
 
 

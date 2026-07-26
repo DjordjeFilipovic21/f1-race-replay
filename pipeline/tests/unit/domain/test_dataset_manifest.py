@@ -26,7 +26,7 @@ from f1_replay_pipeline.domain.generation_identity import GenerationIdentityErro
 
 _DIGEST = "a" * 64
 _GOLDEN_MANIFEST = Path(__file__).parents[2] / "golden" / "canonical_manifest_v1.json"
-_GOLDEN_MANIFEST_SHA256 = "3c3d9709fd0cd1c168dd8dfa30eace313784bd8c034195f80be6be16bde449ae"
+_GOLDEN_MANIFEST_SHA256 = "74c72b048fddbef770941f30aaffed31a0a43c4079fb7a62bdb0cc49667fd117"
 
 
 def _entry(name: str) -> TableManifestEntry:

@@ -26,6 +26,12 @@ export interface TimelineSummaryReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface LapSectorSidecarReference extends ArtifactReference {
+  readonly path: 'lap-sector-sidecar.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar'
+  readonly sha256: string
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -53,6 +59,7 @@ export interface ReplayManifest {
   readonly schemas: Readonly<{ readonly manifest: string; readonly chunk: string; readonly trackAssets: string }>
   readonly trackAssets: ArtifactReference
   readonly timelineSummary?: TimelineSummaryReference
+  readonly lapSectorSidecar?: LapSectorSidecarReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]

@@ -74,7 +74,10 @@ def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
             ("pit_in_time_ms", pl.Int64), ("pit_out_time_ms", pl.Int64),
             ("compound", pl.String), ("tyre_life", pl.Int16), ("is_fresh_tyre", pl.Boolean),
             ("track_status", pl.String), ("is_accurate", pl.Boolean), ("deleted", pl.Boolean),
-            ("deleted_reason", pl.String),
+            ("deleted_reason", pl.String), ("sector_1_duration_ms", pl.Int64),
+            ("sector_2_duration_ms", pl.Int64), ("sector_3_duration_ms", pl.Int64),
+            ("sector_1_session_time_ms", pl.Int64), ("sector_2_session_time_ms", pl.Int64),
+            ("sector_3_session_time_ms", pl.Int64),
         ]),
         ("stints", [
             ("session_id", pl.String), ("driver_id", pl.String), ("stint_number", pl.Int16),
