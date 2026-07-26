@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboard } from '../../../../src/features/replay/panels/LiveLeaderboard'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
+import type { LapSectorSidecar } from '../../../../src/data/replay/types'
 
 const drivers = Object.freeze([
   Object.freeze({ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }),
@@ -172,6 +173,28 @@ test('shows an explicit unavailable fallback for missing or unrecognized tyre da
   expect(within(rowForDriver('NOR')).queryByRole('img')).toBeNull()
 })
 
+test('shows OUT instead of tyre or sector data for terminal drivers', () => {
+  const current = sectorSnapshot()
+  const withTerminalDriver: ReplaySnapshot = {
+    ...current,
+    drivers: {
+      ...current.drivers,
+      NOR: { ...current.drivers.NOR, status: 'OUT', position: null, tyreCompound: null, tyreAge: null },
+    },
+  }
+  render(<LiveLeaderboard snapshot={withTerminalDriver} drivers={drivers} lapSectorSidecar={buildSectorSidecar()} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
+  expect(within(rowForDriver('NOR')).getAllByRole('cell')[2].textContent).toBe('OUT')
+  expect(within(rowForDriver('NOR')).queryByText('Unavailable')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+  const terminalSectorCell = within(rowForDriver('NOR')).getAllByRole('cell')[2]
+  expect(terminalSectorCell.textContent).toBe('OUT')
+  expect(terminalSectorCell.className).not.toContain('live-leaderboard__gap--sectors')
+  expect(rowForDriver('NOR').querySelectorAll('.live-leaderboard__sector')).toHaveLength(0)
+})
+
 test('renders an accessible finish flag instead of timing, PIT, or raw status in both gap modes', () => {
   const current = snapshot({
     drivers: {
@@ -251,6 +274,193 @@ test('selects a driver through its accessible identity control and highlights th
   fireEvent.click(selected)
   expect(onDriverSelect).toHaveBeenCalledWith('NOR')
 })
+
+test('adds a Sectors toggle button with keyboard-accessible aria-pressed state and switches the metric header', () => {
+  render(<LiveLeaderboard snapshot={snapshot()} drivers={drivers} />)
+
+  const sectorsButton = screen.getByRole('button', { name: 'Sectors' })
+  expect(sectorsButton.getAttribute('aria-pressed')).toBe('false')
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Leader gap')
+
+  fireEvent.click(sectorsButton)
+
+  expect(sectorsButton.getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Leader' }).getAttribute('aria-pressed')).toBe('false')
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Sectors')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
+
+  expect(sectorsButton.getAttribute('aria-pressed')).toBe('false')
+  expect(screen.getByRole('button', { name: 'Interval' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Interval')
+})
+
+test('renders all four causal sector colour states with accessible labels and formatted times', () => {
+  render(<LiveLeaderboard snapshot={sectorSnapshot()} drivers={drivers} lapSectorSidecar={buildSectorSidecar()} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  const verSectorElements = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(verSectorElements).toHaveLength(3)
+  expect(verSectorElements[0].getAttribute('aria-label')).toBe('S1 26.500')
+  expect(verSectorElements[0].className).toContain('live-leaderboard__sector--session-best')
+  expect(verSectorElements[0].textContent).toContain('S1')
+  expect(verSectorElements[0].textContent).toContain('26.500')
+  expect(verSectorElements[1].getAttribute('aria-label')).toBe('S2 unavailable')
+  expect(verSectorElements[1].className).toContain('live-leaderboard__sector--unavailable')
+  expect(verSectorElements[1].textContent).toContain('—')
+  expect(verSectorElements[2].getAttribute('aria-label')).toBe('S3 unavailable')
+  expect(verSectorElements[2].className).toContain('live-leaderboard__sector--unavailable')
+
+  const norSectorElements = rowForDriver('NOR').querySelectorAll('.live-leaderboard__sector')
+  expect(norSectorElements).toHaveLength(3)
+  expect(norSectorElements[0].getAttribute('aria-label')).toBe('S1 28.000')
+  expect(norSectorElements[0].className).toContain('live-leaderboard__sector--slower')
+  expect(norSectorElements[0].textContent).toContain('28.000')
+  expect(norSectorElements[1].getAttribute('aria-label')).toBe('S2 31.500')
+  expect(norSectorElements[1].className).toContain('live-leaderboard__sector--personal-best')
+  expect(norSectorElements[1].textContent).toContain('31.500')
+  expect(norSectorElements[2].getAttribute('aria-label')).toBe('S3 unavailable')
+  expect(norSectorElements[2].className).toContain('live-leaderboard__sector--unavailable')
+  expect(norSectorElements[2].textContent).toContain('—')
+
+  const hamSectorElements = rowForDriver('HAM').querySelectorAll('.live-leaderboard__sector')
+  expect(hamSectorElements).toHaveLength(3)
+  expect(hamSectorElements[0].getAttribute('aria-label')).toBe('S1 unavailable')
+  expect(hamSectorElements[0].className).toContain('live-leaderboard__sector--unavailable')
+  expect(hamSectorElements[1].getAttribute('aria-label')).toBe('S2 unavailable')
+  expect(hamSectorElements[1].className).toContain('live-leaderboard__sector--unavailable')
+  expect(hamSectorElements[2].getAttribute('aria-label')).toBe('S3 unavailable')
+  expect(hamSectorElements[2].className).toContain('live-leaderboard__sector--unavailable')
+})
+
+test('enforces the causal boundary: sectors completed after the cursor are unavailable', () => {
+  const earlySnapshot = sectorSnapshot(85_000)
+  render(<LiveLeaderboard snapshot={earlySnapshot} drivers={drivers} lapSectorSidecar={buildSectorSidecar()} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  const verSectorElements = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(verSectorElements).toHaveLength(3)
+  expect(verSectorElements[0].getAttribute('aria-label')).toBe('S1 28.000')
+  expect(verSectorElements[1].getAttribute('aria-label')).toBe('S2 32.000')
+  expect(verSectorElements[2].getAttribute('aria-label')).toBe('S3 25.000')
+
+  const norSectorElements = rowForDriver('NOR').querySelectorAll('.live-leaderboard__sector')
+  expect(norSectorElements).toHaveLength(3)
+  expect(norSectorElements[0].getAttribute('aria-label')).toBe('S1 27.500')
+  expect(norSectorElements[1].getAttribute('aria-label')).toBe('S2 33.000')
+  expect(norSectorElements[2].getAttribute('aria-label')).toBe('S3 unavailable')
+  expect(norSectorElements[2].textContent).toContain('—')
+
+  const hamSectorElements = rowForDriver('HAM').querySelectorAll('.live-leaderboard__sector')
+  expect(hamSectorElements[2].getAttribute('aria-label')).toBe('S3 unavailable')
+})
+
+test('shows all sectors as unavailable when no sidecar data is provided', () => {
+  render(<LiveLeaderboard snapshot={sectorSnapshot()} drivers={drivers} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  for (const code of ['VER', 'NOR', 'HAM']) {
+    const sectorElements = rowForDriver(code).querySelectorAll('.live-leaderboard__sector')
+    expect(sectorElements).toHaveLength(3)
+    for (const element of sectorElements) {
+      expect(element.getAttribute('aria-label')).toMatch(/S[123] unavailable/)
+      expect(element.className).toContain('live-leaderboard__sector--unavailable')
+    }
+  }
+})
+
+test('shows all sectors as unavailable when sidecar is explicitly null', () => {
+  render(<LiveLeaderboard snapshot={sectorSnapshot()} drivers={drivers} lapSectorSidecar={null} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  const verSectorElements = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(verSectorElements).toHaveLength(3)
+  for (const element of verSectorElements) {
+    expect(element.className).toContain('live-leaderboard__sector--unavailable')
+  }
+})
+
+test('removes future sector times when the replay cursor moves backward in Sectors mode', () => {
+  const { rerender } = render(<LiveLeaderboard snapshot={sectorSnapshot(200_000)} drivers={drivers} lapSectorSidecar={buildSectorSidecar()} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  // At session 200_000: VER lap 3 S1=26.500 is session-best; NOR S3 unavailable (lap 2 incomplete)
+  const verSectorsEarly = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(verSectorsEarly[0].getAttribute('aria-label')).toBe('S1 26.500')
+  expect(verSectorsEarly[0].className).toContain('live-leaderboard__sector--session-best')
+
+  const norSectorsEarly = rowForDriver('NOR').querySelectorAll('.live-leaderboard__sector')
+  expect(norSectorsEarly[0].className).toContain('live-leaderboard__sector--slower')
+
+  // Rewind to session 85_000: VER loses laps 2-3, NOR loses lap 2
+  rerender(<LiveLeaderboard snapshot={sectorSnapshot(85_000)} drivers={drivers} lapSectorSidecar={buildSectorSidecar()} />)
+
+  // VER S1 drops from session-best (26.500) to personal-best (28.000) because NOR S1=27.500 is now the session best
+  const verSectorsLate = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(verSectorsLate[0].getAttribute('aria-label')).toBe('S1 28.000')
+  expect(verSectorsLate[0].className).not.toContain('live-leaderboard__sector--session-best')
+  expect(verSectorsLate[0].className).toContain('live-leaderboard__sector--personal-best')
+
+  // NOR S1 gains session-best (27.500) because VER's faster laps are no longer causal
+  const norSectorsLate = rowForDriver('NOR').querySelectorAll('.live-leaderboard__sector')
+  expect(norSectorsLate[0].getAttribute('aria-label')).toBe('S1 27.500')
+  expect(norSectorsLate[0].className).toContain('live-leaderboard__sector--session-best')
+  expect(norSectorsLate[2].getAttribute('aria-label')).toBe('S3 unavailable')
+  expect(norSectorsLate[2].className).toContain('live-leaderboard__sector--unavailable')
+})
+
+function sectorSnapshot(sessionTimeMs = 200_000): ReplaySnapshot {
+  const driver = (position: number, gapToLeaderMs: number) => ({
+    x: null, y: null, trackDistanceMeters: null, speed: null, throttle: null, brake: null,
+    gapToLeaderMs, lap: null, position, gear: null, drs: null, tyreCompound: null, status: 'OnTrack', isInPitLane: false,
+  })
+  return {
+    sessionTimeMs,
+    leaderboardOrder: ['VER', 'NOR', 'HAM'],
+    trackStatusCode: null,
+    weatherState: null,
+    events: [],
+    drivers: { VER: driver(1, 0), NOR: driver(2, 5_000), HAM: driver(3, 10_000) },
+  }
+}
+
+function buildSectorSidecar(): LapSectorSidecar {
+  return {
+    contractVersion: 'v1',
+    fixtureId: 'test',
+    drivers: {
+      VER: {
+        lapNumber: [1, 2, 3],
+        lapStartMs: [0, 85_000, 168_000],
+        lapEndMs: [85_000, 168_000, 255_000],
+        lapDurationMs: [85_000, 83_000, null],
+        sector1DurationMs: [28_000, 27_000, 26_500],
+        sector2DurationMs: [32_000, 31_000, null],
+        sector3DurationMs: [25_000, 24_000, null],
+        sector1SessionTimeMs: [28_000, 112_000, 195_000],
+        sector2SessionTimeMs: [60_000, 143_000, null],
+        sector3SessionTimeMs: [85_000, 168_000, null],
+      },
+      NOR: {
+        lapNumber: [1, 2],
+        lapStartMs: [0, 88_000],
+        lapEndMs: [88_000, 250_000],
+        lapDurationMs: [88_000, null],
+        sector1DurationMs: [27_500, 28_000],
+        sector2DurationMs: [33_000, 31_500],
+        sector3DurationMs: [26_000, null],
+        sector1SessionTimeMs: [27_500, 116_000],
+        sector2SessionTimeMs: [62_000, 147_500],
+        sector3SessionTimeMs: [88_000, null],
+      },
+    },
+  }
+}
 
 function rowForDriver(code: string): HTMLElement {
   const row = screen.getAllByRole('row').slice(1).find((candidate) => within(candidate).getByRole('rowheader').textContent === code)

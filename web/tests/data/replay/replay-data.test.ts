@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { sha256Hex } from '../../../src/data/replay/digest'
-import { parseManifest, parseTimelineSummary } from '../../../src/data/replay/guards'
+import { parseManifest, parsePitLossModelReference, parseStintSummaryReference, parseTimelineSummary } from '../../../src/data/replay/guards'
 import { loadReplayData, loadReplayIndex } from '../../../src/data/replay/loader'
 import { assertSafeRelativePath, resolveRelativePath } from '../../../src/data/replay/source'
 import type { ReplaySource } from '../../../src/data/replay/types'
@@ -61,6 +61,115 @@ describe('replay-data v1 loader', () => {
     expect(parseTimelineSummary(timelineSummaryPayload())).toEqual(timelineSummaryPayload())
     expect(() => parseTimelineSummary({ ...timelineSummaryPayload(), unexpected: true })).toThrow('not allowed')
     expect(() => parseManifest({ ...manifest, timelineSummary: { ...timelineSummaryReference(), unexpected: true } })).toThrow('not allowed')
+  })
+
+  test('parses the optional lapSectorSidecar reference with frozen fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = lapSectorSidecarReference()
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.lapSectorSidecar).toEqual(lapSectorSidecarReference())
+    expect(Object.isFrozen(parsedManifest.lapSectorSidecar)).toBe(true)
+  })
+
+  test('parses a manifest without lapSectorSidecar and exposes no sidecar property', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest).not.toHaveProperty('lapSectorSidecar')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid sha256', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), sha256: 'bad' }
+    expect(() => parseManifest(manifest)).toThrow('sha256 is invalid')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid path', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), path: 'wrong.json' }
+    expect(() => parseManifest(manifest)).toThrow('lap sector sidecar path is unsupported')
+  })
+
+  test('rejects a lapSectorSidecar reference with invalid schemaId', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), schemaId: 'urn:wrong' }
+    expect(() => parseManifest(manifest)).toThrow('lap sector sidecar schema identity is unsupported')
+  })
+
+  test('rejects a lapSectorSidecar reference with extra fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.lapSectorSidecar = { ...lapSectorSidecarReference(), unexpected: true }
+    expect(() => parseManifest(manifest)).toThrow('not allowed')
+  })
+
+  test('parses the optional stintSummary reference with frozen fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.stintSummary = stintSummaryReference()
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.stintSummary).toEqual(stintSummaryReference())
+    expect(Object.isFrozen(parsedManifest.stintSummary)).toBe(true)
+  })
+
+  test('parses a manifest without stintSummary and exposes no stintSummary property', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest).not.toHaveProperty('stintSummary')
+  })
+
+  test('rejects a stintSummary reference with invalid sha256', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.stintSummary = { ...stintSummaryReference(), sha256: 'bad' }
+    expect(() => parseManifest(manifest)).toThrow('sha256 is invalid')
+  })
+
+  test('rejects a stintSummary reference with invalid path', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.stintSummary = { ...stintSummaryReference(), path: 'wrong.json' }
+    expect(() => parseManifest(manifest)).toThrow('stint summary path is unsupported')
+  })
+
+  test('rejects a stintSummary reference with invalid schemaId', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.stintSummary = { ...stintSummaryReference(), schemaId: 'urn:wrong' }
+    expect(() => parseManifest(manifest)).toThrow('stint summary schema identity is unsupported')
+  })
+
+  test('rejects a stintSummary reference with extra fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    manifest.stintSummary = { ...stintSummaryReference(), unexpected: true }
+    expect(() => parseManifest(manifest)).toThrow('not allowed')
+  })
+
+  test('parses a stintSummary reference directly via its guard', () => {
+    const valid = stintSummaryReference()
+    const parsed = parseStintSummaryReference(valid)
+
+    expect(parsed).toEqual(stintSummaryReference())
+    expect(Object.isFrozen(parsed)).toBe(true)
+    expect(() => parseStintSummaryReference({ ...valid, extra: 1 })).toThrow('not allowed')
+  })
+
+  test('parses the optional pitLossModel reference with frozen fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    expect(parseManifest(manifest)).not.toHaveProperty('pitLossModel')
+    const reference = pitLossModelReference()
+    manifest.pitLossModel = reference
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.pitLossModel).toEqual(reference)
+    expect(Object.isFrozen(parsedManifest.pitLossModel)).toBe(true)
+  })
+
+  test.each([
+    ['path', { path: 'wrong.json' }, 'pit loss model path is unsupported'],
+    ['schema', { schemaId: 'urn:wrong' }, 'pit loss model schema identity is unsupported'],
+    ['digest', { sha256: 'bad' }, 'sha256 is invalid'],
+    ['extra field', { unexpected: true }, 'not allowed'],
+  ] as const)('rejects a pitLossModel reference with invalid %s', (_field, changes, message) => {
+    expect(() => parsePitLossModelReference({ ...pitLossModelReference(), ...changes })).toThrow(message)
   })
 
   test('rejects a malformed timeline summary and a summary digest mismatch', async () => {
@@ -419,6 +528,30 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
   })))
   const reads: string[] = []
   return { files, reads, source: mapSource(files, reads) }
+}
+
+function lapSectorSidecarReference(): Record<string, string> {
+  return {
+    path: 'lap-sector-sidecar.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar',
+    sha256: 'a'.repeat(64),
+  }
+}
+
+function stintSummaryReference(): Record<string, string> {
+  return {
+    path: 'stint-summary.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary',
+    sha256: 'a'.repeat(64),
+  }
+}
+
+function pitLossModelReference(): Record<string, string> {
+  return {
+    path: 'pit-loss-model.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model',
+    sha256: 'a'.repeat(64),
+  }
 }
 
 function timelineSummaryPayload(): Record<string, unknown> {

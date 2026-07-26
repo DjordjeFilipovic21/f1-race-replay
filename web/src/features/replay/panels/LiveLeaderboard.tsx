@@ -1,13 +1,14 @@
 import { memo, useState, type CSSProperties, type ReactNode } from 'react'
-import type { DriverMetadata } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
+import { selectSectorColours, type ColouredSector, type SectorColour } from '../selectors/sector-colour-selectors'
 import hardTyreImage from '../../../assets/tyres/hard.png'
 import intermediateTyreImage from '../../../assets/tyres/intermediate.png'
 import mediumTyreImage from '../../../assets/tyres/medium.png'
 import softTyreImage from '../../../assets/tyres/soft.png'
 import wetTyreImage from '../../../assets/tyres/wet.png'
 
-type MetricMode = 'leader' | 'interval' | 'tyres'
+type MetricMode = 'leader' | 'interval' | 'tyres' | 'sectors'
 type TyreCompound = 'SOFT' | 'MEDIUM' | 'HARD' | 'INTERMEDIATE' | 'WET'
 
 export interface LiveLeaderboardProps {
@@ -15,6 +16,7 @@ export interface LiveLeaderboardProps {
   readonly drivers: readonly DriverMetadata[]
   readonly selectedDriverId?: string | null
   readonly onDriverSelect?: (driverId: string) => void
+  readonly lapSectorSidecar?: LapSectorSidecar | null
 }
 
 interface LeaderboardRow {
@@ -30,17 +32,21 @@ interface LeaderboardRow {
 }
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
-export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect }: LiveLeaderboardProps) {
+export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect, lapSectorSidecar }: LiveLeaderboardProps) {
   const [metricMode, setMetricMode] = useState<MetricMode>('leader')
   const rows = createLeaderboardRows(snapshot, drivers)
+  const sectorSelections = metricMode === 'sectors' && lapSectorSidecar && snapshot
+    ? createSectorSelections(rows, lapSectorSidecar, snapshot)
+    : null
 
   return (
     <section className="live-leaderboard" aria-label="Leaderboard">
       <header className="live-leaderboard__header">
-        <div className="live-leaderboard__gap-toggle" role="group" aria-label="Gap display">
+        <div className="live-leaderboard__gap-toggle" role="group" aria-label="Gap display" style={{ gridTemplateColumns: 'repeat(4, minmax(max-content, 1fr))' }}>
           <button type="button" aria-pressed={metricMode === 'leader'} onClick={() => setMetricMode('leader')}>Leader</button>
           <button type="button" aria-pressed={metricMode === 'interval'} onClick={() => setMetricMode('interval')}>Interval</button>
           <button type="button" aria-pressed={metricMode === 'tyres'} onClick={() => setMetricMode('tyres')}>Tyres</button>
+          <button type="button" aria-pressed={metricMode === 'sectors'} onClick={() => setMetricMode('sectors')}>Sectors</button>
         </div>
       </header>
       {snapshot === null ? (
@@ -57,10 +63,10 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
             <col className="live-leaderboard__column--metric" />
           </colgroup>
           <thead>
-            <tr><th scope="col">Position</th><th scope="col">Team colour</th><th scope="col">Driver</th><th scope="col">{metricMode === 'leader' ? 'Leader gap' : metricMode === 'interval' ? 'Interval' : 'Tyres'}</th></tr>
+            <tr><th scope="col">Position</th><th scope="col">Team colour</th><th scope="col">Driver</th><th scope="col">{formatMetricHeader(metricMode)}</th></tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} metricMode={metricMode} isSelected={row.id === selectedDriverId} onDriverSelect={onDriverSelect} />)}
+            {rows.map((row, index) => <LeaderboardTableRow key={row.id} row={row} ahead={rows[index - 1] ?? null} metricMode={metricMode} isSelected={row.id === selectedDriverId} onDriverSelect={onDriverSelect} sectorColours={sectorSelections?.get(row.id)} />)}
           </tbody>
         </table>
       )}
@@ -68,16 +74,17 @@ export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers
   )
 })
 
-function LeaderboardTableRow({ row, ahead, metricMode, isSelected, onDriverSelect }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly metricMode: MetricMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined }) {
+function LeaderboardTableRow({ row, ahead, metricMode, isSelected, onDriverSelect, sectorColours }: { readonly row: LeaderboardRow; readonly ahead: LeaderboardRow | null; readonly metricMode: MetricMode; readonly isSelected: boolean; readonly onDriverSelect: ((driverId: string) => void) | undefined; readonly sectorColours: readonly ColouredSector[] | undefined }) {
   const identity = row.metadata?.displayName ?? row.id
   const code = row.metadata?.id ?? row.id
   const terminal = isTerminalRow(row)
+  const sectorCellsVisible = metricMode === 'sectors' && !terminal && !row.isFinished
   return (
     <tr className={[terminal ? 'live-leaderboard__row--terminal' : '', isSelected ? 'live-leaderboard__row--selected' : ''].filter(Boolean).join(' ') || undefined} style={teamAccentStyle(row.metadata?.colorHex)}>
       <td className="live-leaderboard__position">{formatPosition(row.position, row.status, row.isFinished)}</td>
       <td className="live-leaderboard__team-accent" aria-label={`Team colour for ${identity}`} />
       <th className="live-leaderboard__driver" scope="row" aria-label={identity} title={identity}><button type="button" aria-label={`Select ${identity}`} aria-pressed={isSelected} title={identity} onClick={() => onDriverSelect?.(row.id)}>{code}</button></th>
-      <td className={`live-leaderboard__gap${row.isFinished ? ' live-leaderboard__gap--finished' : ''}`}>{formatMetric(row, ahead, metricMode)}</td>
+      <td className={`live-leaderboard__gap${sectorCellsVisible ? ' live-leaderboard__gap--sectors' : ''}${row.isFinished ? ' live-leaderboard__gap--finished' : ''}`}>{formatMetric(row, ahead, metricMode, sectorColours)}</td>
     </tr>
   )
 }
@@ -119,9 +126,11 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
   }
 }
 
-function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, metricMode: MetricMode): ReactNode {
+function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, metricMode: MetricMode, sectorColours: readonly ColouredSector[] | undefined): ReactNode {
   if (row.isFinished) return <FinishFlag />
+  if (isTerminalRow(row)) return 'OUT'
   if (metricMode === 'tyres') return formatTyreMetric(row.tyreCompound, row.tyreAge)
+  if (metricMode === 'sectors') return formatSectorCells(sectorColours)
   const status = formatMetricStatus(row.status, row.isInPitLane)
   if (status !== null) return status
   return metricMode === 'leader' ? formatGap(row.position, row.gapToLeaderMs) : formatIntervalGap(row, ahead)
@@ -208,4 +217,75 @@ function isOnTrackStatus(status: string): boolean {
 
 function normalizeStatus(status: string | null): string {
   return status?.replace(/[\s_-]/g, '').toUpperCase() ?? ''
+}
+
+function formatMetricHeader(metricMode: MetricMode): string {
+  if (metricMode === 'leader') return 'Leader gap'
+  if (metricMode === 'interval') return 'Interval'
+  if (metricMode === 'tyres') return 'Tyres'
+  return 'Sectors'
+}
+
+function createSectorSelections(
+  rows: readonly LeaderboardRow[],
+  sidecar: LapSectorSidecar,
+  snapshot: ReplaySnapshot,
+): Map<string, readonly ColouredSector[]> {
+  const selections = new Map<string, readonly ColouredSector[]>()
+  for (const row of rows) {
+    selections.set(row.id, selectSectorColours(sidecar, snapshot, row.id).sectors)
+  }
+  return selections
+}
+
+interface LatestLapSectors {
+  readonly s1: ColouredSector | null
+  readonly s2: ColouredSector | null
+  readonly s3: ColouredSector | null
+}
+
+function getLatestLapSectors(sectorColours: readonly ColouredSector[] | undefined): LatestLapSectors {
+  if (!sectorColours || sectorColours.length === 0) return { s1: null, s2: null, s3: null }
+  const latestLap = Math.max(...sectorColours.map((sector) => sector.lapNumber))
+  const lapSectors = sectorColours.filter((sector) => sector.lapNumber === latestLap)
+  return {
+    s1: lapSectors.find((sector) => sector.sectorNumber === 1) ?? null,
+    s2: lapSectors.find((sector) => sector.sectorNumber === 2) ?? null,
+    s3: lapSectors.find((sector) => sector.sectorNumber === 3) ?? null,
+  }
+}
+
+function formatSectorCells(sectorColours: readonly ColouredSector[] | undefined): ReactNode {
+  const latest = getLatestLapSectors(sectorColours)
+  return (
+    <span className="live-leaderboard__sectors" aria-label="Sector times">
+      <SectorSubCell label="S1" sector={latest.s1} />
+      <SectorSubCell label="S2" sector={latest.s2} />
+      <SectorSubCell label="S3" sector={latest.s3} />
+    </span>
+  )
+}
+
+function SectorSubCell({ label, sector }: { readonly label: string; readonly sector: ColouredSector | null }) {
+  const colour: SectorColour = sector?.colour ?? 'unavailable'
+  const timeText = sector?.durationMs != null ? formatSectorTime(sector.durationMs) : '—'
+  const ariaText = colour === 'unavailable' ? `${label} unavailable` : `${label} ${timeText}`
+  return (
+    <span
+      className={`live-leaderboard__sector live-leaderboard__sector--${colour}`}
+      aria-label={ariaText}
+      title={ariaText}
+    >
+      <span className="live-leaderboard__sector-label">{label}</span>
+      <span className="live-leaderboard__sector-time">{timeText}</span>
+    </span>
+  )
+}
+
+function formatSectorTime(durationMs: number): string {
+  const totalSeconds = durationMs / 1000
+  if (totalSeconds < 60) return totalSeconds.toFixed(3)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = (totalSeconds % 60).toFixed(3)
+  return `${minutes}:${seconds.padStart(6, '0')}`
 }

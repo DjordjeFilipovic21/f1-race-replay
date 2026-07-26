@@ -152,10 +152,34 @@ are `(session_id, driver_id, lap_number)`. The ordered schema is
 `stint_number:Int16`, `lap_start_time_ms:Int64`, `lap_end_time_ms:Int64`,
 `lap_duration_ms:Int64`, `pit_in_time_ms:Int64`, `pit_out_time_ms:Int64`,
 `compound:String`, `tyre_life:Int16`, `is_fresh_tyre:Boolean`,
-`track_status:String`, `is_accurate:Boolean`, `deleted:Boolean`, and
-`deleted_reason:String`. The identity fields, `lap_number`, and
+`track_status:String`, `is_accurate:Boolean`, `deleted:Boolean`,
+`deleted_reason:String`, `sector_1_duration_ms:Int64`,
+`sector_2_duration_ms:Int64`, `sector_3_duration_ms:Int64`,
+`sector_1_session_time_ms:Int64`, `sector_2_session_time_ms:Int64`, and
+`sector_3_session_time_ms:Int64`. The identity fields, `lap_number`, and
 `lap_start_time_ms` are required; all other fields are nullable. Duplicate
 keys are rejected because timing-lap rows are not measurement alternatives.
+
+#### Sector timing columns (v2.1)
+
+Added in the `browser-lap-sector-data` feature. The six sector columns are
+`Int64` and nullable. They are derived from FastF1 `Sector1Time`,
+`Sector2Time`, `Sector3Time`, `Sector1SessionTime`,
+`Sector2SessionTime`, and `Sector3SessionTime` respectively, without
+interpolation or inference:
+
+| Column | Polars dtype | Policy |
+| --- | --- | --- |
+| `sector_1_duration_ms` | `Int64` | Sector 1 elapsed time in milliseconds; null when unavailable |
+| `sector_2_duration_ms` | `Int64` | Sector 2 elapsed time in milliseconds; null when unavailable |
+| `sector_3_duration_ms` | `Int64` | Sector 3 elapsed time in milliseconds; null when unavailable |
+| `sector_1_session_time_ms` | `Int64` | Sector 1 completion session time in milliseconds; null when unavailable |
+| `sector_2_session_time_ms` | `Int64` | Sector 2 completion session time in milliseconds; null when unavailable |
+| `sector_3_session_time_ms` | `Int64` | Sector 3 completion session time in milliseconds; null when unavailable |
+
+Durations and completion timestamps are both kept so consumers can reveal
+sector timing records causally by replay time. Missing values are left as
+null; adjacent lap or sector values must never be used to fill gaps.
 
 ### `stints`
 

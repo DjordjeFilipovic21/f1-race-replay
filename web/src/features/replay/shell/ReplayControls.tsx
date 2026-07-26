@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapStart, ReplayEvent, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PitLossModel, ReplayEvent, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
+import { LapAnalysisPanel } from '../panels/LapAnalysisPanel'
 import { LiveLeaderboardPanel } from '../panels/LiveLeaderboardPanel'
 import { LiveTrackMap } from '../panels/LiveTrackMap'
 import { RaceControlPanel, RACE_CONTROL_MESSAGE_DURATION_MS, RACE_CONTROL_MESSAGE_EXIT_DURATION_MS } from '../panels/RaceControlPanel'
+import { LiveTyreStrategyPanel } from '../panels/LiveTyreStrategyPanel'
+import { selectLapSectorData } from '../selectors/lap-sector-selectors'
+import { selectSectorColours } from '../selectors/sector-colour-selectors'
 import { PlaybackControls } from '../playback/PlaybackControls'
 import { ReplayWorkspace, type ReplayWorkspacePanel } from '../workspace/ReplayWorkspace'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
@@ -21,10 +25,13 @@ export interface ReplayControlsProps {
   readonly timelineSummary?: TimelineSummary
   readonly trackAssets: TrackAssets
   readonly coordinateInterpolation?: CoordinateInterpolationStrategy
+  readonly lapSectorSidecar?: LapSectorSidecar
+  readonly stintSummary?: StintSummary
+  readonly pitLossModel?: PitLossModel
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, timelineSummary, trackAssets }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -39,6 +46,15 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
   const durationMs = relativeElapsedMs(endMs, startMs, endMs)
   const currentLap = currentLapNumber(snapshot.replay)
   const selectedDriverId = selectDriverId(explicitSelectedDriverId, snapshot.replay, drivers)
+  const lapSectorSelection = useMemo(
+    () => selectLapSectorData(lapSectorSidecar, snapshot.timeMs, selectedDriverId ?? ''),
+    [lapSectorSidecar, snapshot.timeMs, selectedDriverId],
+  )
+  const sectorColourSelection = useMemo(
+    () => selectSectorColours(lapSectorSidecar, snapshot.timeMs, selectedDriverId ?? ''),
+    [lapSectorSidecar, snapshot.timeMs, selectedDriverId],
+  )
+  const totalLaps = useMemo(() => deriveTotalLaps(lapStarts), [lapStarts])
 
   useEffect(() => {
     const previousTimeMs = raceControlTimeRef.current
@@ -133,7 +149,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       id: 'leaderboard',
       label: 'Leaderboard',
       columns: 1,
-      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} />,
+      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} lapSectorSidecar={lapSectorSidecar} />,
     },
     {
       id: 'race-control',
@@ -152,6 +168,18 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       label: 'Telemetry',
       columns: 2,
       element: <DriverTelemetryPanel drivers={drivers} selectedDriverId={selectedDriverId} snapshot={snapshot.replay} />,
+    },
+    {
+      id: 'lap-analysis',
+      label: 'Lap analysis',
+      columns: 1,
+      element: <LapAnalysisPanel drivers={drivers} selectedDriverId={selectedDriverId} lapSector={lapSectorSelection} sectorColours={sectorColourSelection} />,
+    },
+    {
+      id: 'strategy',
+      label: 'Strategy',
+      columns: 2,
+      element: <LiveTyreStrategyPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} stintSummary={stintSummary} pitLossModel={pitLossModel} totalLaps={totalLaps} />,
     },
   ]
 
@@ -191,4 +219,15 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export function selectDriverId(explicitSelectedDriverId: string | null, replay: ReturnType<ReplayController['getSnapshot']>['replay'], drivers: readonly DriverMetadata[]): string | null {
   if (explicitSelectedDriverId !== null) return explicitSelectedDriverId
   return replay?.leaderboardOrder?.[0] ?? drivers[0]?.id ?? null
+}
+
+export function deriveTotalLaps(lapStarts: readonly LapStart[] | undefined): number | null {
+  if (lapStarts === undefined || lapStarts.length === 0) return null
+  let max = -Infinity
+  for (const entry of lapStarts) {
+    if (typeof entry.lap === 'number' && Number.isInteger(entry.lap) && entry.lap > max) {
+      max = entry.lap
+    }
+  }
+  return max > 0 ? max : null
 }

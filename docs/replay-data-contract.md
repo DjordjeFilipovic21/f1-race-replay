@@ -88,6 +88,257 @@ entries use absolute integer milliseconds:
   older deliveries and manifests without `timelineSummary` remain valid and
   loadable.
 
+### Optional lap/sector sidecar
+
+The manifest may include a compact, optional `lapSectorSidecar` reference to
+a dedicated columnar artifact that exposes completed lap and sector timing
+records for every driver:
+
+```json
+"lapSectorSidecar": {
+  "path": "lap-sector-sidecar.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `lap-sector-sidecar.json` is a `v1` object whose drivers map
+to equal-length column arrays sorted by ascending lap number:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "bahrain-2024",
+  "drivers": {
+    "HAM": {
+      "lapNumber": [1, 2],
+      "lapStartMs": [1000, 78000],
+      "lapEndMs": [77000, 155000],
+      "lapDurationMs": [76000, 77000],
+      "sector1DurationMs": [25000, 26000],
+      "sector2DurationMs": [27000, 28000],
+      "sector3DurationMs": [24000, 23000],
+      "sector1SessionTimeMs": [1000, 78000],
+      "sector2SessionTimeMs": [26000, 104000],
+      "sector3SessionTimeMs": [53000, 132000]
+    }
+  }
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`). Lap numbers
+  are positive integers; `lapStartMs` and `lapEndMs` are non-nullable
+  non-negative integers (absolute session time).
+- `lapDurationMs`, sector durations (`sector1DurationMs`–`sector3DurationMs`),
+  and sector completion timestamps (`sector1SessionTimeMs`–
+  `sector3SessionTimeMs`) are nullable. Nulls propagate from missing canonical
+  data; the pipeline never invents values.
+- Sector durations are paired with their completion timestamps so consumers
+  can reveal only sector records completed by the current replay time (causal
+  completion). All timing values are integer milliseconds; no float seconds
+  are used.
+- The sidecar duplicates no values present in telemetry chunks. It is a
+  dedicated artifact produced alongside chunks without embedding lap or sector
+  data into them.
+- Publication serializes the sidecar deterministically, verifies its SHA-256
+  digest against the manifest reference, and validates both the JSON Schema
+  (`browser-lap-sector-sidecar.schema.json`) and semantic contract rules
+  (fixture agreement, driver set identity).
+- The reference is optional: older deliveries and manifests without
+  `lapSectorSidecar` remain valid and loadable. Strict parsers must explicitly
+  allow its absence.
+
+### Optional stint summary
+
+The manifest may include a compact, optional `stintSummary` reference to
+a dedicated columnar artifact that publishes per-driver tyre stint and exact
+pit-transition data:
+
+```json
+"stintSummary": {
+  "path": "stint-summary.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `stint-summary.json` is a `v1` object mapping every canonical
+driver to equal-length column arrays sorted by ascending stint number:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "bahrain-2024",
+  "drivers": {
+    "VER": {
+      "stintNumber": [1, 2, 3],
+      "compound": ["SOFT", "HARD", "SOFT"],
+      "startLap": [1, 14, 33],
+      "endLap": [13, 32, null],
+      "startTimeMs": [1000, 137000, 320000],
+      "endTimeMs": [135000, 318000, null],
+      "tyreLifeAtStart": [0, 12, 18],
+      "isFreshTyre": [true, false, false],
+      "pitInTimeMs": [null, 134500, null],
+      "pitOutTimeMs": [null, 139000, 321000]
+    },
+    "NOR": {
+      "stintNumber": [1],
+      "compound": ["SOFT"],
+      "startLap": [1],
+      "endLap": [57],
+      "startTimeMs": [2000],
+      "endTimeMs": [570000],
+      "tyreLifeAtStart": [0],
+      "isFreshTyre": [true],
+      "pitInTimeMs": [null],
+      "pitOutTimeMs": [null]
+    }
+  }
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`). All column
+  arrays within a driver entry are equal length. Drivers without stints produce
+  empty aligned arrays.
+- `stintNumber` and `startLap` are non-nullable positive integers.
+  `endLap`, `endTimeMs`, `tyreLifeAtStart`, and `startTimeMs` are nullable.
+  Null in `startTimeMs` means the canonical stint start time is unavailable.
+- `pitInTimeMs` and `pitOutTimeMs` are nullable integer milliseconds; nulls
+  propagate from missing source data — the pipeline never invents or forward-fills
+  pit transition values.
+- `isFreshTyre` is `true` when the stint began on new tyres, `false` for used
+  tyres, and `null` when data is absent.
+
+**Pit-in and pit-out to stint mapping**
+
+Exact pit transitions are derived deterministically from canonical lap rows.
+Each canonical lap carries a `stint_number` identifying the stint active during
+that lap:
+
+- **Pit-in** (`pitInTimeMs`) belongs to the stint whose number matches the
+  lap's canonical `stint_number` and **ends** that indexed stint.
+- **Pit-out** (`pitOutTimeMs`) belongs to the stint whose number matches the
+  lap's canonical `stint_number` and **begins** (or resumes) that indexed stint.
+- The mapping is validated: the lap number must fall within the canonical
+  stint's lap range [`startLap`, `endLap`].
+- If a canonical stint has a non-null `pitInTimeMs`, the driver entered the
+  pits during that stint and the stint is closed. A non-null `pitOutTimeMs`
+  means the driver exited the pits to begin that stint.
+
+**Null and edge-case semantics**
+
+- **Stint 1 pit-out** is normally `null` (no pit exit before the first stint
+  begins), but a real source event is preserved when present — for example a
+  pit-lane start where the driver leaves the pits before the first racing lap.
+- **Final-stint pit-in** is `null` when no pit entry is observed during that
+  stint (race ended or driver retired without pitting again).
+- **No-stop races**: every stint has both `pitInTimeMs` and `pitOutTimeMs`
+  `null` when no source pit events exist.
+- **Ongoing stints** have nullable `endLap`, `endTimeMs`, and `pitInTimeMs`.
+  `pitOutTimeMs` is non-null for any stint that began from a pit exit (stint 2+
+  with a pit stop); it is null only for stint 1 without a pit-lane start.
+
+**Fail-closed rules**
+
+The mapping fails closed on ambiguity or inconsistency:
+
+- A lap-level pit event whose `stint_number` does not match any canonical stint
+  → error.
+- A pit event lap outside the stint's lap range → error.
+- Multiple pit-in candidates for the same stint → error.
+- Multiple pit-out candidates for the same stint → error.
+
+These rules ensure deterministic derivation: every pit transition maps to
+exactly one stint or the pipeline refuses to publish.
+
+**Backward compatibility**
+
+The stint summary is an independent artifact produced alongside chunks and the
+lap/sector sidecar. Core replay chunks are unchanged. The manifest reference is
+optional: consumers must accept manifests without `stintSummary`. All existing
+v1 chunks, timeline summaries, sidecars, and navigation markers remain valid
+and replayable.
+
+### Optional pit-loss model
+
+The manifest may include a compact, optional `pitLossModel` reference to a
+sparse causal pit-loss estimate artifact:
+
+```json
+"pitLossModel": {
+  "path": "pit-loss-model.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `pit-loss-model.json` is a `v1` object using
+`"global-prior-weighted-mean-v1"` — an uncalibrated deterministic global
+heuristic, not a track-calibrated model. It emits three aligned arrays,
+strictly increasing by `timeMs`:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "2024-sao-paulo-race",
+  "method": "global-prior-weighted-mean-v1",
+  "baselineMs": 22000,
+  "priorWeight": 2,
+  "timeMs": [1000, 1523000, 1678000],
+  "estimatedLossMs": [22000, 21867, 22150],
+  "observedSampleCount": [0, 1, 3]
+}
+```
+
+**Placeholder and refinement.** A placeholder exists from replay start
+before any observed stop. Default model: prior-weighted mean with
+`baselineMs = 22_000`, `priorWeight = 2`. At zero observations the
+estimate is 22,000 ms and `observedSampleCount = 0`. After valid observed
+losses `L`:
+
+`round_half_up((baselineMs * priorWeight + sum(L)) / (priorWeight + len(L)))`
+
+Refinement is causal: a new sample is emitted at the distinct
+`pitOutTimeMs` where all eligible observations completed at that timestamp
+are incorporated. A consumer picks the latest sample with
+`timeMs <= replayTimeMs`.
+
+**Observed loss from one completed eligible stop:**
+
+`observedPitLossMs = gapAfterPitOutMs - gapBeforePitInMs`
+
+Gaps use the latest available sample strictly before or at pit-in and the
+first valid on-track sample at or after pit-out. Integer milliseconds,
+deterministic rounding.
+
+**Eligibility.** A stop refines the estimate only at its `pitOutTimeMs`,
+never earlier, and only when:
+- canonical pit-in and pit-out timestamps form a complete positive interval;
+- before/after gap values are non-null and finite;
+- observed loss is finite and positive;
+- projection/ranking quality gate passed (dynamic gaps trustworthy);
+- track status is all-clear for the full stop interval;
+- the same leader remains leader before and after;
+- the leader is not in the pit lane at the before/after observations or
+  during the stop interval where known;
+- the stopped driver returns on track and is not retired/out/finished at
+  the after sample;
+- mapping from stint-summary pit-in/pit-out data is unique and deterministic.
+
+Lapped cars are allowed when their derived gap is valid and leader identity
+is stable. Exclusion is not a build failure.
+
+**Scope.** The artifact is a sparse global estimate; no per-driver
+predicted-gap array is shipped. Frontend code will later compute
+`predictedGapToLeaderMs = currentGapToLeaderMs + currentPitLossEstimateMs`
+and compare against live gaps for nearest-car-ahead/behind animation. No
+panel, payload loader, or runtime snapshot is included.
+
+**Backward compatibility.** The `pitLossModel` manifest reference is
+optional. Existing deliveries, chunks, and manifests without it remain
+valid and loadable.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

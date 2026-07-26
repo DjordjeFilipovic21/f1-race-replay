@@ -48,6 +48,47 @@ def test_official_lap_increment_after_wrap_resets_when_candidate_is_monotonic():
     assert update.state.within_lap_offset_meters == 0.0
 
 
+def test_seeded_front_progress_remains_monotonic_and_official_lap_increment_resets_offset():
+    seeded = ProgressState(
+        last_session_time_ms=0,
+        last_lap_number=1,
+        last_track_distance_meters=30.0,
+        last_valid_progress_meters=1_030.0,
+        last_valid_time_ms=0,
+        within_lap_wrap_count=1,
+        within_lap_offset_meters=LENGTH,
+    )
+
+    same_lap = advance_progress(
+        seeded, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(40.0), mode=ProgressMode.ACTIVE,
+    )
+    next_lap = advance_progress(
+        same_lap.state, session_time_ms=20, lap_number=2, circuit_length_meters=LENGTH,
+        projection=_projection(990.0), mode=ProgressMode.ACTIVE,
+    )
+
+    assert same_lap.race_progress_meters == 1_040.0
+    assert next_lap.race_progress_meters == 1_990.0
+    assert next_lap.state.within_lap_wrap_count == 0
+    assert next_lap.state.within_lap_offset_meters == 0.0
+
+
+def test_seeded_rear_progress_accepts_the_immediate_geometric_wrap():
+    first = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(990.0), mode=ProgressMode.ACTIVE,
+    )
+
+    wrapped = advance_progress(
+        first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(10.0), mode=ProgressMode.ACTIVE,
+    )
+
+    assert wrapped.race_progress_meters == 1_010.0
+    assert wrapped.state.within_lap_wrap_count == 1
+
+
 def test_approved_geometric_wrap_offsets_remaining_timing_lap_samples():
     first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
     wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)

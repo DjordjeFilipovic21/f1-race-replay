@@ -13,9 +13,13 @@ import polars as pl
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_DRIVER_ID = re.compile(r"[A-Z0-9]{2,4}\Z")
 MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
+BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
+STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
+PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -128,6 +132,199 @@ class BrowserDriverFields:
 
 
 @dataclass(frozen=True)
+class BrowserDriverLapSector:
+    """Columnar completed lap and sector timings for one driver.
+
+    Completed laps are required to have both ``lap_start_ms`` and ``lap_end_ms``;
+    sector durations and completion timestamps remain nullable and propagate from
+    the canonical source.
+    """
+
+    lap_number: tuple[int, ...]
+    lap_start_ms: tuple[int, ...]
+    lap_end_ms: tuple[int, ...]
+    lap_duration_ms: tuple[int | None, ...]
+    sector_1_duration_ms: tuple[int | None, ...]
+    sector_2_duration_ms: tuple[int | None, ...]
+    sector_3_duration_ms: tuple[int | None, ...]
+    sector_1_session_time_ms: tuple[int | None, ...]
+    sector_2_session_time_ms: tuple[int | None, ...]
+    sector_3_session_time_ms: tuple[int | None, ...]
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(field, tuple) for field in (
+            self.lap_number, self.lap_start_ms, self.lap_end_ms, self.lap_duration_ms,
+            self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+            self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms,
+        )):
+            raise TypeError("every driver lap sector field must be a tuple")
+        size = len(self.lap_number)
+        fields = (
+            self.lap_start_ms, self.lap_end_ms, self.lap_duration_ms,
+            self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+            self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms,
+        )
+        if any(len(field) != size for field in fields):
+            raise ValueError("every driver lap sector field must be aligned to lap_number")
+        if any(type(value) is not int or value < 1 for value in self.lap_number):
+            raise TypeError("lap_number must contain positive integers")
+        for field in (self.lap_start_ms, self.lap_end_ms):
+            if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in field):
+                raise TypeError("lap start/end times must contain non-negative signed Int64 integers")
+        for field in (self.lap_duration_ms,
+                      self.sector_1_duration_ms, self.sector_2_duration_ms, self.sector_3_duration_ms,
+                      self.sector_1_session_time_ms, self.sector_2_session_time_ms, self.sector_3_session_time_ms):
+            if any(value is not None and (type(value) is not int or not 0 <= value <= MAX_INT64) for value in field):
+                raise TypeError("nullable timing fields must contain non-negative signed Int64 integers or null")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "lapNumber": list(self.lap_number),
+            "lapStartMs": [value for value in self.lap_start_ms],
+            "lapEndMs": [value for value in self.lap_end_ms],
+            "lapDurationMs": [value for value in self.lap_duration_ms],
+            "sector1DurationMs": [value for value in self.sector_1_duration_ms],
+            "sector2DurationMs": [value for value in self.sector_2_duration_ms],
+            "sector3DurationMs": [value for value in self.sector_3_duration_ms],
+            "sector1SessionTimeMs": [value for value in self.sector_1_session_time_ms],
+            "sector2SessionTimeMs": [value for value in self.sector_2_session_time_ms],
+            "sector3SessionTimeMs": [value for value in self.sector_3_session_time_ms],
+        }
+
+
+@dataclass(frozen=True)
+class BrowserLapSectorSidecar:
+    """Compact optional columnar lap and sector data for one browser replay."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserDriverLapSector]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("lap sector sidecar fixture_id must be a non-empty string")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("driver IDs must match the canonical identifier pattern")
+        if len(set(self.drivers)) != len(self.drivers):
+            raise ValueError("driver IDs must be unique")
+        if any(not isinstance(value, BrowserDriverLapSector) for value in self.drivers.values()):
+            raise TypeError("drivers must map to BrowserDriverLapSector values")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
+        }
+
+
+@dataclass(frozen=True)
+class BrowserDriverStintSummary:
+    """Null-preserving columnar tyre stints and pit transitions for one driver."""
+
+    stint_number: tuple[int, ...]
+    compound: tuple[str | None, ...]
+    start_lap: tuple[int, ...]
+    end_lap: tuple[int | None, ...]
+    start_time_ms: tuple[int | None, ...]
+    end_time_ms: tuple[int | None, ...]
+    tyre_life_at_start: tuple[int | None, ...]
+    is_fresh_tyre: tuple[bool | None, ...]
+    pit_in_time_ms: tuple[int | None, ...]
+    pit_out_time_ms: tuple[int | None, ...]
+
+    def __post_init__(self) -> None:
+        fields = (
+            self.stint_number, self.compound, self.start_lap, self.end_lap,
+            self.start_time_ms, self.end_time_ms, self.tyre_life_at_start,
+            self.is_fresh_tyre, self.pit_in_time_ms, self.pit_out_time_ms,
+        )
+        if not all(isinstance(field, tuple) for field in fields):
+            raise TypeError("every driver stint summary field must be a tuple")
+        size = len(self.stint_number)
+        if any(len(field) != size for field in fields[1:]):
+            raise ValueError("every driver stint summary field must be aligned to stint_number")
+        if any(type(value) is not int or value < 1 for value in self.stint_number):
+            raise ValueError("stint_number must contain positive integers")
+        if any(
+            following <= current
+            for current, following in zip(self.stint_number, self.stint_number[1:], strict=False)
+        ):
+            raise ValueError("stint_number must be strictly increasing")
+        if any(type(value) is not int or value < 1 for value in self.start_lap):
+            raise ValueError("start_lap must contain positive integers")
+        if any(value is not None and (type(value) is not int or value < 1) for value in self.end_lap):
+            raise ValueError("end_lap must contain positive integers or null")
+        if any(
+            end_lap is not None and end_lap < start_lap
+            for start_lap, end_lap in zip(self.start_lap, self.end_lap, strict=False)
+        ):
+            raise ValueError("end_lap must not precede start_lap")
+        if any(value is not None and not isinstance(value, str) for value in self.compound):
+            raise TypeError("compound must contain strings or null")
+        timing_fields = (
+            self.start_time_ms, self.end_time_ms, self.pit_in_time_ms, self.pit_out_time_ms,
+        )
+        if any(
+            value is not None and (type(value) is not int or not 0 <= value <= MAX_INT64)
+            for field in timing_fields
+            for value in field
+        ):
+            raise TypeError("timing fields must contain non-negative signed Int64 integers or null")
+        if any(
+            value is not None and (type(value) is not int or value < 0)
+            for value in self.tyre_life_at_start
+        ):
+            raise ValueError("tyre_life_at_start must contain non-negative integers or null")
+        if any(value is not None and type(value) is not bool for value in self.is_fresh_tyre):
+            raise TypeError("is_fresh_tyre must contain booleans or null")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "stintNumber": list(self.stint_number),
+            "compound": list(self.compound),
+            "startLap": list(self.start_lap),
+            "endLap": list(self.end_lap),
+            "startTimeMs": list(self.start_time_ms),
+            "endTimeMs": list(self.end_time_ms),
+            "tyreLifeAtStart": list(self.tyre_life_at_start),
+            "isFreshTyre": list(self.is_fresh_tyre),
+            "pitInTimeMs": list(self.pit_in_time_ms),
+            "pitOutTimeMs": list(self.pit_out_time_ms),
+        }
+
+
+@dataclass(frozen=True)
+class BrowserStintSummary:
+    """Compact optional columnar stint data for one browser replay."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserDriverStintSummary]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("stint summary fixture_id must be a non-empty string")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("driver IDs must match the canonical identifier pattern")
+        if len(set(self.drivers)) != len(self.drivers):
+            raise ValueError("driver IDs must be unique")
+        if any(not isinstance(value, BrowserDriverStintSummary) for value in self.drivers.values()):
+            raise TypeError("drivers must map to BrowserDriverStintSummary values")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
+        }
+
+
+@dataclass(frozen=True)
 class BrowserLapStart:
     """One immutable leader-lap navigation marker in absolute session time."""
 
@@ -234,6 +431,76 @@ class BrowserTimelineSummary:
         }
 
 
+def _validate_signed_int64(value: object, label: str, *, minimum: int | None = None) -> None:
+    """Validate an exact Python integer within the signed Int64 range."""
+    if type(value) is not int or not -(1 << 63) <= value <= MAX_INT64:
+        raise TypeError(f"{label} must be a signed Int64 integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{label} must be at least {minimum}")
+
+
+@dataclass(frozen=True)
+class BrowserPitLossModel:
+    """Immutable causal pit-loss estimates sampled over replay time."""
+
+    fixture_id: str
+    method: str
+    baseline_ms: int
+    prior_weight: int
+    time_ms: tuple[int, ...]
+    estimated_loss_ms: tuple[int, ...]
+    observed_sample_count: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("pit loss model fixture_id must be a non-empty string")
+        if self.method != "global-prior-weighted-mean-v1":
+            raise ValueError("pit loss model method is invalid")
+        _validate_signed_int64(self.baseline_ms, "baseline_ms", minimum=1)
+        _validate_signed_int64(self.prior_weight, "prior_weight", minimum=1)
+
+        time_ms = tuple(self.time_ms)
+        estimated_loss_ms = tuple(self.estimated_loss_ms)
+        observed_sample_count = tuple(self.observed_sample_count)
+        arrays = (time_ms, estimated_loss_ms, observed_sample_count)
+        if not time_ms:
+            raise ValueError("pit loss model arrays must be non-empty")
+        if any(len(values) != len(time_ms) for values in arrays):
+            raise ValueError("pit loss model arrays must be aligned")
+        for value in time_ms:
+            _validate_signed_int64(value, "time_ms", minimum=0)
+        for value in estimated_loss_ms:
+            _validate_signed_int64(value, "estimated_loss_ms", minimum=0)
+        for value in observed_sample_count:
+            _validate_signed_int64(value, "observed_sample_count", minimum=0)
+        if any(following <= current for current, following in zip(time_ms, time_ms[1:], strict=False)):
+            raise ValueError("time_ms must be strictly increasing")
+        if estimated_loss_ms[0] != self.baseline_ms:
+            raise ValueError("first estimated_loss_ms must equal baseline_ms")
+        if observed_sample_count[0] != 0:
+            raise ValueError("first observed_sample_count must be zero")
+        if any(
+            following <= current
+            for current, following in zip(observed_sample_count, observed_sample_count[1:], strict=False)
+        ):
+            raise ValueError("observed_sample_count must strictly increase after the initial sample")
+        object.__setattr__(self, "time_ms", time_ms)
+        object.__setattr__(self, "estimated_loss_ms", estimated_loss_ms)
+        object.__setattr__(self, "observed_sample_count", observed_sample_count)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "method": self.method,
+            "baselineMs": self.baseline_ms,
+            "priorWeight": self.prior_weight,
+            "timeMs": list(self.time_ms),
+            "estimatedLossMs": list(self.estimated_loss_ms),
+            "observedSampleCount": list(self.observed_sample_count),
+        }
+
+
 @dataclass(frozen=True)
 class BrowserArtifactReference:
     """Immutable manifest reference for a digested browser artifact."""
@@ -267,6 +534,42 @@ class BrowserTimelineSummaryReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserLapSectorSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional compact lap sector sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "lap-sector-sidecar.json":
+            raise ValueError("lap sector sidecar path must be lap-sector-sidecar.json")
+        if self.schema_id != BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID:
+            raise ValueError("lap sector sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
+class BrowserStintSummaryReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional compact stint summary."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "stint-summary.json":
+            raise ValueError("stint summary path must be stint-summary.json")
+        if self.schema_id != STINT_SUMMARY_SCHEMA_ID:
+            raise ValueError("stint summary schema_id is invalid")
+
+
+@dataclass(frozen=True)
+class BrowserPitLossModelReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional pit-loss model."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "pit-loss-model.json":
+            raise ValueError("pit loss model path must be pit-loss-model.json")
+        if self.schema_id != PIT_LOSS_MODEL_SCHEMA_ID:
+            raise ValueError("pit loss model schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -275,6 +578,9 @@ class BrowserManifest:
     drivers: tuple[Mapping[str, object], ...]
     lap_starts: tuple[BrowserLapStart, ...] = ()
     timeline_summary: BrowserArtifactReference | Mapping[str, object] | None = None
+    lap_sector_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
+    stint_summary: BrowserArtifactReference | Mapping[str, object] | None = None
+    pit_loss_model: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -313,9 +619,60 @@ class BrowserManifest:
             )
         elif timeline_summary is not None:
             raise TypeError("timeline_summary must be a BrowserArtifactReference or mapping")
+        lap_sector_sidecar = self.lap_sector_sidecar
+        if isinstance(lap_sector_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(lap_sector_sidecar) != required:
+                raise ValueError("lap_sector_sidecar must contain path, schemaId, and sha256")
+            lap_sector_sidecar = BrowserLapSectorSidecarReference(
+                cast(str, lap_sector_sidecar["path"]),
+                cast(str, lap_sector_sidecar["schemaId"]),
+                cast(str, lap_sector_sidecar["sha256"]),
+            )
+        elif isinstance(lap_sector_sidecar, BrowserArtifactReference):
+            lap_sector_sidecar = BrowserLapSectorSidecarReference(
+                lap_sector_sidecar.path, lap_sector_sidecar.schema_id, lap_sector_sidecar.sha256,
+            )
+        elif lap_sector_sidecar is not None:
+            raise TypeError("lap_sector_sidecar must be a BrowserArtifactReference or mapping")
+        stint_summary = self.stint_summary
+        if isinstance(stint_summary, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(stint_summary) != required:
+                raise ValueError("stint_summary must contain path, schemaId, and sha256")
+            stint_summary = BrowserStintSummaryReference(
+                cast(str, stint_summary["path"]),
+                cast(str, stint_summary["schemaId"]),
+                cast(str, stint_summary["sha256"]),
+            )
+        elif isinstance(stint_summary, BrowserArtifactReference):
+            stint_summary = BrowserStintSummaryReference(
+                stint_summary.path, stint_summary.schema_id, stint_summary.sha256,
+            )
+        elif stint_summary is not None:
+            raise TypeError("stint_summary must be a BrowserArtifactReference or mapping")
+        pit_loss_model = self.pit_loss_model
+        if isinstance(pit_loss_model, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(pit_loss_model) != required:
+                raise ValueError("pit_loss_model must contain path, schemaId, and sha256")
+            pit_loss_model = BrowserPitLossModelReference(
+                cast(str, pit_loss_model["path"]),
+                cast(str, pit_loss_model["schemaId"]),
+                cast(str, pit_loss_model["sha256"]),
+            )
+        elif isinstance(pit_loss_model, BrowserArtifactReference):
+            pit_loss_model = BrowserPitLossModelReference(
+                pit_loss_model.path, pit_loss_model.schema_id, pit_loss_model.sha256,
+            )
+        elif pit_loss_model is not None:
+            raise TypeError("pit_loss_model must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
+        object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
+        object.__setattr__(self, "stint_summary", stint_summary)
+        object.__setattr__(self, "pit_loss_model", pit_loss_model)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -335,13 +692,31 @@ class BrowserManifest:
             value["timelineSummary"] = cast(
                 BrowserArtifactReference, self.timeline_summary,
             ).as_dict()
+        if self.lap_sector_sidecar is not None:
+            value["lapSectorSidecar"] = cast(
+                BrowserArtifactReference, self.lap_sector_sidecar,
+            ).as_dict()
+        if self.stint_summary is not None:
+            value["stintSummary"] = cast(
+                BrowserArtifactReference, self.stint_summary,
+            ).as_dict()
+        if self.pit_loss_model is not None:
+            value["pitLossModel"] = cast(
+                BrowserArtifactReference, self.pit_loss_model,
+            ).as_dict()
         return value
 
 
 __all__ = [
-    "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields", "BrowserLapStart",
-    "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
-    "BrowserTimelineSummaryReference", "CanonicalGenerationSnapshot",
-    "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64", "TIMELINE_SUMMARY_SCHEMA_ID",
-    "TimelineSummaryKind", "deep_freeze_json",
+    "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields",
+    "BrowserDriverLapSector", "BrowserDriverStintSummary", "BrowserLapSectorSidecar",
+    "BrowserLapSectorSidecarReference",
+    "BrowserLapStart", "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
+    "BrowserStintSummary", "BrowserStintSummaryReference",
+    "CanonicalGenerationSnapshot",
+    "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
+    "PIT_LOSS_MODEL_SCHEMA_ID", "STINT_SUMMARY_SCHEMA_ID", "TIMELINE_SUMMARY_SCHEMA_ID",
+    "TimelineSummaryKind",
+    "deep_freeze_json",
 ]

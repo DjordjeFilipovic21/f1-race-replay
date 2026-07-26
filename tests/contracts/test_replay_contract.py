@@ -8,6 +8,9 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from referencing import Registry, Resource
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
+    BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    STINT_SUMMARY_SCHEMA_ID,
+    BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserTimelineSummaryReference,
 )
@@ -57,6 +60,9 @@ def load_contract_bundle():
         "chunk": load_json(SCHEMA_ROOT / "chunk.schema.json"),
         "trackAssets": load_json(SCHEMA_ROOT / "track-assets.schema.json"),
         "timelineSummary": load_json(SCHEMA_ROOT / "timeline-summary.schema.json"),
+        "browserLapSectorSidecar": load_json(SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json"),
+        "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
+        "pitLossModel": load_json(SCHEMA_ROOT / "pit-loss-model.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -333,6 +339,85 @@ def timeline_summary_reference() -> dict[str, str]:
     }
 
 
+def lap_sector_sidecar_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "drivers": {
+            "HAM": {
+                "lapNumber": [1],
+                "lapStartMs": [0],
+                "lapEndMs": [100_000],
+                "lapDurationMs": [100_000],
+                "sector1DurationMs": [30_000],
+                "sector2DurationMs": [30_000],
+                "sector3DurationMs": [40_000],
+                "sector1SessionTimeMs": [30_000],
+                "sector2SessionTimeMs": [60_000],
+                "sector3SessionTimeMs": [100_000],
+            },
+        },
+    }
+
+
+def lap_sector_sidecar_reference() -> dict[str, str]:
+    return {
+        "path": "lap-sector-sidecar.json",
+        "schemaId": BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def stint_summary_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "drivers": {
+            "HAM": {
+                "stintNumber": [],
+                "compound": [],
+                "startLap": [],
+                "endLap": [],
+                "startTimeMs": [],
+                "endTimeMs": [],
+                "tyreLifeAtStart": [],
+                "isFreshTyre": [],
+                "pitInTimeMs": [],
+                "pitOutTimeMs": [],
+            },
+        },
+    }
+
+
+def stint_summary_reference() -> dict[str, str]:
+    return {
+        "path": "stint-summary.json",
+        "schemaId": STINT_SUMMARY_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def pit_loss_model_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "method": "global-prior-weighted-mean-v1",
+        "baselineMs": 22_000,
+        "priorWeight": 2,
+        "timeMs": [0, 1_523_000, 1_678_000],
+        "estimatedLossMs": [22_000, 21_867, 22_150],
+        "observedSampleCount": [0, 1, 3],
+    }
+
+
+def pit_loss_model_reference() -> dict[str, str]:
+    return {
+        "path": "pit-loss-model.json",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+        "sha256": "a" * 64,
+    }
+
+
 def assert_timeline_summary_semantics(summary):
     assert summary["startMs"] < summary["endMs"]
     for interval in summary["intervals"]:
@@ -349,6 +434,43 @@ def test_replay_contract_timeline_summary_validates_and_is_optional(contract_bun
     validate_instance(contract_bundle["schemas"]["timelineSummary"], summary, schema_registry)
     validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
     assert_timeline_summary_semantics(summary)
+
+
+def test_replay_contract_lap_sector_sidecar_validates_and_is_optional(contract_bundle, schema_registry):
+    sidecar = lap_sector_sidecar_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["lapSectorSidecar"] = lap_sector_sidecar_reference()
+
+    validate_instance(contract_bundle["schemas"]["browserLapSectorSidecar"], sidecar, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_stint_summary_validates_and_is_optional(contract_bundle, schema_registry):
+    summary = stint_summary_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["stintSummary"] = stint_summary_reference()
+
+    validate_instance(contract_bundle["schemas"]["stintSummary"], summary, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_pit_loss_model_validates_and_is_optional(contract_bundle, schema_registry):
+    model = pit_loss_model_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["pitLossModel"] = pit_loss_model_reference()
+
+    validate_instance(contract_bundle["schemas"]["pitLossModel"], model, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_pit_loss_model_rejects_structurally_invalid_payload(
+    contract_bundle, schema_registry
+):
+    model = pit_loss_model_payload()
+    model["baselineMs"] = 0
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["pitLossModel"], model, schema_registry)
 
 
 def test_browser_manifest_serializes_optional_timeline_summary_reference():
@@ -372,6 +494,27 @@ def test_browser_manifest_serializes_optional_timeline_summary_reference():
     assert manifest.as_dict()["timelineSummary"] == timeline_summary_reference()
 
 
+def test_browser_manifest_serializes_optional_lap_sector_sidecar_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        lap_sector_sidecar=BrowserLapSectorSidecarReference(
+            "lap-sector-sidecar.json",
+            BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+            "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["lapSectorSidecar"] == lap_sector_sidecar_reference()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -386,6 +529,25 @@ def test_replay_contract_timeline_summary_reference_rejects_invalid_schema_or_di
     reference = timeline_summary_reference()
     reference[field] = value
     manifest["timelineSummary"] = reference
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_replay_contract_lap_sector_sidecar_reference_rejects_invalid_schema_or_digest(
+    contract_bundle, schema_registry, field, value
+):
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    reference = lap_sector_sidecar_reference()
+    reference[field] = value
+    manifest["lapSectorSidecar"] = reference
 
     with pytest.raises(ValidationError):
         validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)

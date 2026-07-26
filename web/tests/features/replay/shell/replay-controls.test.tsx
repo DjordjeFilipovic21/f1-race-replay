@@ -163,6 +163,8 @@ test('renders persistent workspace headers in canonical order with definition-dr
     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
+    'replay-panel-frame',
+    'replay-panel-frame',
   ])
   expect(screen.getByRole('button', { name: 'Hide Player panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
@@ -170,12 +172,14 @@ test('renders persistent workspace headers in canonical order with definition-dr
   expect(screen.getByRole('button', { name: 'Hide Race control panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Driver panel' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Hide Telemetry panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Lap analysis panel' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Hide Strategy panel' }).getAttribute('aria-pressed')).toBe('true')
   const playerPanel = document.querySelector('.replay-control-area')
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('⠿ Track map')
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '2'])
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '2', '1', '2'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1', '1', '1', '1'])
 })
 
 test('hides and restores timestamp and lap navigation with the Player panel', () => {
@@ -199,7 +203,7 @@ test('keeps a collapsed panel frame and its drag handle mounted', () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
 
-  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(6)
+  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(8)
   expect(screen.getByRole('button', { name: 'Move Track map panel' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
 })
@@ -218,7 +222,7 @@ test('hides and restores panels while cleaning up and remounting specialized sub
   fireEvent.click(screen.getByRole('button', { name: 'Show Track map panel' }))
   expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(controller.subscribe).toHaveBeenCalledTimes(4)
+  expect(controller.subscribe).toHaveBeenCalledTimes(5)
 
   fireEvent.click(screen.getByRole('button', { name: 'Hide Leaderboard panel' }))
   act(() => vi.advanceTimersByTime(240))
@@ -227,7 +231,7 @@ test('hides and restores panels while cleaning up and remounting specialized sub
 
   fireEvent.click(screen.getByRole('button', { name: 'Show Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
-  expect(controller.subscribe).toHaveBeenCalledTimes(5)
+  expect(controller.subscribe).toHaveBeenCalledTimes(6)
 })
 
 test('shows the latest crossed race-control message and clears it on rewind', () => {
@@ -620,8 +624,8 @@ test('unsubscribes when the adapter unmounts', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
   unmount()
-  expect(controller.subscribe).toHaveBeenCalledTimes(3)
-  expect(getUnsubscribeCalls()).toBe(3)
+  expect(controller.subscribe).toHaveBeenCalledTimes(4)
+  expect(getUnsubscribeCalls()).toBe(4)
 })
 
 function timeFieldValues(): string[] {
@@ -660,4 +664,72 @@ test('shares leaderboard clicks with the Driver and Telemetry panels and selecte
   expect(screen.getByRole('region', { name: 'Telemetry' }).textContent).toContain('Max Verstappen')
   expect(screen.getByRole('button', { name: 'Select Max Verstappen' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('class')).toContain('live-track-map__marker--selected')
+})
+
+test('propagates sidecar data to the lap analysis and strategy panels and the leaderboard sectors mode', () => {
+  const twoDrivers = [...drivers, { id: 'NOR', displayName: 'Lando Norris', teamName: 'McLaren', colorHex: '#ff8000', carNumber: '4' }]
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['VER', 'NOR'],
+    drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 2 } },
+  }
+  const lapSectorSidecar = {
+    contractVersion: 'v1' as const,
+    fixtureId: 'test-grand-prix',
+    drivers: {
+      VER: {
+        lapNumber: [1], lapStartMs: [0], lapEndMs: [90000], lapDurationMs: [90000],
+        sector1DurationMs: [28000], sector2DurationMs: [32000], sector3DurationMs: [30000],
+        sector1SessionTimeMs: [28000], sector2SessionTimeMs: [60000], sector3SessionTimeMs: [90000],
+      },
+    },
+  }
+  const stintSummary = {
+    contractVersion: 'v1' as const,
+    fixtureId: 'test-grand-prix',
+    drivers: {
+      VER: {
+        stintNumber: [1], compound: ['SOFT'], startLap: [1], endLap: [null],
+        startTimeMs: [0], endTimeMs: [null], tyreLifeAtStart: [0],
+        isFreshTyre: [true], pitInTimeMs: [null], pitOutTimeMs: [null],
+      },
+    },
+  }
+  const pitLossModel = {
+    contractVersion: 'v1' as const,
+    fixtureId: 'test-grand-prix',
+    method: 'global-prior-weighted-mean-v1' as const,
+    baselineMs: 22000,
+    priorWeight: 2,
+    timeMs: [90000],
+    estimatedLossMs: [22000],
+    observedSampleCount: [0],
+  }
+  const { controller } = createController({ ...readySnapshot, timeMs: 95_000, replay })
+  render(
+    <ReplayControls
+      controller={controller}
+      startMs={0}
+      endMs={120_000}
+      drivers={twoDrivers}
+      trackAssets={trackAssets}
+      lapSectorSidecar={lapSectorSidecar}
+      stintSummary={stintSummary}
+      pitLossModel={pitLossModel}
+    />,
+  )
+
+  expect(screen.getByRole('region', { name: 'Lap analysis' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Strategy' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Sectors' }).getAttribute('aria-pressed')).toBe('false')
+})
+
+test('renders empty states without errors when sidecar data is absent', () => {
+  const { controller } = createController(readySnapshot)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+
+  expect(screen.getByRole('region', { name: 'Lap analysis' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Strategy' })).toBeTruthy()
+  expect(screen.getByText(/no completed laps yet/i)).toBeTruthy()
+  expect(screen.getByText(/no stint data is available yet/i)).toBeTruthy()
 })

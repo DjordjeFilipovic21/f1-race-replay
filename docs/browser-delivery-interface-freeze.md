@@ -122,3 +122,84 @@ multi-circuit corpus, including varied pit layouts and close/grade-separated
 geometry. Gap quality depends on available leader history. Terminal timing is
 inferred only after the final position sample; it is not a direct canonical
 retirement timestamp.
+
+## 7. Optional lap/sector sidecar
+
+Canonical laps now include nullable sector 1/2/3 duration and completion
+session-time columns. A compact optional sidecar artifact exposes these for
+every driver without duplicating values into replay chunks:
+
+- The manifest may carry a `lapSectorSidecar` reference (`path`,
+  `schemaId`, `sha256`) pointing to `lap-sector-sidecar.json`.
+- The sidecar is columnar per driver: equal-length arrays of
+  `lapNumber`, `lapStartMs`, `lapEndMs`, `lapDurationMs`,
+  `sector1DurationMs`–`sector3DurationMs`, and
+  `sector1SessionTimeMs`–`sector3SessionTimeMs`, all integer milliseconds.
+- Sector durations and their completion timestamps are nullable; nulls
+  propagate from the canonical source. Start and end times are never null.
+- The sidecar is produced alongside chunks by `build_browser_delivery` and
+  validated against
+  `urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar`.
+- **Core chunks are unchanged**: no lap, sector, or driver-completion data is
+  embedded in chunk payloads. The sidecar is an independent artifact.
+- **Backward compatibility**: consumers must accept manifests without
+  `lapSectorSidecar`. Strict parsers must explicitly allow its absence.
+  All existing v1 chunks, timeline summaries, and navigation markers remain
+  valid and replayable.
+
+See [Replay Data Contract — Optional lap/sector sidecar](replay-data-contract.md#optional-lapsector-sidecar)
+for the full contract including serialization rules, causal completion
+semantics, and semantic validation.
+
+## 8. Optional stint summary
+
+Canonical stints and laps now support exact pit-transition mapping. A compact
+optional stint-summary artifact exposes per-driver tyre stint and pit-transition
+data without duplicating values into replay chunks:
+
+- The manifest may carry a `stintSummary` reference (`path`, `schemaId`,
+  `sha256`) pointing to `stint-summary.json`.
+- The summary is columnar per driver: equal-length arrays of `stintNumber`,
+  `compound`, `startLap`/`endLap`, `startTimeMs`/`endTimeMs`,
+  `tyreLifeAtStart`, `isFreshTyre`, `pitInTimeMs`, and `pitOutTimeMs`.
+- Pit-in ends the indexed stint; pit-out begins the indexed stint. The mapping
+  is deterministic: ambiguous or out-of-range candidates fail closed.
+- The summary is produced alongside chunks by `build_browser_delivery` and
+  validated against
+  `urn:f1-cache-replay:schema:replay-data:v1:stint-summary`.
+- **Core chunks are unchanged**: no stint or pit-transition data is embedded
+  in chunk payloads. The summary is an independent artifact.
+- **Backward compatibility**: consumers must accept manifests without
+  `stintSummary`. Strict parsers must explicitly allow its absence.
+  All existing v1 chunks, timeline summaries, sidecars, and navigation
+  markers remain valid and replayable.
+
+See [Replay Data Contract — Optional stint summary](replay-data-contract.md#optional-stint-summary)
+for the full contract including pit-mapping semantics, null rules, and
+fail-closed guarantees.
+
+## 9. Optional pit-loss model
+
+A compact optional pit-loss model artifact enables future frontend
+after-pit position prediction without embedding arrays into replay chunks:
+
+- The manifest may carry a `pitLossModel` reference (`path`, `schemaId`,
+  `sha256`) pointing to `pit-loss-model.json`.
+- The artifact supplies a single causal pit-loss estimate timeline using
+  the deterministic `global-prior-weighted-mean-v1` method with a 22 s
+  baseline, prior weight of 2, and `round_half_up` aggregation. At zero
+  observations the estimate is exactly 22 s; refinement is causal at each
+  distinct eligible pit-out timestamp.
+- The estimate is an uncalibrated global heuristic, not track-calibrated.
+  No per-driver predicted-gap array is shipped.
+- The future frontend will compute
+  `predictedGapToLeaderMs = currentGapToLeaderMs + currentPitLossEstimateMs`
+  for nearest-car-ahead/behind animation.
+- **Core chunks are unchanged**: no chunk fields, no version bump.
+- **Backward compatibility**: consumers must accept manifests without
+  `pitLossModel`. All existing v1 chunks, manifests, and optional artifacts
+  remain valid and replayable.
+
+See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#optional-pit-loss-model)
+for the full contract including placeholder semantics, refinement rules,
+eligibility criteria, and causal availability.
