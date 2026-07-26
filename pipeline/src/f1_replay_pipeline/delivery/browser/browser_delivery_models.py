@@ -18,6 +18,7 @@ MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
 BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
+STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -219,6 +220,110 @@ class BrowserLapSectorSidecar:
 
 
 @dataclass(frozen=True)
+class BrowserDriverStintSummary:
+    """Null-preserving columnar tyre stints and pit transitions for one driver."""
+
+    stint_number: tuple[int, ...]
+    compound: tuple[str | None, ...]
+    start_lap: tuple[int, ...]
+    end_lap: tuple[int | None, ...]
+    start_time_ms: tuple[int | None, ...]
+    end_time_ms: tuple[int | None, ...]
+    tyre_life_at_start: tuple[int | None, ...]
+    is_fresh_tyre: tuple[bool | None, ...]
+    pit_in_time_ms: tuple[int | None, ...]
+    pit_out_time_ms: tuple[int | None, ...]
+
+    def __post_init__(self) -> None:
+        fields = (
+            self.stint_number, self.compound, self.start_lap, self.end_lap,
+            self.start_time_ms, self.end_time_ms, self.tyre_life_at_start,
+            self.is_fresh_tyre, self.pit_in_time_ms, self.pit_out_time_ms,
+        )
+        if not all(isinstance(field, tuple) for field in fields):
+            raise TypeError("every driver stint summary field must be a tuple")
+        size = len(self.stint_number)
+        if any(len(field) != size for field in fields[1:]):
+            raise ValueError("every driver stint summary field must be aligned to stint_number")
+        if any(type(value) is not int or value < 1 for value in self.stint_number):
+            raise ValueError("stint_number must contain positive integers")
+        if any(
+            following <= current
+            for current, following in zip(self.stint_number, self.stint_number[1:], strict=False)
+        ):
+            raise ValueError("stint_number must be strictly increasing")
+        if any(type(value) is not int or value < 1 for value in self.start_lap):
+            raise ValueError("start_lap must contain positive integers")
+        if any(value is not None and (type(value) is not int or value < 1) for value in self.end_lap):
+            raise ValueError("end_lap must contain positive integers or null")
+        if any(
+            end_lap is not None and end_lap < start_lap
+            for start_lap, end_lap in zip(self.start_lap, self.end_lap, strict=False)
+        ):
+            raise ValueError("end_lap must not precede start_lap")
+        if any(value is not None and not isinstance(value, str) for value in self.compound):
+            raise TypeError("compound must contain strings or null")
+        timing_fields = (
+            self.start_time_ms, self.end_time_ms, self.pit_in_time_ms, self.pit_out_time_ms,
+        )
+        if any(
+            value is not None and (type(value) is not int or not 0 <= value <= MAX_INT64)
+            for field in timing_fields
+            for value in field
+        ):
+            raise TypeError("timing fields must contain non-negative signed Int64 integers or null")
+        if any(
+            value is not None and (type(value) is not int or value < 0)
+            for value in self.tyre_life_at_start
+        ):
+            raise ValueError("tyre_life_at_start must contain non-negative integers or null")
+        if any(value is not None and type(value) is not bool for value in self.is_fresh_tyre):
+            raise TypeError("is_fresh_tyre must contain booleans or null")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "stintNumber": list(self.stint_number),
+            "compound": list(self.compound),
+            "startLap": list(self.start_lap),
+            "endLap": list(self.end_lap),
+            "startTimeMs": list(self.start_time_ms),
+            "endTimeMs": list(self.end_time_ms),
+            "tyreLifeAtStart": list(self.tyre_life_at_start),
+            "isFreshTyre": list(self.is_fresh_tyre),
+            "pitInTimeMs": list(self.pit_in_time_ms),
+            "pitOutTimeMs": list(self.pit_out_time_ms),
+        }
+
+
+@dataclass(frozen=True)
+class BrowserStintSummary:
+    """Compact optional columnar stint data for one browser replay."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserDriverStintSummary]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("stint summary fixture_id must be a non-empty string")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("driver IDs must match the canonical identifier pattern")
+        if len(set(self.drivers)) != len(self.drivers):
+            raise ValueError("driver IDs must be unique")
+        if any(not isinstance(value, BrowserDriverStintSummary) for value in self.drivers.values()):
+            raise TypeError("drivers must map to BrowserDriverStintSummary values")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
+        }
+
+
+@dataclass(frozen=True)
 class BrowserLapStart:
     """One immutable leader-lap navigation marker in absolute session time."""
 
@@ -370,6 +475,18 @@ class BrowserLapSectorSidecarReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserStintSummaryReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional compact stint summary."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "stint-summary.json":
+            raise ValueError("stint summary path must be stint-summary.json")
+        if self.schema_id != STINT_SUMMARY_SCHEMA_ID:
+            raise ValueError("stint summary schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -379,6 +496,7 @@ class BrowserManifest:
     lap_starts: tuple[BrowserLapStart, ...] = ()
     timeline_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     lap_sector_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
+    stint_summary: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -433,10 +551,27 @@ class BrowserManifest:
             )
         elif lap_sector_sidecar is not None:
             raise TypeError("lap_sector_sidecar must be a BrowserArtifactReference or mapping")
+        stint_summary = self.stint_summary
+        if isinstance(stint_summary, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(stint_summary) != required:
+                raise ValueError("stint_summary must contain path, schemaId, and sha256")
+            stint_summary = BrowserStintSummaryReference(
+                cast(str, stint_summary["path"]),
+                cast(str, stint_summary["schemaId"]),
+                cast(str, stint_summary["sha256"]),
+            )
+        elif isinstance(stint_summary, BrowserArtifactReference):
+            stint_summary = BrowserStintSummaryReference(
+                stint_summary.path, stint_summary.schema_id, stint_summary.sha256,
+            )
+        elif stint_summary is not None:
+            raise TypeError("stint_summary must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
         object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
+        object.__setattr__(self, "stint_summary", stint_summary)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -460,14 +595,21 @@ class BrowserManifest:
             value["lapSectorSidecar"] = cast(
                 BrowserArtifactReference, self.lap_sector_sidecar,
             ).as_dict()
+        if self.stint_summary is not None:
+            value["stintSummary"] = cast(
+                BrowserArtifactReference, self.stint_summary,
+            ).as_dict()
         return value
 
 
 __all__ = [
     "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields",
-    "BrowserDriverLapSector", "BrowserLapSectorSidecar", "BrowserLapSectorSidecarReference",
+    "BrowserDriverLapSector", "BrowserDriverStintSummary", "BrowserLapSectorSidecar",
+    "BrowserLapSectorSidecarReference",
     "BrowserLapStart", "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
-    "BrowserTimelineSummaryReference", "CanonicalGenerationSnapshot",
+    "BrowserTimelineSummaryReference", "BrowserStintSummary", "BrowserStintSummaryReference",
+    "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
-    "TIMELINE_SUMMARY_SCHEMA_ID", "TimelineSummaryKind", "deep_freeze_json",
+    "STINT_SUMMARY_SCHEMA_ID", "TIMELINE_SUMMARY_SCHEMA_ID", "TimelineSummaryKind",
+    "deep_freeze_json",
 ]

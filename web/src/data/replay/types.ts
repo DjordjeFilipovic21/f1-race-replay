@@ -32,6 +32,12 @@ export interface LapSectorSidecarReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface StintSummaryReference extends ArtifactReference {
+  readonly path: 'stint-summary.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
+  readonly sha256: string
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -60,6 +66,7 @@ export interface ReplayManifest {
   readonly trackAssets: ArtifactReference
   readonly timelineSummary?: TimelineSummaryReference
   readonly lapSectorSidecar?: LapSectorSidecarReference
+  readonly stintSummary?: StintSummaryReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]

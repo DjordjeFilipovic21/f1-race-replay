@@ -9,6 +9,7 @@ from referencing import Registry, Resource
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    STINT_SUMMARY_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserTimelineSummaryReference,
@@ -60,6 +61,7 @@ def load_contract_bundle():
         "trackAssets": load_json(SCHEMA_ROOT / "track-assets.schema.json"),
         "timelineSummary": load_json(SCHEMA_ROOT / "timeline-summary.schema.json"),
         "browserLapSectorSidecar": load_json(SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json"),
+        "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -365,6 +367,35 @@ def lap_sector_sidecar_reference() -> dict[str, str]:
     }
 
 
+def stint_summary_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "drivers": {
+            "HAM": {
+                "stintNumber": [],
+                "compound": [],
+                "startLap": [],
+                "endLap": [],
+                "startTimeMs": [],
+                "endTimeMs": [],
+                "tyreLifeAtStart": [],
+                "isFreshTyre": [],
+                "pitInTimeMs": [],
+                "pitOutTimeMs": [],
+            },
+        },
+    }
+
+
+def stint_summary_reference() -> dict[str, str]:
+    return {
+        "path": "stint-summary.json",
+        "schemaId": STINT_SUMMARY_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
 def assert_timeline_summary_semantics(summary):
     assert summary["startMs"] < summary["endMs"]
     for interval in summary["intervals"]:
@@ -389,6 +420,15 @@ def test_replay_contract_lap_sector_sidecar_validates_and_is_optional(contract_b
     manifest["lapSectorSidecar"] = lap_sector_sidecar_reference()
 
     validate_instance(contract_bundle["schemas"]["browserLapSectorSidecar"], sidecar, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_stint_summary_validates_and_is_optional(contract_bundle, schema_registry):
+    summary = stint_summary_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["stintSummary"] = stint_summary_reference()
+
+    validate_instance(contract_bundle["schemas"]["stintSummary"], summary, schema_registry)
     validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
 
 

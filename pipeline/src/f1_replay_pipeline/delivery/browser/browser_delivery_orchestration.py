@@ -17,6 +17,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserLapSectorSidecar,
     BrowserManifest,
     BrowserLapStart,
+    BrowserStintSummary,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
     CanonicalGenerationSnapshot,
@@ -25,6 +26,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
 from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
+from f1_replay_pipeline.delivery.browser.browser_stint_summary import build_stint_summary
 from f1_replay_pipeline.analysis.live_position.live_position_progress import ProgressMode, ProgressState, advance_progress
 from f1_replay_pipeline.analysis.live_position.live_position_projection import ProjectionGeometry, ProjectionGeometryError, project_meters
 from f1_replay_pipeline.analysis.live_position.live_position_quality import (
@@ -50,6 +52,7 @@ class BrowserDeliveryBuild:
     projection_quality_assessment: ProjectionQualityAssessment | None = None
     timeline_summary: BrowserTimelineSummary | None = None
     lap_sector_sidecar: BrowserLapSectorSidecar | None = None
+    stint_summary: BrowserStintSummary | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -60,6 +63,8 @@ class BrowserDeliveryBuild:
             raise TypeError("timeline_summary must be a BrowserTimelineSummary or None")
         if self.lap_sector_sidecar is not None and not isinstance(self.lap_sector_sidecar, BrowserLapSectorSidecar):
             raise TypeError("lap_sector_sidecar must be a BrowserLapSectorSidecar or None")
+        if self.stint_summary is not None and not isinstance(self.stint_summary, BrowserStintSummary):
+            raise TypeError("stint_summary must be a BrowserStintSummary or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -119,16 +124,19 @@ def build_browser_delivery(
         )
         timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
         lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
+        stint_summary = build_stint_summary(snapshot)
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
             _driver_metadata(snapshot),
             lap_starts,
+            stint_summary=None,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
+        stint_summary,
     )
 
 

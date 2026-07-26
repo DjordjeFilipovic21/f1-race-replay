@@ -148,6 +148,118 @@ to equal-length column arrays sorted by ascending lap number:
   `lapSectorSidecar` remain valid and loadable. Strict parsers must explicitly
   allow its absence.
 
+### Optional stint summary
+
+The manifest may include a compact, optional `stintSummary` reference to
+a dedicated columnar artifact that publishes per-driver tyre stint and exact
+pit-transition data:
+
+```json
+"stintSummary": {
+  "path": "stint-summary.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `stint-summary.json` is a `v1` object mapping every canonical
+driver to equal-length column arrays sorted by ascending stint number:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "bahrain-2024",
+  "drivers": {
+    "VER": {
+      "stintNumber": [1, 2, 3],
+      "compound": ["SOFT", "HARD", "SOFT"],
+      "startLap": [1, 14, 33],
+      "endLap": [13, 32, null],
+      "startTimeMs": [1000, 137000, 320000],
+      "endTimeMs": [135000, 318000, null],
+      "tyreLifeAtStart": [0, 12, 18],
+      "isFreshTyre": [true, false, false],
+      "pitInTimeMs": [null, 134500, null],
+      "pitOutTimeMs": [null, 139000, 321000]
+    },
+    "NOR": {
+      "stintNumber": [1],
+      "compound": ["SOFT"],
+      "startLap": [1],
+      "endLap": [57],
+      "startTimeMs": [2000],
+      "endTimeMs": [570000],
+      "tyreLifeAtStart": [0],
+      "isFreshTyre": [true],
+      "pitInTimeMs": [null],
+      "pitOutTimeMs": [null]
+    }
+  }
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`). All column
+  arrays within a driver entry are equal length. Drivers without stints produce
+  empty aligned arrays.
+- `stintNumber` and `startLap` are non-nullable positive integers.
+  `endLap`, `endTimeMs`, `tyreLifeAtStart`, and `startTimeMs` are nullable.
+  Null in `startTimeMs` means the canonical stint start time is unavailable.
+- `pitInTimeMs` and `pitOutTimeMs` are nullable integer milliseconds; nulls
+  propagate from missing source data — the pipeline never invents or forward-fills
+  pit transition values.
+- `isFreshTyre` is `true` when the stint began on new tyres, `false` for used
+  tyres, and `null` when data is absent.
+
+**Pit-in and pit-out to stint mapping**
+
+Exact pit transitions are derived deterministically from canonical lap rows.
+Each canonical lap carries a `stint_number` identifying the stint active during
+that lap:
+
+- **Pit-in** (`pitInTimeMs`) belongs to the stint whose number matches the
+  lap's canonical `stint_number` and **ends** that indexed stint.
+- **Pit-out** (`pitOutTimeMs`) belongs to the stint whose number matches the
+  lap's canonical `stint_number` and **begins** (or resumes) that indexed stint.
+- The mapping is validated: the lap number must fall within the canonical
+  stint's lap range [`startLap`, `endLap`].
+- If a canonical stint has a non-null `pitInTimeMs`, the driver entered the
+  pits during that stint and the stint is closed. A non-null `pitOutTimeMs`
+  means the driver exited the pits to begin that stint.
+
+**Null and edge-case semantics**
+
+- **Stint 1 pit-out** is normally `null` (no pit exit before the first stint
+  begins), but a real source event is preserved when present — for example a
+  pit-lane start where the driver leaves the pits before the first racing lap.
+- **Final-stint pit-in** is `null` when no pit entry is observed during that
+  stint (race ended or driver retired without pitting again).
+- **No-stop races**: every stint has both `pitInTimeMs` and `pitOutTimeMs`
+  `null` when no source pit events exist.
+- **Ongoing stints** have nullable `endLap`, `endTimeMs`, and `pitInTimeMs`.
+  `pitOutTimeMs` is non-null for any stint that began from a pit exit (stint 2+
+  with a pit stop); it is null only for stint 1 without a pit-lane start.
+
+**Fail-closed rules**
+
+The mapping fails closed on ambiguity or inconsistency:
+
+- A lap-level pit event whose `stint_number` does not match any canonical stint
+  → error.
+- A pit event lap outside the stint's lap range → error.
+- Multiple pit-in candidates for the same stint → error.
+- Multiple pit-out candidates for the same stint → error.
+
+These rules ensure deterministic derivation: every pit transition maps to
+exactly one stint or the pipeline refuses to publish.
+
+**Backward compatibility**
+
+The stint summary is an independent artifact produced alongside chunks and the
+lap/sector sidecar. Core replay chunks are unchanged. The manifest reference is
+optional: consumers must accept manifests without `stintSummary`. All existing
+v1 chunks, timeline summaries, sidecars, and navigation markers remain valid
+and replayable.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

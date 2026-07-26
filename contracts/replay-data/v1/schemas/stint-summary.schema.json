@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary",
+  "title": "Browser stint summary",
+  "description": "Compact optional columnar tyre stint and exact pit-transition data for browser replay. Each driver entry is a set of equal-length arrays ordered by stint number.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "drivers"
+  ],
+  "$defs": {
+    "driverCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nullablePositiveInteger": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "nullableNonNegativeInteger": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "driverStintColumns": {
+      "type": "object",
+      "$comment": "Contract semantic validation requires every column array in a driver entry to have equal length.",
+      "additionalProperties": false,
+      "required": [
+        "stintNumber",
+        "compound",
+        "startLap",
+        "endLap",
+        "startTimeMs",
+        "endTimeMs",
+        "tyreLifeAtStart",
+        "isFreshTyre",
+        "pitInTimeMs",
+        "pitOutTimeMs"
+      ],
+      "properties": {
+        "stintNumber": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/positiveInteger"
+          }
+        },
+        "compound": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "startLap": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/positiveInteger"
+          }
+        },
+        "endLap": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullablePositiveInteger"
+          }
+        },
+        "startTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableNonNegativeInteger"
+          }
+        },
+        "endTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableNonNegativeInteger"
+          }
+        },
+        "tyreLifeAtStart": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableNonNegativeInteger"
+          }
+        },
+        "isFreshTyre": {
+          "type": "array",
+          "items": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "pitInTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableNonNegativeInteger"
+          }
+        },
+        "pitOutTimeMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableNonNegativeInteger"
+          }
+        }
+      }
+    },
+    "stintSummaryFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "stint-summary.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/driverCode"
+      },
+      "patternProperties": {
+        "^[A-Z0-9]{2,4}$": {
+          "$ref": "#/$defs/driverStintColumns"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

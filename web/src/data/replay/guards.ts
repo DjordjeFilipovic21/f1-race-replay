@@ -1,6 +1,6 @@
 import type {
   ArtifactReference, BrowserPointer, ChunkReference, DnfMarker, DriverColumns, DriverMetadata,
-  LapSectorSidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap, TimelineInterval,
+  LapSectorSidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap, StintSummaryReference, TimelineInterval,
   TimelineIntervalKind, TimelineSummary, TimelineSummaryReference, TrackAssets, TrackPoint,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
@@ -10,6 +10,7 @@ export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:chunk'
 export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:track-assets'
 export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
 export const BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar'
+export const STINT_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm', 'tyreAge', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -36,7 +37,7 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary', 'lapSectorSidecar'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary', 'lapSectorSidecar', 'stintSummary'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
@@ -45,6 +46,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity is unsupported')
   const timelineSummary = item.timelineSummary === undefined ? undefined : parseTimelineSummaryReference(item.timelineSummary)
   const lapSectorSidecar = item.lapSectorSidecar === undefined ? undefined : parseLapSectorSidecarReference(item.lapSectorSidecar)
+  const stintSummary = item.stintSummary === undefined ? undefined : parseStintSummaryReference(item.stintSummary)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
@@ -63,7 +65,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
 }
 
 export function parseTimelineSummaryReference(value: unknown): TimelineSummaryReference {
@@ -84,6 +86,16 @@ export function parseLapSectorSidecarReference(value: unknown): LapSectorSidecar
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.lapSectorSidecar.sha256 is invalid')
   return freeze({ path: 'lap-sector-sidecar.json', schemaId: BROWSER_LAP_SECTOR_SIDECAR_SCHEMA, sha256 })
+}
+
+export function parseStintSummaryReference(value: unknown): StintSummaryReference {
+  const item = object(value, 'manifest.stintSummary')
+  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.stintSummary')
+  if (item.path !== 'stint-summary.json') throw new Error('stint summary path is unsupported')
+  if (item.schemaId !== STINT_SUMMARY_SCHEMA) throw new Error('stint summary schema identity is unsupported')
+  const sha256 = item.sha256
+  if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.stintSummary.sha256 is invalid')
+  return freeze({ path: 'stint-summary.json', schemaId: STINT_SUMMARY_SCHEMA, sha256 })
 }
 
 export function parseTimelineSummary(value: unknown): TimelineSummary {

@@ -19,6 +19,7 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChu
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    STINT_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
@@ -45,6 +46,7 @@ _CHUNK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:chunk"
 _TRACK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
 _TIMELINE_SUMMARY_SCHEMA = TIMELINE_SUMMARY_SCHEMA_ID
 _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
+_STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 
 _make_contract_validator = jsonschema_rs.Draft202012Validator
@@ -87,6 +89,7 @@ class PublishedBrowserDelivery:
     artifact_digests: Mapping[str, str]
     timeline_summary_path: Path | None = None
     lap_sector_sidecar_path: Path | None = None
+    stint_summary_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -142,10 +145,12 @@ def validate_complete_browser_delivery(
             raise ValueError("browser delivery provenance disagrees with canonical generation")
         timeline_reference = manifest.get("timelineSummary")
         sidecar_reference = manifest.get("lapSectorSidecar")
+        stint_reference = manifest.get("stintSummary")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
             *((sidecar_reference,) if sidecar_reference is not None else ()),
+            *((stint_reference,) if stint_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -236,7 +241,17 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         if not isinstance(sidecar_reference, dict) or sidecar_reference.get("path") != "lap-sector-sidecar.json":
             raise BrowserDeliveryPublicationError("manifest lap sector sidecar reference is invalid")
         expected_paths.add("lap-sector-sidecar.json")
-    total = len(chunk_refs) + 2 + (1 if timeline_reference is not None else 0) + (1 if sidecar_reference is not None else 0)
+    stint_reference = manifest.get("stintSummary")
+    if stint_reference is not None:
+        if not isinstance(stint_reference, dict) or stint_reference.get("path") != "stint-summary.json":
+            raise BrowserDeliveryPublicationError("manifest stint summary reference is invalid")
+        expected_paths.add("stint-summary.json")
+    total = (
+        len(chunk_refs) + 2
+        + (1 if timeline_reference is not None else 0)
+        + (1 if sidecar_reference is not None else 0)
+        + (1 if stint_reference is not None else 0)
+    )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
     _validate_schema_instance(validators["track-assets"], track, "track assets")
@@ -262,6 +277,16 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_lap_sector_sidecar_contract(sidecar, manifest)
         completed += 1
         _emit_validation_progress(emit, completed, total, "lap sector sidecar schema")
+    if stint_reference is not None:
+        stint_summary = json.loads(encoded["stint-summary.json"])
+        if not isinstance(stint_summary, dict):
+            raise BrowserDeliveryPublicationError("stint summary must be a JSON object")
+        _validate_schema_instance(
+            validators["stint-summary"], stint_summary, "stint summary",
+        )
+        _validate_stint_summary_contract(stint_summary, manifest)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "stint summary schema")
     previous = None
     for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
@@ -289,7 +314,12 @@ def _prepared_artifacts(
     _validate_chunks(chunks)
     summary = delivery.timeline_summary
     sidecar = delivery.lap_sector_sidecar
-    total = 2 * len(chunks) + 4 + (2 if summary is not None else 0) + (2 if sidecar is not None else 0)
+    total = (
+        2 * len(chunks) + 4
+        + (2 if summary is not None else 0)
+        + (2 if sidecar is not None else 0)
+        + (2 if delivery.stint_summary is not None else 0)
+    )
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
     schema_track_assets = _schema_compatible_value(delivery.track_assets)
@@ -325,6 +355,20 @@ def _prepared_artifacts(
         _emit_validation_progress(emit, completed, total, "lap sector sidecar")
         completed += 1
         _emit_validation_progress(emit, completed, total, "lap sector sidecar schema")
+
+    stint = delivery.stint_summary
+    stint_artifact: PreparedArtifact | None = None
+    stint_contract = None
+    if stint is not None:
+        stint_contract = _schema_compatible_value(stint.as_dict())
+        _validate_schema_instance(
+            validators["stint-summary"], stint_contract, "stint summary",
+        )
+        stint_artifact = _prepare_artifact("stint-summary.json", stint_contract)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "stint summary")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "stint summary schema")
 
     previous = None
     chunk_artifacts = []
@@ -373,11 +417,25 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest lap sector sidecar reference has no sidecar payload"
         )
+    if stint_artifact is not None:
+        manifest["stintSummary"] = {
+            "path": stint_artifact.path,
+            "schemaId": _STINT_SUMMARY_SCHEMA,
+            "sha256": stint_artifact.sha256,
+        }
+    elif "stintSummary" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest stint summary reference has no stint summary payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest)
     if sidecar_contract is not None:
         _validate_lap_sector_sidecar_contract(sidecar_contract, manifest)
-    _validate_manifest_contract(manifest, delivery, references, timeline_artifact, sidecar_artifact)
+    if stint_contract is not None:
+        _validate_stint_summary_contract(stint_contract, manifest)
+    _validate_manifest_contract(
+        manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
+    )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
     _emit_validation_progress(emit, total, total, "manifest schema")
@@ -386,6 +444,7 @@ def _prepared_artifacts(
         track,
         *((timeline_artifact,) if timeline_artifact is not None else ()),
         *((sidecar_artifact,) if sidecar_artifact is not None else ()),
+        *((stint_artifact,) if stint_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -422,6 +481,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("timeline-summary.json")
     if delivery.lap_sector_sidecar is not None:
         expected_paths.add("lap-sector-sidecar.json")
+    if delivery.stint_summary is not None:
+        expected_paths.add("stint-summary.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -432,6 +493,7 @@ def _validate_manifest_contract(
     refs,
     timeline_artifact: PreparedArtifact | None = None,
     sidecar_artifact: PreparedArtifact | None = None,
+    stint_artifact: PreparedArtifact | None = None,
 ) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
@@ -457,6 +519,16 @@ def _validate_manifest_contract(
         "sha256": sidecar_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("lap sector sidecar reference disagrees with its payload")
+    stint_reference = manifest.get("stintSummary")
+    if stint_artifact is None:
+        if stint_reference is not None or delivery.stint_summary is not None:
+            raise BrowserDeliveryPublicationError("manifest stint summary reference disagrees with its payload")
+    elif stint_reference != {
+        "path": stint_artifact.path,
+        "schemaId": _STINT_SUMMARY_SCHEMA,
+        "sha256": stint_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError("stint summary reference disagrees with its payload")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -542,6 +614,33 @@ def _validate_lap_sector_sidecar_contract(sidecar, manifest) -> None:
         raise BrowserDeliveryPublicationError("lap sector sidecar drivers disagree with the manifest")
 
 
+def _validate_stint_summary_contract(summary, manifest) -> None:
+    """Apply semantic checks not expressible in the compact JSON schema."""
+    if summary.get("contractVersion") != "v1" or summary.get("fixtureId") != manifest.get("fixtureId"):
+        raise BrowserDeliveryPublicationError("stint summary disagrees with the manifest")
+    drivers = summary.get("drivers")
+    if not isinstance(drivers, dict):
+        raise BrowserDeliveryPublicationError("stint summary drivers are invalid")
+    driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
+    if set(drivers) != driver_ids:
+        raise BrowserDeliveryPublicationError("stint summary drivers disagree with the manifest")
+    for columns in drivers.values():
+        if not isinstance(columns, dict):
+            raise BrowserDeliveryPublicationError("stint summary driver columns are invalid")
+        column_names = (
+            "stintNumber", "compound", "startLap", "endLap", "startTimeMs",
+            "endTimeMs", "tyreLifeAtStart", "isFreshTyre", "pitInTimeMs", "pitOutTimeMs",
+        )
+        if any(not isinstance(columns.get(name), list) for name in column_names):
+            raise BrowserDeliveryPublicationError("stint summary driver columns are invalid")
+        arrays = tuple(cast(list[object], columns[name]) for name in column_names)
+        if len({len(values) for values in arrays}) != 1:
+            raise BrowserDeliveryPublicationError("stint summary driver columns are not aligned")
+        stint_numbers = cast(list[int], columns["stintNumber"])
+        if stint_numbers != sorted(stint_numbers) or len(set(stint_numbers)) != len(stint_numbers):
+            raise BrowserDeliveryPublicationError("stint summary stints are not deterministically ordered")
+
+
 def _validate_lap_starts(markers, refs) -> None:
     if any(
         following["lap"] <= current["lap"] or following["startMs"] < current["startMs"]
@@ -561,7 +660,7 @@ def _load_contract_schemas(
     try:
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
-            "browser-lap-sector-sidecar",
+            "browser-lap-sector-sidecar", "stint-summary",
         ):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
@@ -741,6 +840,11 @@ def _publish_payloads(
         if "lap-sector-sidecar.json" in digests
         else None
     )
+    stint_summary_path = (
+        generation / "stint-summary.json"
+        if "stint-summary.json" in digests
+        else None
+    )
     return PublishedBrowserDelivery(
         version,
         generation,
@@ -751,6 +855,7 @@ def _publish_payloads(
         digests,
         timeline_summary_path,
         lap_sector_sidecar_path,
+        stint_summary_path,
     )
 
 
