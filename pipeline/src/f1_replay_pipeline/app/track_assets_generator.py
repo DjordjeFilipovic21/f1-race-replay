@@ -8,6 +8,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from f1_replay_pipeline.analysis.live_position.live_position_projection import (
+    ProjectionGeometry,
+    project_meters,
+)
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     FASTF1_POSITION_UNITS_PER_METER,
     CanonicalGenerationSnapshot,
@@ -17,7 +21,13 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 RAW_POSITION_UNITS_PER_METER = FASTF1_POSITION_UNITS_PER_METER
 DEFAULT_TRACK_WIDTH_M = 20.0
 DEFAULT_CENTERLINE_POINTS = 600
+_CALIBRATION_CENTERLINE_POINTS = 2048
+_MAX_CALIBRATION_BRACKET_INTERVAL_MS = 1000
+_MIN_START_FINISH_INLIERS = 2
+_MAX_START_FINISH_SPREAD_M = 75.0
 _SAFE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+Point = tuple[float, float]
 
 
 class TrackAssetsGenerationError(ValueError):
@@ -51,7 +61,13 @@ def generate_track_assets(
     if not _SAFE_ID.fullmatch(resolved_track_id):
         raise TrackAssetsGenerationError("track_id must be a lowercase kebab-case identifier")
     reference = select_reference_lap(snapshot)
-    centerline = _resample_closed_polyline(reference.points_meters, centerline_points)
+    temporary_centerline = _resample_closed_polyline(
+        reference.points_meters, max(centerline_points, _CALIBRATION_CENTERLINE_POINTS),
+    )
+    start_finish_offset = _calibrate_start_finish_offset(snapshot, temporary_centerline)
+    centerline = _resample_closed_polyline(
+        _rotate_closed_polyline(temporary_centerline, start_finish_offset), centerline_points,
+    )
     inner, outer = _offset_boundaries(centerline, visual_track_width_m / 2.0)
     length_m = _polyline_length(centerline)
     display_rotation = (
@@ -98,7 +114,7 @@ def select_reference_lap(snapshot: CanonicalGenerationSnapshot) -> ReferenceLap:
             (positions["driver_id"] == lap["driver_id"])
             & (positions["session_time_ms"] >= lap["lap_start_time_ms"])
             & (positions["session_time_ms"] < lap["lap_end_time_ms"])
-        ).sort("session_time_ms").to_dicts()
+        ).sort(["session_time_ms", "x", "y"]).to_dicts()
         points = _clean_points(rows)
         if len(points) >= 4 and _is_spatially_valid(points):
             return ReferenceLap(
@@ -125,6 +141,154 @@ def is_eligible_track_lap(row: Mapping[str, object]) -> bool:
     )
 
 
+def _calibrate_start_finish_offset(
+    snapshot: CanonicalGenerationSnapshot, centerline: tuple[Point, ...],
+) -> float:
+    length = _polyline_length(centerline)
+    geometry = ProjectionGeometry(centerline, length)
+    positions = _index_valid_position_rows(snapshot.frames["position_telemetry"].to_dicts())
+    candidates: list[float] = []
+    for lap in _boundary_lap_candidates(snapshot.frames["laps"].to_dicts()):
+        samples = positions.get(cast(str, lap["driver_id"]), ())
+        point = _interpolate_boundary_position(samples, cast(int, lap["lap_start_time_ms"]))
+        if point is None:
+            continue
+        projection = project_meters(point[0], point[1], geometry)
+        if projection is not None and math.isfinite(projection.track_distance_meters):
+            candidates.append(projection.track_distance_meters)
+    return _estimate_circular_offset(tuple(candidates), length)
+
+
+def _boundary_lap_candidates(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    candidates = (
+        row for row in rows
+        if is_eligible_track_lap(row)
+        and type(row.get("lap_number")) is int
+        and cast(int, row["lap_number"]) >= 2
+        and type(row.get("lap_start_time_ms")) is int
+    )
+    return tuple(sorted(
+        candidates,
+        key=lambda row: (
+            cast(int, row["lap_start_time_ms"]), cast(str, row["driver_id"]),
+            cast(int, row["lap_number"]), cast(int, row["lap_end_time_ms"]),
+        ),
+    ))
+
+
+def _index_valid_position_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> Mapping[str, tuple[tuple[int, Point], ...]]:
+    indexed: dict[str, list[tuple[int, Point]]] = {}
+    for row in rows:
+        driver_id = row.get("driver_id")
+        timestamp = row.get("session_time_ms")
+        x, y = row.get("x"), row.get("y")
+        if not isinstance(driver_id, str) or type(timestamp) is not int:
+            continue
+        if not _is_finite_number(x) or not _is_finite_number(y):
+            continue
+        point = (
+            float(cast(int | float, x)) / RAW_POSITION_UNITS_PER_METER,
+            float(cast(int | float, y)) / RAW_POSITION_UNITS_PER_METER,
+        )
+        indexed.setdefault(driver_id, []).append((timestamp, point))
+    return {
+        driver_id: tuple(
+            sorted(samples, key=lambda sample: (sample[0], sample[1][0], sample[1][1]))
+        )
+        for driver_id, samples in indexed.items()
+    }
+
+
+def _interpolate_boundary_position(
+    samples: Sequence[tuple[int, Point]], boundary_time_ms: int,
+) -> Point | None:
+    exact = next((point for timestamp, point in samples if timestamp == boundary_time_ms), None)
+    if exact is not None:
+        return exact
+    before = tuple(sample for sample in samples if sample[0] < boundary_time_ms)
+    after = tuple(sample for sample in samples if sample[0] > boundary_time_ms)
+    if not before or not after:
+        return None
+    lower_time, lower = before[-1]
+    upper_time, upper = after[0]
+    interval = upper_time - lower_time
+    if interval <= 0 or interval > _MAX_CALIBRATION_BRACKET_INTERVAL_MS:
+        return None
+    ratio = (boundary_time_ms - lower_time) / interval
+    return (
+        lower[0] + (upper[0] - lower[0]) * ratio,
+        lower[1] + (upper[1] - lower[1]) * ratio,
+    )
+
+
+def _estimate_circular_offset(candidates: Sequence[float], length: float) -> float:
+    if not math.isfinite(length) or length <= 0:
+        raise TrackAssetsGenerationError("insufficient start/finish calibration evidence")
+    normalized = tuple(sorted(
+        candidate % length
+        for candidate in candidates
+        if math.isfinite(candidate)
+    ))
+    if len(normalized) < _MIN_START_FINISH_INLIERS:
+        raise TrackAssetsGenerationError("insufficient start/finish calibration evidence")
+    tolerance = max(5.0, min(_MAX_START_FINISH_SPREAD_M, length * 0.05))
+    clusters = []
+    for anchor in normalized:
+        inliers = tuple(
+            candidate for candidate in normalized
+            if _circular_distance(candidate, anchor, length) <= tolerance
+        )
+        estimate = _circular_median(inliers, anchor, length)
+        residuals = tuple(
+            _circular_distance(candidate, estimate, length) for candidate in inliers
+        )
+        clusters.append((len(inliers), sum(residuals), max(residuals), estimate, anchor))
+    best = min(
+        clusters,
+        key=lambda cluster: (-cluster[0], cluster[1], cluster[2], cluster[3], cluster[4]),
+    )
+    if best[0] < _MIN_START_FINISH_INLIERS:
+        raise TrackAssetsGenerationError("insufficient start/finish calibration evidence")
+    return best[3]
+
+
+def _circular_median(values: Sequence[float], anchor: float, length: float) -> float:
+    unwrapped = sorted(_unwrap_near(candidate, anchor, length) for candidate in values)
+    middle = len(unwrapped) // 2
+    if len(unwrapped) % 2:
+        return unwrapped[middle] % length
+    return ((unwrapped[middle - 1] + unwrapped[middle]) / 2.0) % length
+
+
+def _unwrap_near(value: float, anchor: float, length: float) -> float:
+    return anchor + ((value - anchor + length / 2.0) % length - length / 2.0)
+
+
+def _circular_distance(left: float, right: float, length: float) -> float:
+    difference = abs(left - right) % length
+    return min(difference, length - difference)
+
+
+def _rotate_closed_polyline(points: tuple[Point, ...], offset: float) -> tuple[Point, ...]:
+    closed = _close(points)
+    lengths = _cumulative_lengths(closed)
+    total = lengths[-1]
+    if total <= 0:
+        raise TrackAssetsGenerationError("reference centerline has zero arc length")
+    normalized = offset % total
+    segment = next(index for index in range(1, len(lengths)) if lengths[index] >= normalized)
+    point = _interpolate_at(closed, lengths, normalized)
+    if math.dist(point, closed[segment]) <= 1e-9:
+        return tuple(closed[segment:-1] + closed[:segment])
+    return (point,) + closed[segment:-1] + closed[:segment]
+
+
+def _is_finite_number(value: object) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(cast(int | float, value)))
+
+
 def _clean_points(rows: Sequence[Mapping[str, object]]) -> tuple[tuple[float, float], ...]:
     points = []
     for row in rows:
@@ -142,14 +306,19 @@ def _resample_closed_polyline(
     points: tuple[tuple[float, float], ...], count: int,
 ) -> tuple[tuple[float, float], ...]:
     closed = _close(points)
-    lengths = [0.0]
-    for previous, current in zip(closed[:-1], closed[1:], strict=True):
-        lengths.append(lengths[-1] + math.dist(previous, current))
+    lengths = _cumulative_lengths(closed)
     total = lengths[-1]
     if total <= 0:
         raise TrackAssetsGenerationError("reference centerline has zero arc length")
     samples = [_interpolate_at(closed, lengths, total * index / count) for index in range(count)]
     return tuple(samples + [samples[0]])
+
+
+def _cumulative_lengths(points: Sequence[Point]) -> tuple[float, ...]:
+    lengths = [0.0]
+    for previous, current in zip(points[:-1], points[1:], strict=True):
+        lengths.append(lengths[-1] + math.dist(previous, current))
+    return tuple(lengths)
 
 
 def _is_spatially_valid(points: tuple[tuple[float, float], ...]) -> bool:

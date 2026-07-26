@@ -30,6 +30,7 @@ MAX_BACKWARD_JUMP_M = 200.0
 FINAL_TRACK_REGION_RATIO = 0.90
 INITIAL_TRACK_REGION_RATIO = 0.10
 MIN_GEOMETRIC_WRAP_DECREASE_RATIO = 0.80
+MAX_BOUNDARY_WRAP_TIME_FRACTION = 0.10
 
 Point = tuple[float, float]
 T = TypeVar("T")
@@ -134,7 +135,15 @@ def _measure_clean_laps(
             invalid_projections += 1
             continue
         residuals.extend(projection.lateral_residual_meters for projection in resolved)
-        unwrap = _unwrap(tuple(projection.track_distance_meters for projection in resolved), geometry.circuit_length_meters)
+        unwrap = _unwrap(
+            tuple(
+                (timestamp, projection.track_distance_meters)
+                for (timestamp, _), projection in zip(samples, resolved, strict=True)
+            ),
+            geometry.circuit_length_meters,
+            cast(int, lap["lap_start_time_ms"]),
+            cast(int, lap["lap_end_time_ms"]),
+        )
         accepted_wraps += unwrap.accepted_wraps
         invalid_wrap_laps += int(unwrap.invalid_or_multiple)
         backward_jumps += _backward_jumps(unwrap.distances)
@@ -254,20 +263,43 @@ def _project_lap_samples(
     return tuple(projections)
 
 
-def _unwrap(distances: Sequence[float], length: float) -> _UnwrapResult:
+def _unwrap(
+    samples: Sequence[tuple[int, float]], length: float, lap_start_ms: int, lap_end_ms: int,
+) -> _UnwrapResult:
     wraps = offset = 0
     invalid = False
+    wrap_times: list[tuple[int, int]] = []
+    distances = tuple(distance for _, distance in samples)
     unwrapped = [distances[0]] if distances else []
-    for previous, current in pairwise(distances):
+    for (previous_time, previous), (current_time, current) in pairwise(samples):
         if current < previous and previous - current > MAX_BACKWARD_JUMP_M:
             if _is_geometric_wrap(previous, current, length):
                 wraps += 1
                 offset += length
-                invalid |= wraps > 1
+                wrap_times.append((previous_time, current_time))
             else:
                 invalid = True
         unwrapped.append(offset + current)
+    if wraps == 2 and not _has_boundary_wraps(wrap_times, lap_start_ms, lap_end_ms):
+        invalid = True
+    if wraps > 2:
+        invalid = True
     return _UnwrapResult(wraps, invalid, tuple(unwrapped))
+
+
+def _has_boundary_wraps(
+    wrap_times: Sequence[tuple[int, int]], lap_start_ms: int, lap_end_ms: int,
+) -> bool:
+    if len(wrap_times) != 2 or lap_end_ms <= lap_start_ms:
+        return False
+    window = (lap_end_ms - lap_start_ms) * MAX_BOUNDARY_WRAP_TIME_FRACTION
+    _, first_current = wrap_times[0]
+    last_previous, _ = wrap_times[-1]
+    return (
+        first_current - lap_start_ms <= window
+        and lap_end_ms - last_previous <= window
+        and first_current <= last_previous
+    )
 
 
 def _is_geometric_wrap(previous: float, current: float, length: float) -> bool:

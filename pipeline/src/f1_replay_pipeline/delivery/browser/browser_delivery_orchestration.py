@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import cast
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
@@ -14,6 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDnfMarker,
+    BrowserDriverFields,
     BrowserManifest,
     BrowserLapStart,
     BrowserTimelineInterval,
@@ -23,8 +26,19 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     deep_freeze_json,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
-from f1_replay_pipeline.analysis.live_position.live_position_progress import ProgressMode, ProgressState, advance_progress
-from f1_replay_pipeline.analysis.live_position.live_position_projection import ProjectionGeometry, ProjectionGeometryError, project_meters
+from f1_replay_pipeline.analysis.live_position.live_position_progress import (
+    ProgressMode,
+    ProgressReason,
+    ProgressState,
+    ProgressUpdate,
+    advance_progress,
+)
+from f1_replay_pipeline.analysis.live_position.live_position_projection import (
+    CenterlineProjection,
+    ProjectionGeometry,
+    ProjectionGeometryError,
+    project_meters,
+)
 from f1_replay_pipeline.analysis.live_position.live_position_quality import (
     QUALITY_GATE_VERSION,
     ProjectionQualityAssessment,
@@ -35,6 +49,37 @@ from f1_replay_pipeline.app.track_assets_generator import TrackAssetsGenerationE
 
 
 ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], ProjectionQualityAssessment]
+
+_STARTUP_PROJECTION_WINDOW_MS = 5_000
+_MIN_STARTERS_FOR_ORIGIN_GUARD = 3
+_MIN_LINEAR_SPAN_FRACTION = 0.8
+_MAX_CIRCULAR_SPAN_FRACTION = 0.2
+_EXCLUDED_STARTER_STATUSES = frozenset({"dns", "didnotstart", "disqualified", "excluded", "out"})
+
+
+@dataclass(frozen=True)
+class _StartupCandidate:
+    grid_position: int
+    driver_id: str
+    fields: BrowserDriverFields
+
+
+@dataclass(frozen=True)
+class _StartupProjection:
+    timestamp_ms: int
+    candidates: tuple[tuple[_StartupCandidate, int, CenterlineProjection], ...]
+
+
+@dataclass(frozen=True)
+class _StartupSeed:
+    state: ProgressState
+    update: ProgressUpdate
+
+
+@dataclass(frozen=True)
+class _StartupSeedPlan:
+    timestamp_ms: int
+    seeds: Mapping[str, _StartupSeed]
 
 
 @dataclass(frozen=True)
@@ -95,8 +140,15 @@ def build_browser_delivery(
         }
         assessment = _assess_quality(snapshot, track_assets, quality_assessor)
         if assessment.passed:
+            geometry = _projection_geometry(track_assets)
+            pit_lane_starts = _pit_lane_starter_pit_out_times(snapshot, race_start_ms)
+            startup_plan = _startup_seed_plan(
+                snapshot.frames["results"].to_dicts(), drivers, geometry, race_start_ms,
+                excluded_driver_ids=frozenset(pit_lane_starts),
+            )
             drivers, dynamic_orders = _derive_live_fields(
-                snapshot, track_assets, drivers, timeline, terminal_end_times, finish_end_times,
+                snapshot, geometry, drivers, timeline, terminal_end_times, finish_end_times,
+                startup_plan=startup_plan, pit_lane_starts=pit_lane_starts,
             )
         else:
             dynamic_orders = None
@@ -337,15 +389,182 @@ def _assess_quality(snapshot, track_assets, assessor: ProjectionQualityAssessor)
     return assessment
 
 
-def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_times, finish_end_times=None):
+def _startup_seed_plan(
+    results: Sequence[Mapping[str, object]], drivers: Mapping[str, BrowserDriverFields],
+    geometry: ProjectionGeometry, race_start_ms: int, *,
+    excluded_driver_ids: frozenset[str] = frozenset(),
+) -> _StartupSeedPlan | None:
+    """Build one deterministic lap-one branch plan for an origin-crossing grid."""
+    candidates = _eligible_startup_candidates(results, drivers, excluded_driver_ids)
+    if len(candidates) < _MIN_STARTERS_FOR_ORIGIN_GUARD:
+        return None
+    observation = _earliest_startup_projection(candidates, geometry, race_start_ms)
+    if observation is None:
+        raise ValueError(
+            "dynamic ranking rejected: synchronized startup projections are unreliable"
+        )
+    distances = tuple(projection.track_distance_meters for _, _, projection in observation.candidates)
+    if any(
+        not math.isfinite(distance) or not 0.0 <= distance < geometry.circuit_length_meters
+        for distance in distances
+    ):
+        raise ValueError("dynamic ranking rejected: startup projections contain invalid distances")
+    if len(set(distances)) != len(distances):
+        raise ValueError("dynamic ranking rejected: startup projections contain duplicate positions")
+    linear_span, circular_span = _startup_spans(distances, geometry.circuit_length_meters)
+    if circular_span > geometry.circuit_length_meters * _MAX_CIRCULAR_SPAN_FRACTION:
+        raise ValueError(
+            "dynamic ranking rejected: startup projections are not a compact circular grid"
+        )
+    split_index = 0
+    if linear_span >= geometry.circuit_length_meters * _MIN_LINEAR_SPAN_FRACTION:
+        split_index = _startup_split_index(distances, geometry.circuit_length_meters)
+        if split_index is None:
+            raise ValueError(
+                "dynamic ranking rejected: startup projected ordering is inconsistent with grid order"
+            )
+
+    seeds = {}
+    for index, (candidate, lap_number, projection) in enumerate(observation.candidates):
+        distance = projection.track_distance_meters
+        front_side = index < split_index
+        progress = (
+            (lap_number - 1) * geometry.circuit_length_meters
+            + distance
+            + (geometry.circuit_length_meters if front_side else 0.0)
+        )
+        state = ProgressState(
+            last_session_time_ms=observation.timestamp_ms,
+            last_lap_number=lap_number,
+            last_track_distance_meters=distance,
+            last_valid_progress_meters=progress,
+            last_valid_time_ms=observation.timestamp_ms,
+            within_lap_wrap_count=1 if front_side else 0,
+            within_lap_offset_meters=geometry.circuit_length_meters if front_side else 0.0,
+        )
+        seeds[candidate.driver_id] = _StartupSeed(
+            state,
+            ProgressUpdate(
+                state, ProgressMode.ACTIVE, distance, progress, False, False,
+                ProgressReason.ACTIVE,
+            ),
+        )
+    return _StartupSeedPlan(observation.timestamp_ms, MappingProxyType(seeds))
+
+
+def _eligible_startup_candidates(
+    results: Sequence[Mapping[str, object]], drivers: Mapping[str, BrowserDriverFields],
+    excluded_driver_ids: frozenset[str] = frozenset(),
+) -> tuple[_StartupCandidate, ...]:
+    candidates = []
+    seen_drivers: set[str] = set()
+    seen_grid_positions: set[int] = set()
+    for result in results:
+        driver_id = result.get("driver_id")
+        grid_position = result.get("grid_position")
+        if (
+            not isinstance(driver_id, str) or not driver_id
+            or driver_id in excluded_driver_ids
+            or type(grid_position) is not int or grid_position <= 0
+            or _normalized_status(result.get("status")) in _EXCLUDED_STARTER_STATUSES
+        ):
+            continue
+        fields = drivers.get(driver_id)
+        if fields is None:
+            continue
+        if driver_id in seen_drivers or grid_position in seen_grid_positions:
+            raise ValueError("dynamic ranking rejected: startup grid positions are not unique")
+        seen_drivers.add(driver_id)
+        seen_grid_positions.add(grid_position)
+        candidates.append(_StartupCandidate(grid_position, driver_id, fields))
+    return tuple(sorted(candidates, key=lambda candidate: (candidate.grid_position, candidate.driver_id)))
+
+
+def _pit_lane_starter_pit_out_times(
+    snapshot: CanonicalGenerationSnapshot, race_start_ms: int,
+) -> Mapping[str, int]:
+    return MappingProxyType({
+        cast(str, row["driver_id"]): cast(int, row["pit_out_time_ms"])
+        for row in snapshot.frames["laps"].to_dicts()
+        if row.get("lap_number") == 1
+        and isinstance(row.get("driver_id"), str)
+        and type(row.get("pit_out_time_ms")) is int
+        and cast(int, row["pit_out_time_ms"]) > race_start_ms
+    })
+
+
+def _earliest_startup_projection(
+    candidates: Sequence[_StartupCandidate], geometry: ProjectionGeometry, race_start_ms: int,
+) -> _StartupProjection | None:
+    if not candidates:
+        return None
+    shared_timestamps = set(candidates[0].fields.time_ms)
+    for candidate in candidates[1:]:
+        shared_timestamps.intersection_update(candidate.fields.time_ms)
+    for time_ms in sorted(shared_timestamps):
+        if time_ms < race_start_ms:
+            continue
+        if time_ms - race_start_ms > _STARTUP_PROJECTION_WINDOW_MS:
+            break
+        observations = []
+        for candidate in candidates:
+            index = candidate.fields.time_ms.index(time_ms)
+            if _normalized_status(candidate.fields.status[index]) in _EXCLUDED_STARTER_STATUSES:
+                break
+            lap_number = candidate.fields.lap[index]
+            if type(lap_number) is not int or lap_number < 1:
+                break
+            projection = project_meters(candidate.fields.x[index], candidate.fields.y[index], geometry)
+            if projection is None or projection.is_ambiguous:
+                break
+            observations.append((candidate, lap_number, projection))
+        if len(observations) == len(candidates):
+            return _StartupProjection(time_ms, tuple(observations))
+    return None
+
+
+def _startup_spans(distances: Sequence[float], circuit_length_meters: float) -> tuple[float, float]:
+    ordered = tuple(sorted(distances))
+    linear_span = ordered[-1] - ordered[0]
+    circular_gaps = tuple(next_distance - distance for distance, next_distance in zip(ordered, ordered[1:]))
+    circular_gaps += (circuit_length_meters - ordered[-1] + ordered[0],)
+    return linear_span, circuit_length_meters - max(circular_gaps)
+
+
+def _startup_split_index(distances: Sequence[float], circuit_length_meters: float) -> int | None:
+    """Return the grid prefix to offset when one origin-sized jump is present."""
+    threshold = circuit_length_meters * (1.0 - _MAX_CIRCULAR_SPAN_FRACTION)
+    jumps = [
+        index + 1
+        for index, (previous, current) in enumerate(zip(distances, distances[1:]))
+        if abs(previous - current) >= threshold
+    ]
+    if len(jumps) != 1 or not 0 < jumps[0] < len(distances):
+        return None
+    split_index = jumps[0]
+    if any(
+        previous <= current
+        for index, (previous, current) in enumerate(zip(distances, distances[1:]))
+        if index != split_index - 1
+    ):
+        return None
+    return split_index
+
+
+def _derive_live_fields(
+    snapshot, geometry, drivers, timeline, terminal_end_times, finish_end_times=None, *,
+    startup_plan: _StartupSeedPlan | None = None,
+    pit_lane_starts: Mapping[str, int] | None = None,
+):
     finish_end_times = {} if finish_end_times is None else finish_end_times
-    geometry = _projection_geometry(track_assets)
+    pit_lane_starts = {} if pit_lane_starts is None else pit_lane_starts
     result_statuses = {row["driver_id"]: row["status"] for row in snapshot.frames["results"].to_dicts()}
     states = {driver_id: ProgressState() for driver_id in drivers}
     distances = {driver_id: [] for driver_id in drivers}
     gaps = {driver_id: [] for driver_id in drivers}
     positions = {driver_id: [] for driver_id in drivers}
     ranking_frames = []
+    startup_index = None if startup_plan is None else timeline.index(startup_plan.timestamp_ms)
     for index, time_ms in enumerate(timeline):
         inputs = []
         for driver_id, fields in drivers.items():
@@ -355,10 +574,48 @@ def _derive_live_fields(snapshot, track_assets, drivers, timeline, terminal_end_
                 terminal_end_times.get(driver_id), time_ms,
                 finish_end_time=finish_end_times.get(driver_id),
             )
+            pit_out_time = pit_lane_starts.get(driver_id)
+            awaiting_pit_lane_start = (
+                pit_out_time is not None and states[driver_id].last_valid_progress_meters is None
+            )
+            if awaiting_pit_lane_start and time_ms < pit_out_time:
+                mode = ProgressMode.PIT
             effective_lap = lap
             if effective_lap is None and mode in (ProgressMode.FINISHED, ProgressMode.RETIRED, ProgressMode.OUT):
                 effective_lap = states[driver_id].last_lap_number
-            if effective_lap is None:
+            seed = None if startup_plan is None else startup_plan.seeds.get(driver_id)
+            if awaiting_pit_lane_start and time_ms >= cast(int, pit_out_time) and mode is ProgressMode.ACTIVE:
+                projection = project_meters(fields.x[index], fields.y[index], geometry)
+                if projection is None:
+                    update = None
+                elif effective_lap is None:
+                    update = None
+                else:
+                    distance = projection.track_distance_meters
+                    progress = effective_lap * geometry.circuit_length_meters + distance
+                    state = ProgressState(
+                        last_session_time_ms=time_ms,
+                        last_lap_number=effective_lap,
+                        last_track_distance_meters=distance,
+                        last_valid_progress_meters=progress,
+                        last_valid_time_ms=time_ms,
+                        within_lap_wrap_count=1,
+                        within_lap_offset_meters=geometry.circuit_length_meters,
+                    )
+                    states[driver_id] = state
+                    update = ProgressUpdate(
+                        state, mode, distance, progress, False, False, ProgressReason.ACTIVE,
+                    )
+            elif awaiting_pit_lane_start:
+                update = None
+            elif startup_index is not None and index < startup_index:
+                update = None
+            elif startup_index == index and seed is not None:
+                if mode is not ProgressMode.ACTIVE or effective_lap is None:
+                    raise ValueError("dynamic ranking rejected: startup seed is not an active lap observation")
+                update = seed.update
+                states[driver_id] = seed.state
+            elif effective_lap is None:
                 update = None
             else:
                 projection = project_meters(fields.x[index], fields.y[index], geometry, previous_track_distance_meters=states[driver_id].last_track_distance_meters)
