@@ -53,10 +53,10 @@ test('formats FIA-style incident headings and identifies penalties', () => {
   })
 })
 
-test('renders an active transient race-control message without treating sampled events as messages', () => {
+test('renders an active transient race-control message with FIA branding without treating sampled events as messages', () => {
   const historical = event(500, 'flag', 'Historical event not crossed by this controller')
   const crossed = event(1_200, 'pass', 'Driver completed an overtake')
-  render(<RaceControlPanel snapshot={{
+  const { container } = render(<RaceControlPanel snapshot={{
     ...baseSnapshot,
     replay: { ...baseSnapshot.replay!, trackStatusCode: 4, weatherState: 'clear', events: [historical] },
   }} activeMessage={crossed} isMessageExiting={false} />)
@@ -67,4 +67,7 @@ test('renders an active transient race-control message without treating sampled 
   expect(screen.getByText('DRIVER COMPLETED AN OVERTAKE')).toBeTruthy()
   expect(screen.getByText('RACE CONTROL: PASS')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Race control message' })).toBeTruthy()
+  const logo = container.querySelector<HTMLImageElement>('.race-control-panel__fia-logo')
+  expect(logo?.getAttribute('src')).toContain('fia.png')
+  expect(logo?.getAttribute('aria-hidden')).toBe('true')
 })

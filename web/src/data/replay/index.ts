@@ -1,4 +1,5 @@
 export { sha256Hex } from './digest'
+export { parseLapSectorSidecar, parsePitLossModel, parseStintSummary } from './guards'
 export { loadReplayData, loadReplayIndex } from './loader'
 export { assertSafeRelativePath, createFetchSource, resolveRelativePath } from './source'
 export type * from './types'

@@ -1,5 +1,5 @@
 import { verifyDigest } from './digest'
-import { parseChunk, parseManifest, parsePointer, parseTimelineSummary, parseTrackAssets } from './guards'
+import { parseChunk, parseLapSectorSidecar, parseManifest, parsePitLossModel, parsePointer, parseStintSummary, parseTimelineSummary, parseTrackAssets } from './guards'
 import { assertSafeRelativePath, readJson, resolveRelativePath } from './source'
 import type { ChunkReference, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary } from './types'
 
@@ -22,9 +22,22 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
   if (manifest.trackAssets.sha256) await verifyDigest(trackBytes, manifest.trackAssets.sha256)
   const trackAssets = parseTrackAssets(decodeJson(trackBytes, trackPath))
   if (trackAssets.fixtureId !== manifest.fixtureId) throw new Error('Track assets and manifest fixture identities disagree')
-  const timelineSummary = manifest.timelineSummary === undefined
-    ? undefined
-    : await loadTimelineSummary(options.source, manifestPath, manifest)
+  const [timelineSummary, lapSectorSidecar, stintSummary, pitLossModel] = await Promise.all([
+    manifest.timelineSummary === undefined
+      ? Promise.resolve(undefined)
+      : loadTimelineSummary(options.source, manifestPath, manifest),
+    loadOptionalSidecar(options.source, manifestPath, manifest.lapSectorSidecar, parseLapSectorSidecar, (sidecar) => {
+      validateSidecarIdentity(manifest, sidecar, 'Lap sector sidecar')
+      validateSidecarDrivers(manifest, sidecar, 'Lap sector sidecar')
+    }),
+    loadOptionalSidecar(options.source, manifestPath, manifest.stintSummary, parseStintSummary, (summary) => {
+      validateSidecarIdentity(manifest, summary, 'Stint summary')
+      validateSidecarDrivers(manifest, summary, 'Stint summary')
+    }),
+    loadOptionalSidecar(options.source, manifestPath, manifest.pitLossModel, parsePitLossModel, (model) => {
+      validateSidecarIdentity(manifest, model, 'Pit loss model')
+    }),
+  ])
 
   const loadChunk = async (sequence: number): Promise<ReplayChunk> => {
     const reference = manifest.chunks[sequence - 1]
@@ -42,13 +55,58 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
     validateBundle(manifest, chunks)
     return Object.freeze(chunks)
   }
-  return Object.freeze({ ...(pointer ? { pointer } : {}), manifest, trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), loadChunk, loadAllChunks })
+  return Object.freeze({
+    ...(pointer ? { pointer } : {}),
+    manifest,
+    trackAssets,
+    ...(timelineSummary === undefined ? {} : { timelineSummary }),
+    ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }),
+    ...(stintSummary === undefined ? {} : { stintSummary }),
+    ...(pitLossModel === undefined ? {} : { pitLossModel }),
+    loadChunk,
+    loadAllChunks,
+  })
 }
 
 export async function loadReplayData(options: LoadReplayDataOptions): Promise<ReplayData> {
   const index = await loadReplayIndex(options)
   const chunks = await index.loadAllChunks()
-  return Object.freeze({ ...(index.pointer ? { pointer: index.pointer } : {}), manifest: index.manifest, trackAssets: index.trackAssets, ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }), chunks })
+  return Object.freeze({
+    ...(index.pointer ? { pointer: index.pointer } : {}),
+    manifest: index.manifest,
+    trackAssets: index.trackAssets,
+    ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }),
+    ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }),
+    ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }),
+    ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }),
+    chunks,
+  })
+}
+
+async function loadOptionalSidecar<T extends { readonly fixtureId: string }>(
+  source: ReplaySource,
+  manifestPath: string,
+  reference: { readonly path: string; readonly sha256: string } | undefined,
+  parse: (value: unknown) => T,
+  validate: (value: T) => void,
+): Promise<T | undefined> {
+  if (reference === undefined) return undefined
+  const path = resolveRelativePath(manifestPath, reference.path)
+  const bytes = await source.read(path)
+  await verifyDigest(bytes, reference.sha256)
+  const sidecar = parse(decodeJson(bytes, path))
+  validate(sidecar)
+  return sidecar
+}
+
+function validateSidecarIdentity<T extends { readonly fixtureId: string }>(manifest: ReplayManifest, sidecar: T, label: string): void {
+  if (sidecar.fixtureId !== manifest.fixtureId) throw new Error(`${label} and manifest fixture identities disagree`)
+}
+
+function validateSidecarDrivers<T extends { readonly drivers: Readonly<Record<string, unknown>> }>(manifest: ReplayManifest, sidecar: T, label: string): void {
+  const expected = new Set(manifest.drivers.map(({ id }) => id))
+  const actual = Object.keys(sidecar.drivers)
+  if (actual.length !== expected.size || actual.some((driverId) => !expected.has(driverId))) throw new Error(`${label} drivers disagree with manifest`)
 }
 
 async function loadTimelineSummary(source: ReplaySource, manifestPath: string, manifest: ReplayManifest): Promise<TimelineSummary> {

@@ -44,6 +44,55 @@ export interface PitLossModelReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface LapSectorDriverColumns {
+  readonly lapNumber: readonly number[]
+  readonly lapStartMs: readonly number[]
+  readonly lapEndMs: readonly number[]
+  readonly lapDurationMs: readonly (number | null)[]
+  readonly sector1DurationMs: readonly (number | null)[]
+  readonly sector2DurationMs: readonly (number | null)[]
+  readonly sector3DurationMs: readonly (number | null)[]
+  readonly sector1SessionTimeMs: readonly (number | null)[]
+  readonly sector2SessionTimeMs: readonly (number | null)[]
+  readonly sector3SessionTimeMs: readonly (number | null)[]
+}
+
+export interface LapSectorSidecar {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly drivers: Readonly<Record<string, LapSectorDriverColumns>>
+}
+
+export interface StintDriverColumns {
+  readonly stintNumber: readonly number[]
+  readonly compound: readonly (string | null)[]
+  readonly startLap: readonly number[]
+  readonly endLap: readonly (number | null)[]
+  readonly startTimeMs: readonly (number | null)[]
+  readonly endTimeMs: readonly (number | null)[]
+  readonly tyreLifeAtStart: readonly (number | null)[]
+  readonly isFreshTyre: readonly (boolean | null)[]
+  readonly pitInTimeMs: readonly (number | null)[]
+  readonly pitOutTimeMs: readonly (number | null)[]
+}
+
+export interface StintSummary {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly drivers: Readonly<Record<string, StintDriverColumns>>
+}
+
+export interface PitLossModel {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly method: 'global-prior-weighted-mean-v1'
+  readonly baselineMs: number
+  readonly priorWeight: number
+  readonly timeMs: readonly number[]
+  readonly estimatedLossMs: readonly number[]
+  readonly observedSampleCount: readonly number[]
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -185,6 +234,9 @@ export interface ReplayData {
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
   readonly timelineSummary?: TimelineSummary
+  readonly lapSectorSidecar?: LapSectorSidecar
+  readonly stintSummary?: StintSummary
+  readonly pitLossModel?: PitLossModel
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -193,6 +245,9 @@ export interface ReplayIndex {
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
   readonly timelineSummary?: TimelineSummary
+  readonly lapSectorSidecar?: LapSectorSidecar
+  readonly stintSummary?: StintSummary
+  readonly pitLossModel?: PitLossModel
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

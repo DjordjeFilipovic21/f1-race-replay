@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import fiaLogo from '../../../assets/fia/fia.png'
 import type { ReplayEvent } from '../../../data/replay/types'
 import type { ReplayControllerSnapshot } from '../../../engine/replay'
 import { formatTrackStatus } from './track-status'
@@ -37,8 +38,11 @@ export const RaceControlPanel = memo(function RaceControlPanel({ snapshot, activ
       {message !== null && (
         <section className="race-control-panel__message-region" aria-label="Race control message">
           <article className={`race-control-panel__message${message.isPenalty ? ' race-control-panel__message--penalty' : ''}${isMessageExiting ? ' race-control-panel__message--exiting' : ''}`} aria-live="polite" data-state={isMessageExiting ? 'exiting' : 'active'}>
-            <p className="race-control-panel__message-headline">{message.headline}</p>
-            <p className="race-control-panel__message-copy">{message.detail}</p>
+            <img className="race-control-panel__fia-logo" src={fiaLogo} alt="" aria-hidden="true" />
+            <div className="race-control-panel__message-content">
+              <p className="race-control-panel__message-headline">{message.headline}</p>
+              <p className="race-control-panel__message-copy">{message.detail}</p>
+            </div>
           </article>
         </section>
       )}

@@ -1,4 +1,4 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy'
 
 const DESKTOP_WORKSPACE_COLUMNS = 4
 
@@ -9,10 +9,23 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   'race-control': 1,
   driver: 1,
   telemetry: 2,
+  'lap-analysis': 1,
+  strategy: 2,
+}
+
+const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
+  player: 1,
+  'track-map': 2,
+  leaderboard: 4,
+  'race-control': 1,
+  driver: 1,
+  telemetry: 1,
+  'lap-analysis': 1,
+  strategy: 1,
 }
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy'
 }
 
 export interface ReplayPanelLayoutItem {
@@ -28,7 +41,7 @@ export interface ReplayPanelDragCommit {
 }
 
 export function defaultReplayPanelColumn(id: ReplayPanelId): number {
-  return id === 'track-map' ? 2 : id === 'leaderboard' ? 4 : 1
+  return REPLAY_PANEL_DEFAULT_COLUMNS[id]
 }
 
 export function replayPanelColumns(id: ReplayPanelId): 1 | 2 {
