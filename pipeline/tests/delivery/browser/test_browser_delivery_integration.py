@@ -397,6 +397,215 @@ def test_passing_quality_assessment_derives_dynamic_positions_gaps_and_overlap_w
     assert snapshot.frames["position_telemetry"].equals(frames["position_telemetry"])
 
 
+def test_startup_guard_does_not_mix_asynchronous_per_driver_samples(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _asynchronous_startup_grid_frames()
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 4_000) == ("NOR", "RUS", "TSU", "OCO")
+
+
+def test_origin_split_seeds_dynamic_leaderboard_in_grid_order(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 380.0, "TSU": 370.0, "OCO": 10.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU", "OCO")
+    assert _leaderboard_value(delivery, 5_000) == ("NOR", "RUS", "TSU", "OCO")
+
+
+def test_origin_split_excludes_a_pit_lane_starter_from_grid_calibration(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({
+        "NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0, "SAI": 299.0,
+    })
+    _add_pit_lane_start(frames, "SAI", 15_000)
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0)[:4] == ("NOR", "RUS", "TSU", "OCO")
+
+
+def test_pit_lane_starter_joins_live_progress_after_pit_out(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0, "PER": 380.0, "SAI": 299.0},
+        position_samples={
+            "NOR": ((0, 30.0), (600, 100.0)),
+            "RUS": ((0, 20.0), (600, 90.0)),
+            "TSU": ((0, 10.0), (600, 80.0)),
+            "OCO": ((0, 390.0), (600, 35.0)),
+            "PER": ((0, 380.0), (600, 20.0)),
+            "SAI": ((0, 299.0), (600, 25.0)),
+        },
+    )
+    _add_pit_lane_start(frames, "SAI", 500)
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    order = _leaderboard_value(delivery, 600)
+    assert order.index("SAI") < order.index("PER")
+    assert _driver_value(delivery, "SAI", "position", 600) == 5
+
+
+def test_origin_split_seeds_progress_state_once_at_the_shared_startup_frame(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+    captured = {}
+    original = delivery_orchestration._derive_live_fields
+
+    def capture(*args, startup_plan=None, **kwargs):
+        captured["plan"] = startup_plan
+        return original(*args, startup_plan=startup_plan, **kwargs)
+
+    monkeypatch.setattr(delivery_orchestration, "_derive_live_fields", capture)
+
+    build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    plan = captured["plan"]
+    assert plan.timestamp_ms == 0
+    assert plan.seeds["NOR"].state.last_valid_progress_meters == 430.0
+    assert plan.seeds["NOR"].state.last_valid_time_ms == 0
+    assert plan.seeds["NOR"].state.within_lap_wrap_count == 1
+    assert plan.seeds["NOR"].state.within_lap_offset_meters == 400.0
+    assert plan.seeds["OCO"].state.last_valid_progress_meters == 390.0
+    assert plan.seeds["OCO"].state.within_lap_wrap_count == 0
+    assert plan.seeds["OCO"].state.within_lap_offset_meters == 0.0
+
+
+def test_three_starter_origin_split_seeds_dynamic_leaderboard_in_grid_order(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 380.0, "TSU": 10.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU")
+
+
+def test_origin_split_rejects_inconsistent_projected_grid_order(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 10.0, "TSU": 380.0, "OCO": 370.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    with pytest.raises(BrowserDeliveryBuildError, match="projected ordering"):
+        build_browser_delivery(
+            read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+            quality_assessor=lambda *_: _assessment(True),
+        )
+
+
+def test_origin_split_rejects_duplicate_grid_positions(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"NOR": 390.0, "RUS": 380.0, "TSU": 370.0, "OCO": 10.0},
+        grid_positions={"NOR": 1, "RUS": 1, "TSU": 3, "OCO": 4},
+    )
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    with pytest.raises(BrowserDeliveryBuildError, match="not unique"):
+        build_browser_delivery(
+            read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+            quality_assessor=lambda *_: _assessment(True),
+        )
+
+
+def test_origin_split_rejects_a_non_compact_projected_pack(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 250.0, "TSU": 100.0, "OCO": 10.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    with pytest.raises(BrowserDeliveryBuildError, match="not a compact circular grid"):
+        build_browser_delivery(
+            read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+            quality_assessor=lambda *_: _assessment(True),
+        )
+
+
+def test_dns_starter_is_excluded_before_origin_split_reconciliation(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"NOR": 390.0, "RUS": 380.0, "TSU": 370.0, "OCO": 10.0},
+        result_statuses={"OCO": "Did not start"},
+    )
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU")
+    assert _driver_value(delivery, "OCO", "status", 0) == "OUT"
+
+
+def test_origin_split_handles_an_immediate_rear_side_wrap_without_a_ranking_jump(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0},
+        position_samples={
+            "NOR": ((0, 30.0), (100, 31.0)),
+            "RUS": ((0, 20.0), (100, 21.0)),
+            "TSU": ((0, 10.0), (100, 11.0)),
+            "OCO": ((0, 390.0), (100, 10.0)),
+        },
+    )
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU", "OCO")
+    assert _leaderboard_value(delivery, 100) == ("NOR", "RUS", "TSU", "OCO")
+    assert _driver_value(delivery, "OCO", "track_distance_meters", 100) == 10.0
+
+
+def test_compact_startup_grid_with_trustworthy_origin_publishes_p1_to_p4_order(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames({"NOR": 130.0, "RUS": 120.0, "TSU": 110.0, "OCO": 95.0})
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert delivery.chunks[0].leaderboard_order[0] == ("NOR", "RUS", "TSU", "OCO")
+
+
 def test_leader_lap_starts_follow_leader_changes_without_duplicate_or_regressing_markers() -> None:
     fields = {
         "HAM": _browser_fields("HAM", (1, 2, 2, 1)),
@@ -638,6 +847,112 @@ def _assessment(passed: bool) -> ProjectionQualityAssessment:
         20 if passed else 0, 500 if passed else 0, 0.0 if passed else None, 0.0 if passed else None,
         0, 0, 0, 0, None, None,
     )
+
+
+def _startup_grid_frames(
+    distances: dict[str, float], *, result_statuses: dict[str, str] | None = None,
+    position_samples: dict[str, tuple[tuple[int, float], ...]] | None = None,
+    grid_positions: dict[str, int] | None = None,
+) -> dict[str, pl.DataFrame]:
+    drivers = tuple(distances)
+    frames = _canonical_frames(lap_one_rows=tuple((driver, 0) for driver in ("HAM", *drivers[1:])))
+    for table, frame in frames.items():
+        expressions = []
+        if "driver_id" in frame.columns:
+            expressions.append(
+                pl.when(pl.col("driver_id") == "HAM").then(pl.lit(drivers[0])).otherwise(pl.col("driver_id")).alias("driver_id")
+            )
+        if "source_driver_key" in frame.columns:
+            expressions.append(
+                pl.when(pl.col("source_driver_key") == "HAM").then(pl.lit(drivers[0])).otherwise(pl.col("source_driver_key")).alias("source_driver_key")
+            )
+        if expressions:
+            frames[table] = frame.with_columns(expressions)
+
+    grid_position = pl.col("grid_position")
+    positions = grid_positions or {driver: index for index, driver in enumerate(drivers, start=1)}
+    for driver, position in positions.items():
+        grid_position = pl.when(pl.col("driver_id") == driver).then(pl.lit(position).cast(pl.Int16)).otherwise(grid_position)
+    frames["results"] = frames["results"].with_columns(grid_position.alias("grid_position"))
+    if result_statuses:
+        status = pl.col("status")
+        for driver, value in result_statuses.items():
+            status = pl.when(pl.col("driver_id") == driver).then(pl.lit(value)).otherwise(status)
+        frames["results"] = frames["results"].with_columns(status.alias("status"))
+    position_samples = position_samples or {
+        driver: tuple((time_ms, distance) for time_ms in (0, 5_000, 10_000, 20_000))
+        for driver, distance in distances.items()
+    }
+    frames["position_telemetry"] = pl.DataFrame([
+        _row(
+            "position_telemetry", driver_id=driver, source_driver_key=driver, session_time_ms=time_ms,
+            x=x, y=y, status="OnTrack",
+        )
+        for driver in sorted(distances)
+        for time_ms, distance in position_samples[driver]
+        for x, y in (_square_position(distance),)
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True)
+    return frames
+
+
+def _add_pit_lane_start(
+    frames: dict[str, pl.DataFrame], driver_id: str, pit_out_time_ms: int,
+) -> None:
+    is_start_lap = (pl.col("driver_id") == driver_id) & (pl.col("lap_number") == 1)
+    frames["laps"] = frames["laps"].with_columns(
+        pl.when(is_start_lap)
+        .then(pl.lit(1).cast(pl.Int16))
+        .otherwise(pl.col("stint_number"))
+        .alias("stint_number"),
+        pl.when(is_start_lap)
+        .then(pl.lit(pit_out_time_ms).cast(pl.Int64))
+        .otherwise(pl.col("pit_out_time_ms"))
+        .alias("pit_out_time_ms"),
+    )
+    pit_lane_stint = pl.DataFrame(
+        [_row("stints", driver_id=driver_id, stint_number=1, start_lap_number=1)],
+        schema=dict(CANONICAL_TABLE_SCHEMAS["stints"]),
+        strict=True,
+    )
+    frames["stints"] = pl.concat([frames["stints"], pit_lane_stint]).sort(
+        "session_id", "driver_id", "stint_number",
+    )
+
+
+def _asynchronous_startup_grid_frames() -> dict[str, pl.DataFrame]:
+    frames = _startup_grid_frames({"NOR": 130.0, "RUS": 120.0, "TSU": 110.0, "OCO": 95.0})
+    startup_samples = {
+        "NOR": ((0, 390.0), (4_000, 130.0)),
+        "RUS": ((1_000, 380.0), (4_000, 120.0)),
+        "TSU": ((2_000, 370.0), (4_000, 110.0)),
+        "OCO": ((3_000, 10.0), (4_000, 95.0)),
+    }
+    rows = [
+        _row(
+            "position_telemetry", driver_id=driver, source_driver_key=driver,
+            session_time_ms=time_ms, x=x, y=y, status="OnTrack",
+        )
+        for driver, samples in startup_samples.items()
+        for time_ms, distance in samples
+        for x, y in (_square_position(distance),)
+    ]
+    rows.sort(key=lambda row: (row["session_id"], row["driver_id"], row["session_time_ms"]))
+    frames["position_telemetry"] = pl.DataFrame(
+        rows, schema=dict(CANONICAL_TABLE_SCHEMAS["position_telemetry"]), strict=True,
+    )
+    return frames
+
+
+def _square_position(distance: float) -> tuple[float, float]:
+    if distance <= 100.0:
+        point = (distance, 0.0)
+    elif distance <= 200.0:
+        point = (100.0, distance - 100.0)
+    elif distance <= 300.0:
+        point = (300.0 - distance, 100.0)
+    else:
+        point = (0.0, 400.0 - distance)
+    return point[0] * 10.0, point[1] * 10.0
 
 
 def _live_frames(*, result_statuses: dict[str, str] | None = None) -> dict[str, pl.DataFrame]:

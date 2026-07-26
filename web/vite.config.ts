@@ -8,7 +8,9 @@ const localReplayRoot = fileURLToPath(new URL('../artifacts/seasons/2024/browser
 export default defineConfig(({ command, mode }) => {
   const environment = loadEnv(mode, process.cwd(), '')
   const configuredReplayBase = process.env.VITE_REPLAY_DATA_BASE_URL ?? environment.VITE_REPLAY_DATA_BASE_URL
-  const replayDataBaseUrl = configuredReplayBase || (command === 'serve' ? `/@fs${localReplayRoot}/` : '/replay-data/')
+  const replayDataBaseUrl = command === 'serve'
+    ? `/@fs${localReplayRoot}/`
+    : configuredReplayBase || '/replay-data/'
 
   return {
     plugins: [react()],

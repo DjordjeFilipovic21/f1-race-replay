@@ -67,6 +67,31 @@ def test_quality_gate_rejects_a_second_otherwise_valid_geometric_wrap():
     assert assessment.invalid_or_multiple_wrap_laps == 1
 
 
+def test_quality_gate_accepts_two_wraps_only_at_lap_window_boundaries():
+    assessment = assess_projection_quality(_snapshot(boundary_wrap=True), _assets())
+
+    assert assessment.passed is True
+    assert assessment.accepted_geometric_wraps == 21
+    assert assessment.invalid_or_multiple_wrap_laps == 0
+    assert assessment.post_unwrap_backward_jumps == 0
+
+
+def test_quality_gate_rejects_three_geometric_wraps_even_when_two_are_boundary_wraps():
+    assessment = assess_projection_quality(_snapshot(triple_wrap=True), _assets())
+
+    assert assessment.passed is False
+    assert assessment.invalid_or_multiple_wrap_laps == 1
+    assert "invalid or multiple geometric wraps" in assessment.reasons
+
+
+def test_quality_gate_rejects_two_interior_geometric_wraps():
+    assessment = assess_projection_quality(_snapshot(interior_multiple_wrap=True), _assets())
+
+    assert assessment.passed is False
+    assert assessment.invalid_or_multiple_wrap_laps == 1
+    assert "invalid or multiple geometric wraps" in assessment.reasons
+
+
 @pytest.mark.parametrize("assets", [
     {**_assets(), "fixtureId": "another-race"},
     {**_assets(), "centerLine": [{"x": 0.0, "y": 0.0}] * 4},
@@ -89,7 +114,11 @@ def test_quality_assessment_is_immutable_and_deterministic_without_canonical_mut
         setattr(first, "passed", False)
 
 
-def _snapshot(*, holdouts=20, points_per_lap=32, offset_holdout_x=0.0, invalid_wrap=False, multiple_wrap=False):
+def _snapshot(
+    *, holdouts=20, points_per_lap=32, offset_holdout_x=0.0, invalid_wrap=False,
+    multiple_wrap=False, boundary_wrap=False, triple_wrap=False,
+    interior_multiple_wrap=False,
+):
     laps = [_lap("SRC", 1, 0, 1_000, 900)]
     rows = _position_rows("SRC", 0, points_per_lap)
     for index in range(holdouts):
@@ -101,7 +130,21 @@ def _snapshot(*, holdouts=20, points_per_lap=32, offset_holdout_x=0.0, invalid_w
             distances = (300.0, 50.0, *range(60, 360, 10))
         if multiple_wrap and index == 0:
             distances = (390.0, 2.0, 390.0, 2.0, *range(10, 290, 10))
-        rows.extend(_position_rows(driver, start, points_per_lap, offset_holdout_x, distances))
+        if boundary_wrap and index == 0:
+            distances = (390.0, 2.0, *range(10, 290, 10), 390.0, 2.0)
+        if triple_wrap and index == 0:
+            distances = (390.0, 2.0, 390.0, 2.0, 390.0, 2.0, *range(10, 270, 10))
+        if interior_multiple_wrap and index == 0:
+            distances = (
+                10.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 340.0, 370.0, 390.0,
+                2.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 340.0, 370.0, 390.0,
+                2.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 340.0, 370.0, 390.0,
+                395.0, 398.0,
+            )
+        rows.extend(_position_rows(
+            driver, start, points_per_lap, offset_holdout_x, distances,
+            duration_ms=1_000 if boundary_wrap or interior_multiple_wrap else None,
+        ))
     laps.append(_lap("PIT", 99, 300_000, 301_000, 1_200, pit_in_time_ms=300_500))
     rows.extend(_position_rows("PIT", 300_000, points_per_lap, 15.0))
     return CanonicalGenerationSnapshot("generation", "a" * 64, {
@@ -120,11 +163,16 @@ def _lap(driver, number, start, end, duration, *, pit_in_time_ms=None):
     }
 
 
-def _position_rows(driver, start, count, offset_x=0.0, distances=None):
+def _position_rows(driver, start, count, offset_x=0.0, distances=None, duration_ms=None):
     distances = distances or tuple(index * 400.0 / (count - 1) for index in range(count))
+    timestamps = (
+        (start + index + 1 for index in range(len(distances)))
+        if duration_ms is None
+        else (start + round((index + 1) * duration_ms / (len(distances) + 1)) for index in range(len(distances)))
+    )
     return [
-        {"driver_id": driver, "session_time_ms": start + index + 1, "x": (x + offset_x) * 10.0, "y": y * 10.0}
-        for index, distance in enumerate(distances)
+        {"driver_id": driver, "session_time_ms": timestamp, "x": (x + offset_x) * 10.0, "y": y * 10.0}
+        for timestamp, distance in zip(timestamps, distances, strict=True)
         for x, y in (_point_at_distance(float(distance)),)
     ]
 
