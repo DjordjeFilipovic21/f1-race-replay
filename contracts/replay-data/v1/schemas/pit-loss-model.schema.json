@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+  "title": "Browser pit-loss model",
+  "description": "Compact optional causal pit-loss estimate timeline for browser replay.",
+  "type": "object",
+  "additionalProperties": false,
+  "$comment": "Equal array lengths, strict time ordering, and cumulative sample counts are validated by the Python model and publication layer because Draft 2020-12 cannot express those relationships portably.",
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "method",
+    "baselineMs",
+    "priorWeight",
+    "timeMs",
+    "estimatedLossMs",
+    "observedSampleCount"
+  ],
+  "$defs": {
+    "signedInt64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positiveSignedInt64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "pitLossModelFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "pit-loss-model.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "method": {
+      "const": "global-prior-weighted-mean-v1"
+    },
+    "baselineMs": {
+      "$ref": "#/$defs/positiveSignedInt64"
+    },
+    "priorWeight": {
+      "$ref": "#/$defs/positiveSignedInt64"
+    },
+    "timeMs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/signedInt64"
+      }
+    },
+    "estimatedLossMs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/signedInt64"
+      }
+    },
+    "observedSampleCount": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/signedInt64"
+      }
+    }
+  }
+}

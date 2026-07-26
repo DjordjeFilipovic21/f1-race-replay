@@ -17,6 +17,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserLapSectorSidecar,
     BrowserManifest,
     BrowserLapStart,
+    BrowserPitLossModel,
     BrowserStintSummary,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
@@ -26,6 +27,10 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
 from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import build_pit_loss_timeline
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
+    extract_eligible_pit_loss_observations,
+)
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import build_stint_summary
 from f1_replay_pipeline.analysis.live_position.live_position_progress import ProgressMode, ProgressState, advance_progress
 from f1_replay_pipeline.analysis.live_position.live_position_projection import ProjectionGeometry, ProjectionGeometryError, project_meters
@@ -53,6 +58,7 @@ class BrowserDeliveryBuild:
     timeline_summary: BrowserTimelineSummary | None = None
     lap_sector_sidecar: BrowserLapSectorSidecar | None = None
     stint_summary: BrowserStintSummary | None = None
+    pit_loss_model: BrowserPitLossModel | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -65,6 +71,8 @@ class BrowserDeliveryBuild:
             raise TypeError("lap_sector_sidecar must be a BrowserLapSectorSidecar or None")
         if self.stint_summary is not None and not isinstance(self.stint_summary, BrowserStintSummary):
             raise TypeError("stint_summary must be a BrowserStintSummary or None")
+        if self.pit_loss_model is not None and not isinstance(self.pit_loss_model, BrowserPitLossModel):
+            raise TypeError("pit_loss_model must be a BrowserPitLossModel or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -80,6 +88,7 @@ def build_browser_delivery(
     quality_assessor: ProjectionQualityAssessor = assess_projection_quality,
 ) -> BrowserDeliveryBuild:
     """Derive all contract fields without rereading or mutating canonical data."""
+    pit_loss_model: BrowserPitLossModel | None = None
     try:
         session = snapshot.frames["session_metadata"].row(0, named=True)
         fixture_id = cast(str, session["session_id"])
@@ -125,18 +134,29 @@ def build_browser_delivery(
         timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
         lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
         stint_summary = build_stint_summary(snapshot)
+        observations = extract_eligible_pit_loss_observations(
+            stint_summary=stint_summary,
+            drivers=drivers,
+            leaderboard_order=globals_.leaderboard_order,
+            track_status_code=globals_.track_status_code,
+            quality_gate_passed=assessment.passed,
+        )
+        pit_loss_model = build_pit_loss_timeline(
+            race_start_ms, observations, fixture_id=fixture_id,
+        )
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
             _driver_metadata(snapshot),
             lap_starts,
             stint_summary=None,
+            pit_loss_model=None,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
-        stint_summary,
+        stint_summary, pit_loss_model,
     )
 
 

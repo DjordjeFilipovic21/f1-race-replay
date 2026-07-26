@@ -260,6 +260,85 @@ optional: consumers must accept manifests without `stintSummary`. All existing
 v1 chunks, timeline summaries, sidecars, and navigation markers remain valid
 and replayable.
 
+### Optional pit-loss model
+
+The manifest may include a compact, optional `pitLossModel` reference to a
+sparse causal pit-loss estimate artifact:
+
+```json
+"pitLossModel": {
+  "path": "pit-loss-model.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `pit-loss-model.json` is a `v1` object using
+`"global-prior-weighted-mean-v1"` — an uncalibrated deterministic global
+heuristic, not a track-calibrated model. It emits three aligned arrays,
+strictly increasing by `timeMs`:
+
+```json
+{
+  "contractVersion": "v1",
+  "fixtureId": "2024-sao-paulo-race",
+  "method": "global-prior-weighted-mean-v1",
+  "baselineMs": 22000,
+  "priorWeight": 2,
+  "timeMs": [1000, 1523000, 1678000],
+  "estimatedLossMs": [22000, 21867, 22150],
+  "observedSampleCount": [0, 1, 3]
+}
+```
+
+**Placeholder and refinement.** A placeholder exists from replay start
+before any observed stop. Default model: prior-weighted mean with
+`baselineMs = 22_000`, `priorWeight = 2`. At zero observations the
+estimate is 22,000 ms and `observedSampleCount = 0`. After valid observed
+losses `L`:
+
+`round_half_up((baselineMs * priorWeight + sum(L)) / (priorWeight + len(L)))`
+
+Refinement is causal: a new sample is emitted at the distinct
+`pitOutTimeMs` where all eligible observations completed at that timestamp
+are incorporated. A consumer picks the latest sample with
+`timeMs <= replayTimeMs`.
+
+**Observed loss from one completed eligible stop:**
+
+`observedPitLossMs = gapAfterPitOutMs - gapBeforePitInMs`
+
+Gaps use the latest available sample strictly before or at pit-in and the
+first valid on-track sample at or after pit-out. Integer milliseconds,
+deterministic rounding.
+
+**Eligibility.** A stop refines the estimate only at its `pitOutTimeMs`,
+never earlier, and only when:
+- canonical pit-in and pit-out timestamps form a complete positive interval;
+- before/after gap values are non-null and finite;
+- observed loss is finite and positive;
+- projection/ranking quality gate passed (dynamic gaps trustworthy);
+- track status is all-clear for the full stop interval;
+- the same leader remains leader before and after;
+- the leader is not in the pit lane at the before/after observations or
+  during the stop interval where known;
+- the stopped driver returns on track and is not retired/out/finished at
+  the after sample;
+- mapping from stint-summary pit-in/pit-out data is unique and deterministic.
+
+Lapped cars are allowed when their derived gap is valid and leader identity
+is stable. Exclusion is not a build failure.
+
+**Scope.** The artifact is a sparse global estimate; no per-driver
+predicted-gap array is shipped. Frontend code will later compute
+`predictedGapToLeaderMs = currentGapToLeaderMs + currentPitLossEstimateMs`
+and compare against live gaps for nearest-car-ahead/behind animation. No
+panel, payload loader, or runtime snapshot is included.
+
+**Backward compatibility.** The `pitLossModel` manifest reference is
+optional. Existing deliveries, chunks, and manifests without it remain
+valid and loadable.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

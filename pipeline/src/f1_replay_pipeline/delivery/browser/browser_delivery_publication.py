@@ -19,6 +19,8 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChu
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    MAX_INT64,
+    PIT_LOSS_MODEL_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
 )
@@ -47,6 +49,7 @@ _TRACK_SCHEMA = "urn:f1-cache-replay:schema:replay-data:v1:track-assets"
 _TIMELINE_SUMMARY_SCHEMA = TIMELINE_SUMMARY_SCHEMA_ID
 _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
 _STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
+_PIT_LOSS_MODEL_SCHEMA = PIT_LOSS_MODEL_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 
 _make_contract_validator = jsonschema_rs.Draft202012Validator
@@ -90,6 +93,7 @@ class PublishedBrowserDelivery:
     timeline_summary_path: Path | None = None
     lap_sector_sidecar_path: Path | None = None
     stint_summary_path: Path | None = None
+    pit_loss_model_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -146,11 +150,13 @@ def validate_complete_browser_delivery(
         timeline_reference = manifest.get("timelineSummary")
         sidecar_reference = manifest.get("lapSectorSidecar")
         stint_reference = manifest.get("stintSummary")
+        pit_loss_reference = manifest.get("pitLossModel")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
             *((sidecar_reference,) if sidecar_reference is not None else ()),
             *((stint_reference,) if stint_reference is not None else ()),
+            *((pit_loss_reference,) if pit_loss_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -246,11 +252,17 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         if not isinstance(stint_reference, dict) or stint_reference.get("path") != "stint-summary.json":
             raise BrowserDeliveryPublicationError("manifest stint summary reference is invalid")
         expected_paths.add("stint-summary.json")
+    pit_loss_reference = manifest.get("pitLossModel")
+    if pit_loss_reference is not None:
+        if not isinstance(pit_loss_reference, dict) or pit_loss_reference.get("path") != "pit-loss-model.json":
+            raise BrowserDeliveryPublicationError("manifest pit loss model reference is invalid")
+        expected_paths.add("pit-loss-model.json")
     total = (
         len(chunk_refs) + 2
         + (1 if timeline_reference is not None else 0)
         + (1 if sidecar_reference is not None else 0)
         + (1 if stint_reference is not None else 0)
+        + (1 if pit_loss_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -287,6 +299,16 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_stint_summary_contract(stint_summary, manifest)
         completed += 1
         _emit_validation_progress(emit, completed, total, "stint summary schema")
+    if pit_loss_reference is not None:
+        pit_loss_model = json.loads(encoded["pit-loss-model.json"])
+        if not isinstance(pit_loss_model, dict):
+            raise BrowserDeliveryPublicationError("pit loss model must be a JSON object")
+        _validate_schema_instance(
+            validators["pit-loss-model"], pit_loss_model, "pit loss model",
+        )
+        _validate_pit_loss_model_contract(pit_loss_model, manifest)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "pit loss model schema")
     previous = None
     for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
@@ -319,6 +341,7 @@ def _prepared_artifacts(
         + (2 if summary is not None else 0)
         + (2 if sidecar is not None else 0)
         + (2 if delivery.stint_summary is not None else 0)
+        + (2 if delivery.pit_loss_model is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
@@ -369,6 +392,20 @@ def _prepared_artifacts(
         _emit_validation_progress(emit, completed, total, "stint summary")
         completed += 1
         _emit_validation_progress(emit, completed, total, "stint summary schema")
+
+    pit_loss_model = delivery.pit_loss_model
+    pit_loss_artifact: PreparedArtifact | None = None
+    pit_loss_contract = None
+    if pit_loss_model is not None:
+        pit_loss_contract = _schema_compatible_value(pit_loss_model.as_dict())
+        _validate_schema_instance(
+            validators["pit-loss-model"], pit_loss_contract, "pit loss model",
+        )
+        pit_loss_artifact = _prepare_artifact("pit-loss-model.json", pit_loss_contract)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "pit loss model")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "pit loss model schema")
 
     previous = None
     chunk_artifacts = []
@@ -427,14 +464,27 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest stint summary reference has no stint summary payload"
         )
+    if pit_loss_artifact is not None:
+        manifest["pitLossModel"] = {
+            "path": pit_loss_artifact.path,
+            "schemaId": _PIT_LOSS_MODEL_SCHEMA,
+            "sha256": pit_loss_artifact.sha256,
+        }
+    elif "pitLossModel" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest pit loss model reference has no pit loss model payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest)
     if sidecar_contract is not None:
         _validate_lap_sector_sidecar_contract(sidecar_contract, manifest)
     if stint_contract is not None:
         _validate_stint_summary_contract(stint_contract, manifest)
+    if pit_loss_contract is not None:
+        _validate_pit_loss_model_contract(pit_loss_contract, manifest)
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
+        pit_loss_artifact,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
@@ -445,6 +495,7 @@ def _prepared_artifacts(
         *((timeline_artifact,) if timeline_artifact is not None else ()),
         *((sidecar_artifact,) if sidecar_artifact is not None else ()),
         *((stint_artifact,) if stint_artifact is not None else ()),
+        *((pit_loss_artifact,) if pit_loss_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -483,6 +534,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("lap-sector-sidecar.json")
     if delivery.stint_summary is not None:
         expected_paths.add("stint-summary.json")
+    if delivery.pit_loss_model is not None:
+        expected_paths.add("pit-loss-model.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -494,6 +547,7 @@ def _validate_manifest_contract(
     timeline_artifact: PreparedArtifact | None = None,
     sidecar_artifact: PreparedArtifact | None = None,
     stint_artifact: PreparedArtifact | None = None,
+    pit_loss_artifact: PreparedArtifact | None = None,
 ) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
@@ -529,6 +583,16 @@ def _validate_manifest_contract(
         "sha256": stint_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("stint summary reference disagrees with its payload")
+    pit_loss_reference = manifest.get("pitLossModel")
+    if pit_loss_artifact is None:
+        if pit_loss_reference is not None or delivery.pit_loss_model is not None:
+            raise BrowserDeliveryPublicationError("manifest pit loss model reference disagrees with its payload")
+    elif pit_loss_reference != {
+        "path": pit_loss_artifact.path,
+        "schemaId": _PIT_LOSS_MODEL_SCHEMA,
+        "sha256": pit_loss_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError("pit loss model reference disagrees with its payload")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -641,6 +705,61 @@ def _validate_stint_summary_contract(summary, manifest) -> None:
             raise BrowserDeliveryPublicationError("stint summary stints are not deterministically ordered")
 
 
+def _validate_pit_loss_model_contract(model, manifest) -> None:
+    """Apply the causal timeline guarantees not expressible in JSON Schema."""
+    if (
+        model.get("contractVersion") != "v1"
+        or model.get("fixtureId") != manifest.get("fixtureId")
+        or model.get("method") != "global-prior-weighted-mean-v1"
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model identity disagrees with the manifest")
+    baseline_ms, prior_weight = model.get("baselineMs"), model.get("priorWeight")
+    if any(
+        type(value) is not int or not 1 <= value <= MAX_INT64
+        for value in (baseline_ms, prior_weight)
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model baseline and prior weight are invalid")
+
+    time_ms, estimates, counts = (
+        model.get("timeMs"), model.get("estimatedLossMs"), model.get("observedSampleCount"),
+    )
+    arrays = (time_ms, estimates, counts)
+    if any(not isinstance(values, list) for values in arrays):
+        raise BrowserDeliveryPublicationError("pit loss model timeline arrays are invalid")
+    if not time_ms or any(len(values) != len(time_ms) for values in arrays):
+        raise BrowserDeliveryPublicationError("pit loss model timeline arrays are not aligned")
+    if any(
+        type(value) is not int or not 0 <= value <= MAX_INT64
+        for values in arrays for value in values
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model timeline values are invalid")
+
+    chunks = manifest.get("chunks")
+    if (
+        not isinstance(chunks, list)
+        or not chunks
+        or any(not isinstance(chunk, dict) for chunk in chunks)
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model replay bounds are invalid")
+    replay_start_ms, replay_end_ms = chunks[0].get("startMs"), chunks[-1].get("endMs")
+    if (
+        type(replay_start_ms) is not int
+        or type(replay_end_ms) is not int
+        or not 0 <= replay_start_ms < replay_end_ms <= MAX_INT64
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model replay bounds are invalid")
+    if time_ms[0] != replay_start_ms or any(
+        not replay_start_ms <= value < replay_end_ms for value in time_ms
+    ):
+        raise BrowserDeliveryPublicationError("pit loss model timestamps are outside replay bounds")
+    if any(following <= current for current, following in zip(time_ms, time_ms[1:], strict=False)):
+        raise BrowserDeliveryPublicationError("pit loss model timestamps must be strictly increasing")
+    if estimates[0] != baseline_ms or counts[0] != 0:
+        raise BrowserDeliveryPublicationError("pit loss model initial sample is invalid")
+    if any(following <= current for current, following in zip(counts, counts[1:], strict=False)):
+        raise BrowserDeliveryPublicationError("pit loss model sample counts must strictly increase")
+
+
 def _validate_lap_starts(markers, refs) -> None:
     if any(
         following["lap"] <= current["lap"] or following["startMs"] < current["startMs"]
@@ -660,7 +779,7 @@ def _load_contract_schemas(
     try:
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
-            "browser-lap-sector-sidecar", "stint-summary",
+            "browser-lap-sector-sidecar", "stint-summary", "pit-loss-model",
         ):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
@@ -845,6 +964,11 @@ def _publish_payloads(
         if "stint-summary.json" in digests
         else None
     )
+    pit_loss_model_path = (
+        generation / "pit-loss-model.json"
+        if "pit-loss-model.json" in digests
+        else None
+    )
     return PublishedBrowserDelivery(
         version,
         generation,
@@ -856,6 +980,7 @@ def _publish_payloads(
         timeline_summary_path,
         lap_sector_sidecar_path,
         stint_summary_path,
+        pit_loss_model_path,
     )
 
 

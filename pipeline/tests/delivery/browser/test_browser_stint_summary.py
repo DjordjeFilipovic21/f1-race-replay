@@ -1275,7 +1275,7 @@ class TestStintSummaryPublication:
         manifest_schema = _load_json(SCHEMA_ROOT / "manifest.schema.json")
         schemas = {
             name: _load_json(SCHEMA_ROOT / f"{name}.schema.json")
-            for name in ("manifest", "chunk", "track-assets", "stint-summary")
+            for name in ("manifest", "chunk", "track-assets", "stint-summary", "pit-loss-model")
         }
         registry = Registry()
         for schema in schemas.values():

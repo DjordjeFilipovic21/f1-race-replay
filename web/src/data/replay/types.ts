@@ -38,6 +38,12 @@ export interface StintSummaryReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface PitLossModelReference extends ArtifactReference {
+  readonly path: 'pit-loss-model.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model'
+  readonly sha256: string
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -67,6 +73,7 @@ export interface ReplayManifest {
   readonly timelineSummary?: TimelineSummaryReference
   readonly lapSectorSidecar?: LapSectorSidecarReference
   readonly stintSummary?: StintSummaryReference
+  readonly pitLossModel?: PitLossModelReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]

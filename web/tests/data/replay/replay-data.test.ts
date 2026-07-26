@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { sha256Hex } from '../../../src/data/replay/digest'
-import { parseManifest, parseStintSummaryReference, parseTimelineSummary } from '../../../src/data/replay/guards'
+import { parseManifest, parsePitLossModelReference, parseStintSummaryReference, parseTimelineSummary } from '../../../src/data/replay/guards'
 import { loadReplayData, loadReplayIndex } from '../../../src/data/replay/loader'
 import { assertSafeRelativePath, resolveRelativePath } from '../../../src/data/replay/source'
 import type { ReplaySource } from '../../../src/data/replay/types'
@@ -150,6 +150,26 @@ describe('replay-data v1 loader', () => {
     expect(parsed).toEqual(stintSummaryReference())
     expect(Object.isFrozen(parsed)).toBe(true)
     expect(() => parseStintSummaryReference({ ...valid, extra: 1 })).toThrow('not allowed')
+  })
+
+  test('parses the optional pitLossModel reference with frozen fields', async () => {
+    const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
+    expect(parseManifest(manifest)).not.toHaveProperty('pitLossModel')
+    const reference = pitLossModelReference()
+    manifest.pitLossModel = reference
+    const parsedManifest = parseManifest(manifest)
+
+    expect(parsedManifest.pitLossModel).toEqual(reference)
+    expect(Object.isFrozen(parsedManifest.pitLossModel)).toBe(true)
+  })
+
+  test.each([
+    ['path', { path: 'wrong.json' }, 'pit loss model path is unsupported'],
+    ['schema', { schemaId: 'urn:wrong' }, 'pit loss model schema identity is unsupported'],
+    ['digest', { sha256: 'bad' }, 'sha256 is invalid'],
+    ['extra field', { unexpected: true }, 'not allowed'],
+  ] as const)('rejects a pitLossModel reference with invalid %s', (_field, changes, message) => {
+    expect(() => parsePitLossModelReference({ ...pitLossModelReference(), ...changes })).toThrow(message)
   })
 
   test('rejects a malformed timeline summary and a summary digest mismatch', async () => {
@@ -522,6 +542,14 @@ function stintSummaryReference(): Record<string, string> {
   return {
     path: 'stint-summary.json',
     schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary',
+    sha256: 'a'.repeat(64),
+  }
+}
+
+function pitLossModelReference(): Record<string, string> {
+  return {
+    path: 'pit-loss-model.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model',
     sha256: 'a'.repeat(64),
   }
 }

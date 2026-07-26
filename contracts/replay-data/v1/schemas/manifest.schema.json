@@ -111,6 +111,9 @@
     "stintSummary": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary#/$defs/stintSummaryFileReference"
     },
+    "pitLossModel": {
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model#/$defs/pitLossModelFileReference"
+    },
     "chunks": {
       "type": "array",
       "minItems": 1,

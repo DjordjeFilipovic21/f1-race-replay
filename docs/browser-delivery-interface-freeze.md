@@ -177,3 +177,29 @@ data without duplicating values into replay chunks:
 See [Replay Data Contract — Optional stint summary](replay-data-contract.md#optional-stint-summary)
 for the full contract including pit-mapping semantics, null rules, and
 fail-closed guarantees.
+
+## 9. Optional pit-loss model
+
+A compact optional pit-loss model artifact enables future frontend
+after-pit position prediction without embedding arrays into replay chunks:
+
+- The manifest may carry a `pitLossModel` reference (`path`, `schemaId`,
+  `sha256`) pointing to `pit-loss-model.json`.
+- The artifact supplies a single causal pit-loss estimate timeline using
+  the deterministic `global-prior-weighted-mean-v1` method with a 22 s
+  baseline, prior weight of 2, and `round_half_up` aggregation. At zero
+  observations the estimate is exactly 22 s; refinement is causal at each
+  distinct eligible pit-out timestamp.
+- The estimate is an uncalibrated global heuristic, not track-calibrated.
+  No per-driver predicted-gap array is shipped.
+- The future frontend will compute
+  `predictedGapToLeaderMs = currentGapToLeaderMs + currentPitLossEstimateMs`
+  for nearest-car-ahead/behind animation.
+- **Core chunks are unchanged**: no chunk fields, no version bump.
+- **Backward compatibility**: consumers must accept manifests without
+  `pitLossModel`. All existing v1 chunks, manifests, and optional artifacts
+  remain valid and replayable.
+
+See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#optional-pit-loss-model)
+for the full contract including placeholder semantics, refinement rules,
+eligibility criteria, and causal availability.

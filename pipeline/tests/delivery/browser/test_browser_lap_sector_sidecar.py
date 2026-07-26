@@ -1235,7 +1235,7 @@ class TestSidecarPublication:
         schemas = {
             name: _load_json(SCHEMA_ROOT / f"{name}.schema.json")
             for name in ("manifest", "chunk", "track-assets", "timeline-summary",
-                         "browser-lap-sector-sidecar")
+                         "browser-lap-sector-sidecar", "pit-loss-model")
         }
         registry = Registry()
         for schema in schemas.values():
@@ -1270,7 +1270,7 @@ class TestSidecarPublication:
         schemas = {
             name: _load_json(SCHEMA_ROOT / f"{name}.schema.json")
             for name in ("manifest", "chunk", "track-assets", "timeline-summary",
-                         "browser-lap-sector-sidecar")
+                         "browser-lap-sector-sidecar", "pit-loss-model")
         }
         registry = Registry()
         for schema in schemas.values():

@@ -746,7 +746,7 @@ def _registry() -> tuple[dict[str, object], Registry]:
         name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json")
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
-            "browser-lap-sector-sidecar", "stint-summary",
+            "browser-lap-sector-sidecar", "stint-summary", "pit-loss-model",
         )
     }
     registry = Registry()

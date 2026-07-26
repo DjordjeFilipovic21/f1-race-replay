@@ -19,6 +19,7 @@ FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
 BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
 STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
+PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -430,6 +431,76 @@ class BrowserTimelineSummary:
         }
 
 
+def _validate_signed_int64(value: object, label: str, *, minimum: int | None = None) -> None:
+    """Validate an exact Python integer within the signed Int64 range."""
+    if type(value) is not int or not -(1 << 63) <= value <= MAX_INT64:
+        raise TypeError(f"{label} must be a signed Int64 integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{label} must be at least {minimum}")
+
+
+@dataclass(frozen=True)
+class BrowserPitLossModel:
+    """Immutable causal pit-loss estimates sampled over replay time."""
+
+    fixture_id: str
+    method: str
+    baseline_ms: int
+    prior_weight: int
+    time_ms: tuple[int, ...]
+    estimated_loss_ms: tuple[int, ...]
+    observed_sample_count: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("pit loss model fixture_id must be a non-empty string")
+        if self.method != "global-prior-weighted-mean-v1":
+            raise ValueError("pit loss model method is invalid")
+        _validate_signed_int64(self.baseline_ms, "baseline_ms", minimum=1)
+        _validate_signed_int64(self.prior_weight, "prior_weight", minimum=1)
+
+        time_ms = tuple(self.time_ms)
+        estimated_loss_ms = tuple(self.estimated_loss_ms)
+        observed_sample_count = tuple(self.observed_sample_count)
+        arrays = (time_ms, estimated_loss_ms, observed_sample_count)
+        if not time_ms:
+            raise ValueError("pit loss model arrays must be non-empty")
+        if any(len(values) != len(time_ms) for values in arrays):
+            raise ValueError("pit loss model arrays must be aligned")
+        for value in time_ms:
+            _validate_signed_int64(value, "time_ms", minimum=0)
+        for value in estimated_loss_ms:
+            _validate_signed_int64(value, "estimated_loss_ms", minimum=0)
+        for value in observed_sample_count:
+            _validate_signed_int64(value, "observed_sample_count", minimum=0)
+        if any(following <= current for current, following in zip(time_ms, time_ms[1:], strict=False)):
+            raise ValueError("time_ms must be strictly increasing")
+        if estimated_loss_ms[0] != self.baseline_ms:
+            raise ValueError("first estimated_loss_ms must equal baseline_ms")
+        if observed_sample_count[0] != 0:
+            raise ValueError("first observed_sample_count must be zero")
+        if any(
+            following <= current
+            for current, following in zip(observed_sample_count, observed_sample_count[1:], strict=False)
+        ):
+            raise ValueError("observed_sample_count must strictly increase after the initial sample")
+        object.__setattr__(self, "time_ms", time_ms)
+        object.__setattr__(self, "estimated_loss_ms", estimated_loss_ms)
+        object.__setattr__(self, "observed_sample_count", observed_sample_count)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "method": self.method,
+            "baselineMs": self.baseline_ms,
+            "priorWeight": self.prior_weight,
+            "timeMs": list(self.time_ms),
+            "estimatedLossMs": list(self.estimated_loss_ms),
+            "observedSampleCount": list(self.observed_sample_count),
+        }
+
+
 @dataclass(frozen=True)
 class BrowserArtifactReference:
     """Immutable manifest reference for a digested browser artifact."""
@@ -487,6 +558,18 @@ class BrowserStintSummaryReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserPitLossModelReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional pit-loss model."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "pit-loss-model.json":
+            raise ValueError("pit loss model path must be pit-loss-model.json")
+        if self.schema_id != PIT_LOSS_MODEL_SCHEMA_ID:
+            raise ValueError("pit loss model schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -497,6 +580,7 @@ class BrowserManifest:
     timeline_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     lap_sector_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
     stint_summary: BrowserArtifactReference | Mapping[str, object] | None = None
+    pit_loss_model: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -567,11 +651,28 @@ class BrowserManifest:
             )
         elif stint_summary is not None:
             raise TypeError("stint_summary must be a BrowserArtifactReference or mapping")
+        pit_loss_model = self.pit_loss_model
+        if isinstance(pit_loss_model, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(pit_loss_model) != required:
+                raise ValueError("pit_loss_model must contain path, schemaId, and sha256")
+            pit_loss_model = BrowserPitLossModelReference(
+                cast(str, pit_loss_model["path"]),
+                cast(str, pit_loss_model["schemaId"]),
+                cast(str, pit_loss_model["sha256"]),
+            )
+        elif isinstance(pit_loss_model, BrowserArtifactReference):
+            pit_loss_model = BrowserPitLossModelReference(
+                pit_loss_model.path, pit_loss_model.schema_id, pit_loss_model.sha256,
+            )
+        elif pit_loss_model is not None:
+            raise TypeError("pit_loss_model must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
         object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
         object.__setattr__(self, "stint_summary", stint_summary)
+        object.__setattr__(self, "pit_loss_model", pit_loss_model)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -599,6 +700,10 @@ class BrowserManifest:
             value["stintSummary"] = cast(
                 BrowserArtifactReference, self.stint_summary,
             ).as_dict()
+        if self.pit_loss_model is not None:
+            value["pitLossModel"] = cast(
+                BrowserArtifactReference, self.pit_loss_model,
+            ).as_dict()
         return value
 
 
@@ -607,9 +712,11 @@ __all__ = [
     "BrowserDriverLapSector", "BrowserDriverStintSummary", "BrowserLapSectorSidecar",
     "BrowserLapSectorSidecarReference",
     "BrowserLapStart", "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
-    "BrowserTimelineSummaryReference", "BrowserStintSummary", "BrowserStintSummaryReference",
+    "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
+    "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
-    "STINT_SUMMARY_SCHEMA_ID", "TIMELINE_SUMMARY_SCHEMA_ID", "TimelineSummaryKind",
+    "PIT_LOSS_MODEL_SCHEMA_ID", "STINT_SUMMARY_SCHEMA_ID", "TIMELINE_SUMMARY_SCHEMA_ID",
+    "TimelineSummaryKind",
     "deep_freeze_json",
 ]
