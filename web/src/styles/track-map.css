@@ -13,5 +13,5 @@
 .live-track-map__safety-car-marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 900; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__marker--selected .live-track-map__driver-dot { filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 6px currentColor); }
 .live-track-map__marker--selected text { fill: #f5f6f7; font-weight: 900; }
-.live-track-map__marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.live-track-map__marker text { fill: #111315; font-family: var(--font-display); font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__empty { color: var(--text-muted); font-size: .9rem; }

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 
@@ -47,7 +47,7 @@ vi.mock('@dnd-kit/react/sortable', () => ({
   useSortable: () => ({ handleRef: () => undefined, ref: () => undefined }),
 }))
 
-import { ReplayWorkspace, type ReplayWorkspacePanel } from '../../../../src/features/replay/workspace/ReplayWorkspace'
+import { animateReplayPanelFlip, computeReplayPanelFlipKeyframes, ReplayWorkspace, type ReplayWorkspacePanel } from '../../../../src/features/replay/workspace/ReplayWorkspace'
 
 const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'player', label: 'Player', columns: 1, element: <p>Player content</p> },
@@ -60,8 +60,105 @@ const panels: readonly ReplayWorkspacePanel[] = [
 afterEach(() => {
   cleanup()
   mockDragSource = null
+  vi.useRealTimers()
   vi.restoreAllMocks()
   setViewportWidth(1024)
+})
+
+test('computes a FLIP translation and size correction from the captured rectangles', () => {
+  expect(computeReplayPanelFlipKeyframes(
+    { left: 120, top: 300, width: 200, height: 100 },
+    { left: 100, top: 280, width: 100, height: 50 },
+  )).toEqual([
+    { transform: 'translate(20px, 20px) scale(2, 2)' },
+    { transform: 'translate(0px, 0px) scale(1, 1)' },
+  ])
+})
+
+test('invokes WAAPI with restrained FLIP timing when available', () => {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const animation = {
+    finished: Promise.resolve(),
+  } as unknown as Animation
+  const animate = vi.fn(() => animation)
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  try {
+    const element = document.createElement('div')
+    expect(animateReplayPanelFlip(element, { left: 10, top: 20, width: 100, height: 80 }, { left: 0, top: 0, width: 100, height: 80 })).toBe(animation)
+    expect(animate).toHaveBeenCalledWith([
+      { transform: 'translate(10px, 20px) scale(1, 1)' },
+      { transform: 'translate(0px, 0px) scale(1, 1)' },
+    ], { duration: 240, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards', id: 'replay-panel-flip' })
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousDescriptor)
+  }
+})
+
+test('falls back to immediate CSS layout when WAAPI is unavailable', () => {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: undefined })
+  try {
+    expect(animateReplayPanelFlip(document.createElement('div'), { left: 10, top: 20, width: 100, height: 80 }, { left: 0, top: 0, width: 100, height: 80 })).toBeNull()
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousDescriptor)
+  }
+})
+
+test('skips FLIP WAAPI motion when reduced motion is preferred', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const previousMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+  const animate = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true })) })
+  try {
+    expect(animateReplayPanelFlip(document.createElement('div'), { left: 10, top: 20, width: 100, height: 80 }, { left: 0, top: 0, width: 100, height: 80 })).toBeNull()
+    expect(animate).not.toHaveBeenCalled()
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+    restorePrototypeDescriptor(window, 'matchMedia', previousMatchMediaDescriptor)
+  }
+})
+
+test('cancels prior FLIP animations before replacing them on a rapid unpin', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const animations: Array<{ readonly cancel: ReturnType<typeof vi.fn> }> = []
+  const animate = vi.fn(() => {
+    const record = {
+      addEventListener: vi.fn(),
+      cancel: vi.fn(),
+      finished: new Promise<never>(() => undefined),
+      removeEventListener: vi.fn(),
+    }
+    animations.push(record)
+    return record as unknown as Animation
+  })
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  const panelPositions = {
+    Player: 0,
+    'Track map': 1,
+    Leaderboard: 2,
+    Driver: 3,
+    Telemetry: 4,
+  }
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const label = this.getAttribute('aria-label')
+    const position = panelPositions[label as keyof typeof panelPositions]
+    const visibleCount = document.querySelectorAll('.replay-workspace > .replay-panel-frame').length
+    const compactPosition = label === null || position === undefined ? 0 : Math.max(0, position - (5 - visibleCount))
+    return { bottom: 100, height: 100, left: compactPosition * 100, right: 100, toJSON: () => ({}), top: 0, width: 100, x: compactPosition * 100, y: 0 } as DOMRect
+  })
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    const firstAnimations = [...animations]
+    expect(firstAnimations.length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
+
+    expect(firstAnimations.every(({ cancel }) => cancel.mock.calls.length === 1)).toBe(true)
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+  }
 })
 
 test('renders prospective cross-column order, restores invalid previews, and commits the exact displayed destination', () => {
@@ -117,22 +214,100 @@ test('shows a static panel snapshot and blurs the source while dragging', () => 
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
 })
 
-test('slides a panel body out and back in when its visibility changes', () => {
+test('unpins a panel immediately and restores it from Panel Manager', () => {
   render(<ReplayWorkspace panels={panels} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Player panel' }))
+  const unpinButton = screen.getByRole('button', { name: 'Unpin Player panel' })
+  expect(unpinButton.classList.contains('replay-panel-unpin')).toBe(true)
+  expect(unpinButton.hasAttribute('aria-pressed')).toBe(false)
+  fireEvent.click(unpinButton)
 
-  const panel = screen.getByRole('region', { name: 'Player' })
-  const body = panel.querySelector('.replay-panel-frame__body')
-  expect(panel.classList.contains('replay-panel-frame--hidden')).toBe(true)
-  expect(body?.classList.contains('replay-panel-frame__body--exiting')).toBe(true)
-  expect(body?.getAttribute('aria-hidden')).toBe('true')
+  expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Panel Manager' }).getAttribute('aria-expanded')).toBe('false')
 
-  fireEvent.click(screen.getByRole('button', { name: 'Show Player panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  const manager = screen.getByRole('dialog', { name: 'Panel Manager' })
+  expect(within(manager).getByText('Player')).toBeTruthy()
+  const pinPlayer = within(manager).getByRole('button', { name: 'Pin Player panel' })
+  expect(pinPlayer.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(pinPlayer)
 
-  expect(panel.classList.contains('replay-panel-frame--hidden')).toBe(false)
-  expect(body?.classList.contains('replay-panel-frame__body--exiting')).toBe(false)
-  expect(body?.getAttribute('aria-hidden')).toBe('false')
+  expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
+})
+
+test('animates only a panel newly pinned through Panel Manager', () => {
+  render(<ReplayWorkspace panels={panels} />)
+  expect(screen.getByRole('region', { name: 'Player' }).classList.contains('replay-panel-frame--entering')).toBe(false)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Pin Player panel' }))
+
+  expect(screen.getByRole('region', { name: 'Player' }).classList.contains('replay-panel-frame--entering')).toBe(true)
+})
+
+test('keeps multiple unpin snapshots inert while the workspace removes panels immediately', () => {
+  vi.useFakeTimers()
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
+
+    expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Track map' })).toBeNull()
+    const snapshots = document.querySelectorAll<HTMLElement>('.replay-panel-exit-snapshot')
+    expect(snapshots).toHaveLength(2)
+    snapshots.forEach((snapshot) => {
+      expect(snapshot.getAttribute('aria-hidden')).toBe('true')
+      expect(snapshot.hasAttribute('inert')).toBe(true)
+    })
+
+    act(() => vi.advanceTimersByTime(180))
+    expect(document.querySelectorAll('.replay-panel-exit-snapshot')).toHaveLength(0)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('cleans pin motion immediately when reduced motion is preferred', () => {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true })) })
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    expect(document.querySelector('.replay-panel-exit-snapshot')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Player panel' }))
+    expect(screen.getByRole('region', { name: 'Player' }).classList.contains('replay-panel-frame--entering')).toBe(false)
+  } finally {
+    if (previousDescriptor === undefined) Reflect.deleteProperty(window, 'matchMedia')
+    else Object.defineProperty(window, 'matchMedia', previousDescriptor)
+  }
+})
+
+test('opens Panel Manager from the empty workspace and dismisses it with Escape or an outside click', () => {
+  render(<ReplayWorkspace panels={panels} />)
+
+  panels.forEach((panel) => fireEvent.click(screen.getByRole('button', { name: `Unpin ${panel.label} panel` })))
+  expect(screen.getByRole('status').textContent).toContain('No panels pinned')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Panel Manager' }))
+  expect(screen.getByRole('dialog', { name: 'Panel Manager' })).toBeTruthy()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close Panel Manager' }))
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByRole('dialog', { name: 'Panel Manager' })).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Panel Manager' }))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close Panel Manager' }))
+  expect(screen.queryByRole('dialog', { name: 'Panel Manager' })).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Panel Manager' }))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  fireEvent.pointerDown(document.body)
+  expect(screen.queryByRole('dialog', { name: 'Panel Manager' })).toBeNull()
 })
 
 test('contains a panel render failure and retries only the failed panel', () => {
@@ -195,4 +370,9 @@ test('recomputes the active drop preview when the workspace breakpoint changes',
 
 function setViewportWidth(width: number): void {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width, writable: true })
+}
+
+function restorePrototypeDescriptor(target: object, property: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor === undefined) Reflect.deleteProperty(target, property)
+  else Object.defineProperty(target, property, descriptor)
 }

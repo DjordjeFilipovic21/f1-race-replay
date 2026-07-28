@@ -30,7 +30,7 @@ export function isReplayPanelId(value: unknown): value is ReplayPanelId {
 
 export interface ReplayPanelLayoutItem {
   readonly id: ReplayPanelId
-  readonly visible: boolean
+  readonly pinned: boolean
   readonly desktopColumnStart: number
 }
 
@@ -55,21 +55,24 @@ export function reconcileReplayPanelLayout(panelIds: readonly ReplayPanelId[], l
   const retainedIds = new Set(retained.map(({ id }) => id))
   return [
     ...retained.map((item) => ({ ...item, desktopColumnStart: normalizeDesktopColumn(item.desktopColumnStart, item.id) })),
-    ...panelIds.filter((id) => !retainedIds.has(id)).map((id) => ({ id, visible: true, desktopColumnStart: defaultReplayPanelColumn(id) })),
+    ...panelIds.filter((id) => !retainedIds.has(id)).map((id) => ({ id, pinned: true, desktopColumnStart: defaultReplayPanelColumn(id) })),
   ]
 }
 
-export function toggleReplayPanelVisibility(layout: readonly ReplayPanelLayoutItem[], id: ReplayPanelId): readonly ReplayPanelLayoutItem[] {
-  return layout.map((item) => item.id === id ? { ...item, visible: !item.visible } : item)
+export function toggleReplayPanelPinning(layout: readonly ReplayPanelLayoutItem[], id: ReplayPanelId): readonly ReplayPanelLayoutItem[] {
+  return layout.map((item) => item.id === id ? { ...item, pinned: !item.pinned } : item)
 }
 
+/** Reorders the displayed pinned subset while leaving unpinned slots unchanged. */
 export function reorderReplayPanelLayout(layout: readonly ReplayPanelLayoutItem[], id: ReplayPanelId, destinationIndex: number): readonly ReplayPanelLayoutItem[] {
-  const sourceIndex = layout.findIndex((item) => item.id === id)
+  const pinned = layout.filter((item) => item.pinned)
+  const sourceIndex = pinned.findIndex((item) => item.id === id)
   if (sourceIndex < 0) return layout
-  const next = [...layout]
-  const [item] = next.splice(sourceIndex, 1)
-  next.splice(clampIndex(destinationIndex, next.length), 0, item)
-  return next
+  const nextPinned = [...pinned]
+  const [item] = nextPinned.splice(sourceIndex, 1)
+  nextPinned.splice(clampIndex(destinationIndex, nextPinned.length), 0, item)
+  let pinnedIndex = 0
+  return layout.map((current) => current.pinned ? nextPinned[pinnedIndex++] : current)
 }
 
 /** Applies the sortable workspace index to the canonical panel order. */
@@ -81,7 +84,7 @@ export function commitReplayPanelDrag(layout: readonly ReplayPanelLayoutItem[], 
 }
 
 export function isSameReplayPanelLayout(left: readonly ReplayPanelLayoutItem[], right: readonly ReplayPanelLayoutItem[]): boolean {
-  return left.length === right.length && left.every((item, index) => item.id === right[index]?.id && item.visible === right[index]?.visible && item.desktopColumnStart === right[index]?.desktopColumnStart)
+  return left.length === right.length && left.every((item, index) => item.id === right[index]?.id && item.pinned === right[index]?.pinned && item.desktopColumnStart === right[index]?.desktopColumnStart)
 }
 
 function clampIndex(index: number, length: number): number {

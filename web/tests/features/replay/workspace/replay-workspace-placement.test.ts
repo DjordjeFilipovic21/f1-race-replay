@@ -82,7 +82,7 @@ test('inserts above a target midpoint and after the Track map without cross-colu
 
 test('uses the same geometry-derived index for the committed canonical order', () => {
   const index = resolveVerticalInsertionIndex(verticalItems, 'driver', 4, 1, verticalGeometry, 250, 0)
-  const layout = verticalItems.map((item) => ({ id: item.id as 'player' | 'track-map' | 'leaderboard' | 'driver', visible: true, desktopColumnStart: item.columnStart }))
+  const layout = verticalItems.map((item) => ({ id: item.id as 'player' | 'track-map' | 'leaderboard' | 'driver', pinned: true, desktopColumnStart: item.columnStart }))
 
   expect(commitReplayPanelDrag(layout, { id: 'driver', index, desktopColumnStart: 4 }).map(({ id }) => id)).toEqual(['player', 'track-map', 'leaderboard', 'driver'])
 })

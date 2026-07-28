@@ -33,9 +33,8 @@
   .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
   .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
   .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
-  .replay-panel-frame__body { transition: grid-template-rows 240ms ease, opacity 180ms ease, padding 240ms ease, transform 240ms ease; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .race-control-panel__message, .race-control-panel__message--exiting { animation: none; }
+  .race-control-panel__message, .race-control-panel__message--exiting, .replay-panel-frame--entering, .replay-panel-exit-snapshot { animation: none; }
 }
