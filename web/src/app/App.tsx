@@ -4,6 +4,7 @@ import { createFetchSource } from '../data/replay/source'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../engine/replay'
 import type { DriverMetadata, LapSectorSidecar, LapStart, PitLossModel, StintSummary, TimelineSummary, TrackAssets } from '../data/replay/types'
 import { ReplayControls } from '../features/replay/shell/ReplayControls'
+import { ReplayErrorBoundary } from '../features/replay/shell/ReplayErrorBoundary'
 
 interface ReadyReplay {
   readonly controller: ReplayController
@@ -53,7 +54,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      {replay !== null && <ReplayControls {...replay} />}
+      {replay !== null && <ReplayErrorBoundary label="Replay workspace"><ReplayControls {...replay} /></ReplayErrorBoundary>}
       {replay === null && error === null && <p className="app-diagnostic" role="status" aria-label="Replay loading">Loading replay data…</p>}
       {error !== null && (
         <section className="app-diagnostic app-diagnostic--error" role="alert" aria-label="Replay loading error">

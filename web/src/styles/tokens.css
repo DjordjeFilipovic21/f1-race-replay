@@ -1,0 +1,29 @@
+@font-face {
+  font-family: 'Oxanium';
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600 700;
+  src: url('../assets/fonts/oxanium-latin.woff2') format('woff2');
+}
+
+:root {
+  color: #f1f3f5;
+  background: #0c0f12;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  --surface: #15191d;
+  --surface-muted: #20272d;
+  --surface-raised: #191f25;
+  --border: #35404a;
+  --border-strong: #596673;
+  --text-muted: #aeb9c2;
+  --accent: #e26d3d;
+  --focus: #f0bc53;
+  --danger: #ffb4a0;
+  --timeline-yellow: #f0bc53;
+  --timeline-sc: #e26d3d;
+  --timeline-red: #ff5158;
+  --timeline-vsc: #7fc8e8;
+  --interactive: #171d22;
+  --interactive-hover: #29333b;
+  --font-display: 'Oxanium', 'Arial Narrow', ui-sans-serif, system-ui, sans-serif;
+}
