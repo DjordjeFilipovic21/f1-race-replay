@@ -58,6 +58,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .replay-panel-frame__header h2, .replay-panel-frame__header span { font-size: .72rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
 .replay-panel-frame__body { background: linear-gradient(180deg, rgb(255 255 255 / 1%), transparent 5rem); display: grid; grid-template-rows: minmax(0, 1fr); padding: .75rem; }
 .replay-panel-frame__body > * { min-height: 0; overflow: hidden; }
+.replay-error-boundary { align-content: center; background: rgb(255 81 88 / 7%); border: 1px solid rgb(255 180 160 / 35%); color: var(--danger); display: grid; gap: .75rem; min-height: 8rem; padding: 1rem; }
+.replay-error-boundary h2 { color: #f4f5f6; }
+.replay-error-boundary p { color: var(--text-muted); }
+.replay-error-boundary .retry-button { justify-self: start; }
 .replay-panel-frame__body--entering, .replay-panel-frame__body--exiting { grid-template-rows: minmax(0, 0fr); opacity: 0; padding-block: 0; pointer-events: none; transform: translateY(-.5rem); }
 .replay-panel-drag-overlay { pointer-events: none; }
 .replay-panel-drag-snapshot { background: var(--surface); box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 45%); color: inherit; opacity: .94; overflow: hidden; }
