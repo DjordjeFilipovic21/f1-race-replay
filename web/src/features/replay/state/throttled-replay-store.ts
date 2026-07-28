@@ -29,6 +29,10 @@ export function createThrottledReplayStore(controller: ReplayController, interva
       lastReplay = next.replay
       return next
     }
+    if (next.status !== 'loading') {
+      lastReplay = null
+      return next
+    }
     return lastReplay === null ? next : Object.freeze({ ...next, replay: lastReplay })
   }
   const flush = () => {

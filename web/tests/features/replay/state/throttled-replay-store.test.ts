@@ -84,3 +84,19 @@ test('retains the last replay while an immediate loading snapshot has no sample'
   expect(listener).toHaveBeenCalledOnce()
   store.dispose()
 })
+
+test('clears retained replay when loading transitions to an explicit error', () => {
+  const replay = Object.freeze({}) as ReplayControllerSnapshot['replay']
+  const failure = new Error('Chunk unavailable')
+  const source = createController({ ...ready(0, false), replay })
+  const store = createThrottledReplayStore(source.controller)
+  const listener = vi.fn()
+  store.subscribe(listener)
+
+  source.publish({ ...ready(1, false), status: 'loading', replay: null })
+  source.publish({ ...ready(1, false), status: 'error', replay: null, error: failure })
+
+  expect(store.getSnapshot()).toMatchObject({ status: 'error', replay: null, error: failure })
+  expect(listener).toHaveBeenCalledTimes(2)
+  store.dispose()
+})
