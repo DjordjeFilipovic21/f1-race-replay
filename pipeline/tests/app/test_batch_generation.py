@@ -7,15 +7,26 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from f1_replay_pipeline.app.batch_generation import BatchRequest, BatchResult, ScheduledRace, _browser_output_valid, _shallow_browser_output_valid, publish_catalog, run_batch, verify_catalog
-from f1_replay_pipeline.delivery.browser.browser_delivery_publication import BrowserValidationProgress
-from f1_replay_pipeline.delivery.browser.browser_delivery_request import BrowserPublishResult
+from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
+    BrowserDeliveryCleanupError,
+    BrowserDeliveryCommittedError,
+    BrowserDeliveryDurabilityUncertainError,
+    PublishedBrowserDelivery,
+    BrowserValidationProgress,
+)
+from f1_replay_pipeline.delivery.browser.browser_delivery_request import (
+    BrowserDeliveryServiceError,
+    BrowserPublishResult,
+)
 from f1_replay_pipeline.app.cli import main
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
+    PublicationCommittedError,
     PublicationDurabilityUncertainError,
 )
 from f1_replay_pipeline.app.orchestration import PipelineResult, PublicationError
@@ -415,6 +426,93 @@ def test_canonical_durability_warning_continues_browser_and_preserves_outcome(
     assert result.races[0].outcome == "committed_with_durability_warning"
     assert result.races[0].generation_id == generation_id
     assert len(browser_calls) == 1
+
+
+def test_canonical_committed_error_continues_browser_as_generated(tmp_path: Path, monkeypatch) -> None:
+    generation_id = "2024-round-01-r"
+    committed = GenerationPublicationResult(
+        tmp_path / "canonical" / generation_id,
+        tmp_path / "canonical" / generation_id / "manifest.json",
+        tmp_path / "canonical" / "current.json",
+        "a" * 64,
+    )
+    committed_error = PublicationCommittedError(committed, OSError("post-commit callback failed"))
+
+    def pipeline(request):
+        del request
+        raise PublicationError("wrapped committed publication") from committed_error
+
+    browser_calls = []
+
+    def browser(request):
+        browser_calls.append(request)
+        return BrowserPublishResult(request, request.delivery_version, object())
+
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._canonical_state", lambda *_paths: committed)
+
+    result = run_batch(
+        _request(tmp_path),
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        pipeline_service=pipeline,
+        browser_service=browser,
+    )
+
+    assert result.races[0].outcome == "generated"
+    assert result.races[0].generation_id == generation_id
+    assert result.races[0].delivery_version == generation_id
+    assert len(browser_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("publication_error", "expected_outcome"),
+    [
+        (BrowserDeliveryDurabilityUncertainError, "committed_with_durability_warning"),
+        (BrowserDeliveryCommittedError, "generated"),
+    ],
+)
+def test_browser_committed_errors_in_wrapped_chains_preserve_generated_result(
+    tmp_path: Path, publication_error, expected_outcome: str,
+) -> None:
+    publication = cast(PublishedBrowserDelivery, SimpleNamespace(delivery_version="delivery-committed"))
+    committed_error = publication_error(publication, OSError("injected browser publication failure"))
+
+    def browser(request: object):
+        del request
+        raise BrowserDeliveryServiceError("wrapped browser publication failure") from committed_error
+
+    _calls, pipeline, _browser = _services()
+    result = run_batch(
+        _request(tmp_path),
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        pipeline_service=pipeline,
+        browser_service=browser,
+    )
+
+    race = result.races[0]
+    assert race.outcome == expected_outcome
+    assert race.generation_id == "2024-round-01-r"
+    assert race.delivery_version == "delivery-committed"
+    assert race.detail is not None
+
+
+def test_browser_cleanup_error_with_committed_result_is_not_reported_as_failure(tmp_path: Path) -> None:
+    publication = cast(PublishedBrowserDelivery, SimpleNamespace(delivery_version="delivery-cleanup"))
+    committed_error = BrowserDeliveryCleanupError((OSError("lease release failed"),), publication)
+
+    def browser(request: object):
+        del request
+        raise BrowserDeliveryServiceError("wrapped browser cleanup failure") from committed_error
+
+    _calls, pipeline, _browser = _services()
+    result = run_batch(
+        _request(tmp_path),
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        pipeline_service=pipeline,
+        browser_service=browser,
+    )
+
+    assert result.races[0].outcome == "generated"
+    assert result.races[0].delivery_version == "delivery-cleanup"
 
 
 def test_missing_explicit_schedule_round_fails_actionably_and_cli_returns_nonzero(tmp_path: Path, capsys) -> None:

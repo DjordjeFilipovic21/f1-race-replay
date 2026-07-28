@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -30,6 +31,8 @@ from f1_replay_pipeline.domain.generation_identity import GenerationIdentityErro
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationError,
     LocalRecoveryLock,
+    RecoveryOwnershipError,
+    _attach_cleanup_errors,
     _open_directory_no_follow,
     _remove_owned_file_at,
     _remove_owned_tree_at,
@@ -51,12 +54,50 @@ _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
 _STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
 _PIT_LOSS_MODEL_SCHEMA = PIT_LOSS_MODEL_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
+_UNSUPPORTED_DIRECTORY_FSYNC = {errno.EINVAL, errno.ENOTSUP, errno.EBADF}
 
 _make_contract_validator = jsonschema_rs.Draft202012Validator
 
 
 class BrowserDeliveryPublicationError(RuntimeError):
     """Raised when browser artifacts cannot be safely validated or published."""
+
+
+class BrowserDeliveryDurabilityUncertainError(BrowserDeliveryPublicationError):
+    """The browser pointer committed, but final directory durability is unknown."""
+
+    def __init__(self, result: "PublishedBrowserDelivery", cause: BaseException) -> None:
+        super().__init__("browser pointer was replaced, but post-commit durability is uncertain")
+        self.result = result
+        self.committed = True
+        self.durability_confirmed = False
+        self.cause = cause
+
+
+class BrowserDeliveryCommittedError(BrowserDeliveryPublicationError):
+    """The browser commit and requested durability completed before a later failure."""
+
+    def __init__(self, result: "PublishedBrowserDelivery", cause: BaseException) -> None:
+        super().__init__("browser pointer was replaced and durably synced, but publication completed with an error")
+        self.result = result
+        self.committed = True
+        self.durability_confirmed = True
+        self.cause = cause
+
+
+class BrowserDeliveryCleanupError(BrowserDeliveryPublicationError):
+    """Publication completed, but temporary cleanup or ownership release failed."""
+
+    def __init__(
+        self,
+        cleanup_errors: tuple[BaseException, ...],
+        result: "PublishedBrowserDelivery | None" = None,
+    ) -> None:
+        super().__init__("browser publication completed with cleanup failures")
+        self.cleanup_errors = cleanup_errors
+        self.result = result
+        self.committed = result is not None
+        self.durability_confirmed = result is not None
 
 
 @dataclass(frozen=True)
@@ -872,16 +913,25 @@ def _publish_payloads(
     except GenerationPublicationError as error:
         os.close(root_fd)
         raise BrowserDeliveryPublicationError("unable to acquire browser publication ownership") from error
-    generations_fd = staging_fd = None
+    generations_fd = staging_fd = chunks_fd = None
     staging_name = f"{_STAGING_PREFIX}{uuid.uuid4().hex}"
     staging_identity = pointer_identity = None
     pointer_temp = f"{_STAGING_PREFIX}pointer-{uuid.uuid4().hex}"
-    published = False
+    generation_committed = False
+    result: PublishedBrowserDelivery | None = None
+    primary_error: BaseException | None = None
+    cleanup_errors: list[BaseException] = []
+    durability_confirmed = False
+    candidate = _delivery_result(root, version, artifacts)
     try:
+        generations_created = False
         try:
             os.mkdir("generations", mode=0o700, dir_fd=root_fd)
+            generations_created = True
         except FileExistsError:
             pass
+        if generations_created:
+            _fsync_directory_fd(root_fd)
         generations_fd = os.open("generations", os.O_RDONLY | _DIRECTORY | _NO_FOLLOW, dir_fd=root_fd)
         try:
             os.stat(version, dir_fd=generations_fd, follow_symlinks=False)
@@ -895,17 +945,18 @@ def _publish_payloads(
         staging_identity = (metadata.st_dev, metadata.st_ino)
         os.mkdir("chunks", mode=0o700, dir_fd=staging_fd)
         chunks_fd = os.open("chunks", os.O_RDONLY | _DIRECTORY | _NO_FOLLOW, dir_fd=staging_fd)
-        try:
-            progress("browser_artifacts_staging")
-            for artifact in artifacts:
-                relative, payload = artifact.path, artifact.payload
-                parent, name = (chunks_fd, relative.split("/", 1)[1]) if relative.startswith("chunks/") else (staging_fd, relative)
-                _write_at(parent, name, payload)
-            _validate_staged(staging_fd, chunks_fd, artifacts)
-        finally:
-            os.close(chunks_fd)
+        progress("browser_artifacts_staging")
+        for artifact in artifacts:
+            relative, payload = artifact.path, artifact.payload
+            parent, name = (chunks_fd, relative.split("/", 1)[1]) if relative.startswith("chunks/") else (staging_fd, relative)
+            _write_at(parent, name, payload)
+        _validate_staged(staging_fd, chunks_fd, artifacts)
+        # File fsyncs protect payload bytes; these directory fsyncs protect the
+        # entries before the staging tree is renamed into the selected set.
+        _fsync_directory_fd(chunks_fd)
+        _fsync_directory_fd(staging_fd)
         os.replace(staging_name, version, src_dir_fd=root_fd, dst_dir_fd=generations_fd)
-        published = True
+        _fsync_directory_fd(generations_fd)
         manifest = next(artifact for artifact in artifacts if artifact.path == "manifest.json")
         pointer = _serialize_json({
             "formatVersion": _FORMAT_VERSION,
@@ -921,67 +972,133 @@ def _publish_payloads(
         finally:
             os.close(pointer_fd)
         progress("browser_pointer_committing_durability")
-        os.replace(pointer_temp, "browser-current.json", src_dir_fd=root_fd, dst_dir_fd=root_fd)
-        pointer_identity = None
-        os.fsync(generations_fd)
-        os.fsync(root_fd)
-    except (BrowserDeliveryPublicationError, OSError, TypeError) as error:
-        if isinstance(error, BrowserDeliveryPublicationError):
+        try:
+            os.replace(pointer_temp, "browser-current.json", src_dir_fd=root_fd, dst_dir_fd=root_fd)
+        except BaseException:
+            if _pointer_selects(root_fd, version, manifest.sha256):
+                result = candidate
+                generation_committed = True
+                pointer_identity = None
             raise
-        raise BrowserDeliveryPublicationError("secure browser publication failed") from error
+        result = candidate
+        generation_committed = True
+        pointer_identity = None
+        durability_confirmed = _fsync_directory_fd(root_fd)
+    except BaseException as error:
+        primary_error = error
     finally:
-        if staging_fd is not None:
-            os.close(staging_fd)
-        if not published and staging_identity is not None:
+        _close_descriptor(chunks_fd, cleanup_errors)
+        _close_descriptor(staging_fd, cleanup_errors)
+        if not generation_committed and staging_identity is not None:
             try:
                 _remove_owned_tree_at(root_fd, staging_name, staging_identity)
             except FileNotFoundError:
                 pass
+            except BaseException as error:
+                cleanup_errors.append(error)
         if pointer_identity is not None:
             try:
                 _remove_owned_file_at(root_fd, pointer_temp, pointer_identity)
             except FileNotFoundError:
                 pass
-        if generations_fd is not None:
-            os.close(generations_fd)
-        lease.release()
-        os.close(root_fd)
+            except BaseException as error:
+                cleanup_errors.append(error)
+        _close_descriptor(generations_fd, cleanup_errors)
+        _close_descriptor(root_fd, cleanup_errors)
+        try:
+            lease.release()
+        except BaseException as error:
+            cleanup_errors.append(
+                error if isinstance(error, RecoveryOwnershipError) else RecoveryOwnershipError(
+                    "unable to release verifiable browser publication ownership"
+                )
+            )
+    if primary_error is not None:
+        _attach_cleanup_errors(primary_error, cleanup_errors)
+        if result is None:
+            if isinstance(primary_error, BrowserDeliveryPublicationError):
+                raise primary_error
+            publication_error = BrowserDeliveryPublicationError("secure browser publication failed")
+            _attach_cleanup_errors(publication_error, cleanup_errors)
+            raise publication_error from primary_error
+        committed_error: BrowserDeliveryPublicationError
+        if durability_confirmed:
+            committed_error = BrowserDeliveryCommittedError(result, primary_error)
+        else:
+            committed_error = BrowserDeliveryDurabilityUncertainError(result, primary_error)
+        _attach_cleanup_errors(committed_error, cleanup_errors)
+        raise committed_error from primary_error
+    if cleanup_errors:
+        if result is not None and not durability_confirmed:
+            committed_error = BrowserDeliveryDurabilityUncertainError(result, cleanup_errors[0])
+            _attach_cleanup_errors(committed_error, cleanup_errors)
+            raise committed_error from cleanup_errors[0]
+        raise BrowserDeliveryCleanupError(tuple(cleanup_errors), result) from cleanup_errors[0]
+    if result is None:
+        raise AssertionError("browser publication did not return or raise")
+    return result
+
+
+def _fsync_directory_fd(descriptor: int) -> bool:
+    """Sync a directory descriptor, tolerating filesystems without support."""
+    try:
+        os.fsync(descriptor)
+    except OSError as error:
+        if error.errno in _UNSUPPORTED_DIRECTORY_FSYNC:
+            return False
+        raise
+    return True
+
+
+def _delivery_result(
+    root: Path, version: str, artifacts: tuple[PreparedArtifact, ...],
+) -> PublishedBrowserDelivery:
     generation = root / "generations" / version
     digests = {artifact.path: artifact.sha256 for artifact in artifacts}
-    chunk_paths = tuple(generation / artifact.path for artifact in artifacts if artifact.path.startswith("chunks/"))
-    timeline_summary_path = (
-        generation / "timeline-summary.json"
-        if "timeline-summary.json" in digests
-        else None
-    )
-    lap_sector_sidecar_path = (
-        generation / "lap-sector-sidecar.json"
-        if "lap-sector-sidecar.json" in digests
-        else None
-    )
-    stint_summary_path = (
-        generation / "stint-summary.json"
-        if "stint-summary.json" in digests
-        else None
-    )
-    pit_loss_model_path = (
-        generation / "pit-loss-model.json"
-        if "pit-loss-model.json" in digests
-        else None
-    )
     return PublishedBrowserDelivery(
         version,
         generation,
         generation / "manifest.json",
         root / "browser-current.json",
         generation / "track-assets.json",
-        chunk_paths,
+        tuple(generation / artifact.path for artifact in artifacts if artifact.path.startswith("chunks/")),
         digests,
-        timeline_summary_path,
-        lap_sector_sidecar_path,
-        stint_summary_path,
-        pit_loss_model_path,
+        generation / "timeline-summary.json" if "timeline-summary.json" in digests else None,
+        generation / "lap-sector-sidecar.json" if "lap-sector-sidecar.json" in digests else None,
+        generation / "stint-summary.json" if "stint-summary.json" in digests else None,
+        generation / "pit-loss-model.json" if "pit-loss-model.json" in digests else None,
     )
+
+
+def _close_descriptor(descriptor: int | None, cleanup_errors: list[BaseException]) -> None:
+    if descriptor is None:
+        return
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        cleanup_errors.append(error)
+
+
+def _pointer_selects(root_fd: int, version: str, manifest_sha256: str) -> bool:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open("browser-current.json", os.O_RDONLY | _NO_FOLLOW, dir_fd=root_fd)
+        payload = os.read(descriptor, 1_048_576)
+        pointer = json.loads(payload)
+        return (
+            pointer.get("formatVersion") == _FORMAT_VERSION
+            and pointer.get("deliveryVersion") == version
+            and pointer.get("manifestPath") == f"generations/{version}/manifest.json"
+            and pointer.get("manifestSha256") == manifest_sha256
+        )
+    except (OSError, TypeError, ValueError, KeyError, AttributeError, json.JSONDecodeError):
+        return False
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _write_at(directory_fd: int, name: str, payload: bytes) -> None:
@@ -1105,7 +1222,9 @@ def _safe_delivery_version(value: object) -> str:
 
 
 __all__ = [
-    "BrowserDeliveryPublicationError", "BrowserValidationProgress",
+    "BrowserDeliveryCleanupError", "BrowserDeliveryCommittedError",
+    "BrowserDeliveryDurabilityUncertainError", "BrowserDeliveryPublicationError",
+    "BrowserValidationProgress",
     "PublishedBrowserDelivery", "publish_browser_delivery", "validate_browser_delivery_pointer",
     "validate_complete_browser_delivery",
 ]

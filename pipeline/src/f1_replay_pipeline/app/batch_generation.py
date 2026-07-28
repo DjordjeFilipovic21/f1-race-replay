@@ -20,11 +20,16 @@ from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_request import BrowserPublishRequest, BrowserPublishResult
-from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_browser_delivery_pointer
+from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
+    BrowserDeliveryDurabilityUncertainError,
+    BrowserDeliveryPublicationError,
+    validate_browser_delivery_pointer,
+)
 from f1_replay_pipeline.domain.dataset_manifest import parse_current_pointer, parse_manifest
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
+    PublicationCommittedError,
     PublicationDurabilityUncertainError,
     read_regular_file_no_follow,
     resolve_current_generation,
@@ -254,6 +259,14 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
                 detail="reusing validated canonical generation",
             )
         except Exception as error:
+            browser_outcome = _committed_browser_outcome(error)
+            if browser_outcome is not None:
+                outcome, delivery_version, detail = browser_outcome
+                event("race_succeeded", stage_total, detail=detail, outcome=outcome)
+                return BatchRaceResult(
+                    race_id, race.round_number, outcome, canonical_state.generation_path.name,
+                    delivery_version, detail,
+                )
             detail = _error_detail(error)
             event("race_failed", detail=detail, outcome="failed")
             return BatchRaceResult(
@@ -272,27 +285,52 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
             canonical, generation_id=generation_id,
         ))
     except Exception as error:
-        durability_warning = _find_durability_warning(error)
-        canonical_state = _canonical_state(canonical) if durability_warning is not None else None
+        committed_publication = _find_committed_publication(error)
+        canonical_state = _canonical_state(canonical) if committed_publication is not None else None
         if canonical_state is not None and canonical_state.generation_path.name == generation_id:
+            canonical_warning = isinstance(committed_publication, PublicationDurabilityUncertainError)
+            canonical_detail = (
+                "canonical committed with uncertain durability"
+                if canonical_warning else "canonical committed durably"
+            )
             try:
                 browser_result = _publish_browser(
                     browser_service,
                     BrowserPublishRequest(canonical, browser, generation_id, request.schema_root),
                     event,
-                    detail="canonical committed with uncertain durability",
+                    detail=canonical_detail,
                 )
             except Exception as browser_error:
+                browser_outcome = _committed_browser_outcome(browser_error)
+                if browser_outcome is not None:
+                    browser_outcome_name, delivery_version, browser_detail = browser_outcome
+                    outcome = (
+                        "committed_with_durability_warning"
+                        if canonical_warning or browser_outcome_name == "committed_with_durability_warning"
+                        else "generated"
+                    )
+                    detail = f"{canonical_detail}; browser: {browser_detail}"
+                    event("race_succeeded", stage_total, detail=detail, outcome=outcome)
+                    return BatchRaceResult(
+                        race_id, race.round_number, outcome,
+                        generation_id, delivery_version, detail,
+                    )
                 detail = _error_detail(browser_error)
                 event("race_failed", detail=detail, outcome="failed")
                 return BatchRaceResult(
                     race_id, race.round_number, "failed", generation_id,
-                    detail=f"canonical committed with uncertain durability; browser failed: {detail}",
+                    detail=f"{canonical_detail}; browser failed: {detail}",
                 )
-            event("race_succeeded", stage_total, detail=str(durability_warning), outcome="committed_with_durability_warning")
+            if canonical_warning:
+                event("race_succeeded", stage_total, detail=str(committed_publication), outcome="committed_with_durability_warning")
+                return BatchRaceResult(
+                    race_id, race.round_number, "committed_with_durability_warning",
+                    generation_id, browser_result.delivery_version, str(committed_publication),
+                )
+            event("race_succeeded", stage_total, detail=str(committed_publication), outcome="generated")
             return BatchRaceResult(
-                race_id, race.round_number, "committed_with_durability_warning",
-                generation_id, browser_result.delivery_version, str(durability_warning),
+                race_id, race.round_number, "generated",
+                generation_id, browser_result.delivery_version, str(committed_publication),
             )
         detail = _error_detail(error)
         event("race_failed", detail=detail, outcome="failed")
@@ -304,6 +342,14 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
             event,
         )
     except Exception as error:
+        browser_outcome = _committed_browser_outcome(error)
+        if browser_outcome is not None:
+            outcome, delivery_version, detail = browser_outcome
+            event("race_succeeded", stage_total, detail=detail, outcome=outcome)
+            return BatchRaceResult(
+                race_id, race.round_number, outcome, canonical_result.generation_id,
+                delivery_version, detail,
+            )
         detail = _error_detail(error)
         event("race_failed", detail=detail, outcome="failed")
         return BatchRaceResult(
@@ -367,11 +413,39 @@ def _publish_browser(
 
 def _find_durability_warning(error: BaseException) -> PublicationDurabilityUncertainError | None:
     """Find a publication warning even when orchestration wrapped its cause."""
+    committed = _find_committed_publication(error)
+    return committed if isinstance(committed, PublicationDurabilityUncertainError) else None
+
+
+def _find_committed_publication(
+    error: BaseException,
+) -> PublicationDurabilityUncertainError | PublicationCommittedError | None:
+    """Find a canonical commit result even when orchestration wrapped its cause."""
     current: BaseException | None = error
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
-        if isinstance(current, PublicationDurabilityUncertainError):
+        if isinstance(current, (PublicationDurabilityUncertainError, PublicationCommittedError)):
             return current
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _committed_browser_outcome(error: BaseException) -> tuple[str, str, str] | None:
+    """Recover a committed browser result from service and publication wrappers."""
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, BrowserDeliveryPublicationError):
+            result = getattr(current, "result", None)
+            delivery_version = getattr(result, "delivery_version", None)
+            if getattr(current, "committed", False) and isinstance(delivery_version, str):
+                outcome = (
+                    "committed_with_durability_warning"
+                    if isinstance(current, BrowserDeliveryDurabilityUncertainError)
+                    else "generated"
+                )
+                return outcome, delivery_version, _error_detail(error)
         visited.add(id(current))
         current = current.__cause__ or current.__context__
     return None
