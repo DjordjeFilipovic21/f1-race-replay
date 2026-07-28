@@ -657,8 +657,166 @@ test('contains a panel render failure and retries only the failed panel', () => 
   expect(screen.queryByRole('alert', { name: 'Player panel error' })).toBeNull()
 })
 
+test('requests fullscreen on the exact .replay-workspace grid when the toolbar button is activated', () => {
+  const fs = mockFullscreenApi()
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    const workspace = document.querySelector('.replay-workspace') as HTMLElement
+    const workspaceRequestFullscreen = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(workspace, 'requestFullscreen', { configurable: true, value: workspaceRequestFullscreen })
+
+    const button = screen.getByRole('button', { name: 'Enter fullscreen' })
+    expect(button.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(button)
+
+    expect(workspaceRequestFullscreen).toHaveBeenCalledTimes(1)
+    expect(fs.requestFullscreen).not.toHaveBeenCalled()
+  } finally {
+    fs.restore()
+  }
+})
+
+test('tracks fullscreen state through fullscreenchange and disables the entry control while active', () => {
+  const fs = mockFullscreenApi()
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    const workspace = document.querySelector('.replay-workspace') as HTMLElement
+    const button = screen.getByRole('button', { name: 'Enter fullscreen' })
+    expect(button.hasAttribute('disabled')).toBe(false)
+
+    act(() => fs.setFullscreenElement(workspace))
+    expect(button.hasAttribute('disabled')).toBe(true)
+
+    act(() => fs.setFullscreenElement(null))
+    expect(button.hasAttribute('disabled')).toBe(false)
+  } finally {
+    fs.restore()
+  }
+})
+
+test('ignores fullscreenchange for a different element and does not disable the workspace entry control', () => {
+  const fs = mockFullscreenApi()
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    const foreignElement = document.createElement('div')
+    const button = screen.getByRole('button', { name: 'Enter fullscreen' })
+
+    act(() => fs.setFullscreenElement(foreignElement))
+    expect(button.hasAttribute('disabled')).toBe(false)
+  } finally {
+    fs.restore()
+  }
+})
+
+test('disables the fullscreen entry button when the API is unavailable', () => {
+  const fs = mockFullscreenApi(false)
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    const button = screen.getByRole('button', { name: 'Enter fullscreen' })
+    expect(button.hasAttribute('disabled')).toBe(true)
+
+    fireEvent.click(button)
+    expect(fs.requestFullscreen).not.toHaveBeenCalled()
+  } finally {
+    fs.restore()
+  }
+})
+
+test('reports a rejected fullscreen request without an unhandled rejection', async () => {
+  const previousEnabledDescriptor = Object.getOwnPropertyDescriptor(document, 'fullscreenEnabled')
+  const previousElementDescriptor = Object.getOwnPropertyDescriptor(document, 'fullscreenElement')
+  const previousRequestFullscreen = Object.getOwnPropertyDescriptor(Element.prototype, 'requestFullscreen')
+  const rejection = new DOMException('Fullscreen rejected', 'NotAllowedError')
+
+  Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true, writable: true })
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null, writable: true })
+  Object.defineProperty(Element.prototype, 'requestFullscreen', { configurable: true, value: vi.fn().mockRejectedValue(rejection) })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }))
+    await act(async () => {})
+    expect(screen.getByRole('alert').textContent).toBe('Fullscreen could not be started.')
+  } finally {
+    if (previousEnabledDescriptor === undefined) Reflect.deleteProperty(document, 'fullscreenEnabled')
+    else Object.defineProperty(document, 'fullscreenEnabled', previousEnabledDescriptor)
+    if (previousElementDescriptor === undefined) Reflect.deleteProperty(document, 'fullscreenElement')
+    else Object.defineProperty(document, 'fullscreenElement', previousElementDescriptor)
+    if (previousRequestFullscreen === undefined) Reflect.deleteProperty(Element.prototype, 'requestFullscreen')
+    else Object.defineProperty(Element.prototype, 'requestFullscreen', previousRequestFullscreen)
+  }
+})
+
+test('preserves locked mode and the custom layout through a fullscreen entry and native-exit cycle', () => {
+  const fs = mockFullscreenApi()
+  try {
+    const storage = memoryStorage()
+    render(<ReplayWorkspace panels={panels} storage={storage} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
+    const workspace = document.querySelector('.replay-workspace') as HTMLElement
+    expect(workspace.dataset.workspaceMode).toBe('locked')
+    expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }))
+    act(() => fs.setFullscreenElement(workspace))
+    expect(workspace.dataset.workspaceMode).toBe('locked')
+    expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+
+    act(() => fs.setFullscreenElement(null))
+    expect(workspace.dataset.workspaceMode).toBe('locked')
+    expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Unlock workspace' })).toBeTruthy()
+  } finally {
+    fs.restore()
+  }
+})
+
+test('removes the fullscreenchange listener when the workspace unmounts', () => {
+  const fs = mockFullscreenApi()
+  try {
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+    const { unmount } = render(<ReplayWorkspace panels={panels} />)
+
+    unmount()
+
+    expect(removeSpy).toHaveBeenCalledWith('fullscreenchange', expect.any(Function))
+    removeSpy.mockRestore()
+  } finally {
+    fs.restore()
+  }
+})
+
 function workspacePanelLabels(): string[] {
   return Array.from(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).map((panel) => panel.getAttribute('aria-label') ?? '')
+}
+
+function mockFullscreenApi(enabled = true) {
+  const previousEnabledDescriptor = Object.getOwnPropertyDescriptor(document, 'fullscreenEnabled')
+  const previousElementDescriptor = Object.getOwnPropertyDescriptor(document, 'fullscreenElement')
+  const previousRequestFullscreen = Object.getOwnPropertyDescriptor(Element.prototype, 'requestFullscreen')
+
+  Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: enabled, writable: true })
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null, writable: true })
+  const requestFullscreen = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(Element.prototype, 'requestFullscreen', { configurable: true, value: requestFullscreen })
+
+  const setFullscreenElement = (element: Element | null) => {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: element, writable: true })
+    document.dispatchEvent(new Event('fullscreenchange'))
+  }
+
+  const restore = () => {
+    if (previousEnabledDescriptor === undefined) Reflect.deleteProperty(document, 'fullscreenEnabled')
+    else Object.defineProperty(document, 'fullscreenEnabled', previousEnabledDescriptor)
+    if (previousElementDescriptor === undefined) Reflect.deleteProperty(document, 'fullscreenElement')
+    else Object.defineProperty(document, 'fullscreenElement', previousElementDescriptor)
+    if (previousRequestFullscreen === undefined) Reflect.deleteProperty(Element.prototype, 'requestFullscreen')
+    else Object.defineProperty(Element.prototype, 'requestFullscreen', previousRequestFullscreen)
+  }
+
+  return { requestFullscreen, setFullscreenElement, restore }
 }
 
 function expectLatestSortableDisabled(disabled: boolean): void {

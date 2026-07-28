@@ -15,6 +15,7 @@
   .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
   .driver-telemetry-panel__layout { grid-template-columns: minmax(9rem, .8fr) minmax(0, 1fr); }
   .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .replay-workspace:fullscreen { padding: 1.5rem; }
 }
 
 @media (min-width: 1024px) {
@@ -26,6 +27,7 @@
 
 @media (min-width: 1440px) {
   .replay-panel { padding: 1.75rem; }
+  .replay-workspace:fullscreen { padding: 2rem; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

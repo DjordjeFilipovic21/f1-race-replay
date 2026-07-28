@@ -17,6 +17,12 @@
 .replay-workspace-mode-toggle:hover { background: var(--interactive-hover); border-color: var(--border-strong); color: #f4f5f6; }
 .replay-workspace-mode-toggle[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #17110e; }
 .replay-workspace-mode-toggle svg { display: block; flex: 0 0 1rem; height: 1rem; width: 1rem; }
+.replay-workspace-fullscreen-toggle { align-items: center; background: var(--interactive); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; display: inline-flex; font-size: .68rem; font-weight: 800; gap: .35rem; letter-spacing: .06em; min-height: 44px; padding: .45rem .7rem; text-transform: uppercase; }
+.replay-workspace-fullscreen-toggle:hover:not(:disabled) { background: var(--interactive-hover); border-color: var(--border-strong); color: #f4f5f6; }
+.replay-workspace-fullscreen-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.replay-workspace-fullscreen-toggle:disabled { cursor: not-allowed; opacity: .5; }
+.replay-workspace-fullscreen-toggle svg { display: block; flex: 0 0 1rem; height: 1rem; width: 1rem; }
+.replay-workspace-fullscreen-error { color: var(--danger); font-size: .72rem; margin: 0; }
 .replay-panel-manager { background: var(--surface-raised); border: 1px solid var(--border-strong); box-shadow: 0 1rem 2rem rgb(0 0 0 / 35%); display: grid; gap: .65rem; max-width: min(24rem, calc(100vw - 2rem)); padding: .85rem; position: absolute; right: 0; top: calc(100% + .5rem); width: 24rem; z-index: 5; }
 .replay-panel-manager__header { align-items: center; display: flex; gap: .75rem; justify-content: space-between; }
 .replay-panel-manager__header h2 { font-size: .8rem; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
@@ -91,3 +97,10 @@
   .replay-workspace, .replay-panel-frame, .replay-panel-frame__body, .replay-workspace__empty { transition: background-color 420ms ease, background-image 420ms ease, border-color 420ms ease, box-shadow 420ms ease; }
   .replay-panel-frame__header, :is(.replay-workspace, .replay-panel-drag-snapshot) :is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header) { transition: max-height 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease, padding-block 420ms cubic-bezier(0.22, 1, 0.36, 1), transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
 }
+
+.replay-workspace:fullscreen { background: #101316; height: 100vh; overflow: auto; padding: 1rem; scrollbar-color: #2a3036 #101316; width: 100vw; }
+.replay-workspace:fullscreen::backdrop { background: #101316; }
+.replay-workspace:fullscreen .replay-workspace__empty { background: #101316; }
+.replay-workspace:fullscreen::-webkit-scrollbar { width: 8px; }
+.replay-workspace:fullscreen::-webkit-scrollbar-track { background: #101316; }
+.replay-workspace:fullscreen::-webkit-scrollbar-thumb { background: #2a3036; border-radius: 4px; }

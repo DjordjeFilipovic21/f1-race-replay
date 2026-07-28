@@ -141,6 +141,8 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const [entryPanelIds, setEntryPanelIds] = useState<ReadonlySet<ReplayPanelId>>(() => new Set())
   const [exitSnapshots, setExitSnapshots] = useState<readonly ReplayPanelExitSnapshotData[]>([])
   const [flipRevision, setFlipRevision] = useState(0)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null)
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const panelManagerRef = useRef<HTMLDivElement | null>(null)
   const panelManagerToggleRef = useRef<HTMLButtonElement | null>(null)
@@ -242,6 +244,14 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     if (shouldAnimate) setFlipRevision((revision) => revision + 1)
   }, [cancelFlipAnimations, captureFlipPositions, workspaceMode])
 
+  const handleEnterFullscreen = useCallback(() => {
+    const workspace = workspaceRef.current
+    if (workspace === null) return
+    if (!document.fullscreenEnabled) return
+    setFullscreenError(null)
+    workspace.requestFullscreen().catch(() => setFullscreenError('Fullscreen could not be started.'))
+  }, [])
+
   useEffect(() => {
     if (!isPanelManagerOpen) return
     panelManagerCloseRef.current?.focus()
@@ -286,6 +296,16 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     dragMoveRef.current = null
     updateDropPreview(null)
   }, [updateDropPreview, workspaceMode])
+
+  useEffect(() => {
+    const handleChange = () => {
+      const nextIsFullscreen = document.fullscreenElement === workspaceRef.current
+      setIsFullscreen(nextIsFullscreen)
+      if (nextIsFullscreen) setFullscreenError(null)
+    }
+    document.addEventListener('fullscreenchange', handleChange)
+    return () => document.removeEventListener('fullscreenchange', handleChange)
+  }, [])
 
   const panelsById = useMemo(() => new Map(panels.map((panel) => [panel.id, panel])), [panels])
   const displayedLayout = workspaceMode === 'locked' || dropPreview === null
@@ -393,6 +413,11 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           <WorkspaceModeIcon locked={workspaceMode === 'locked'} />
           <span>{workspaceMode === 'locked' ? 'Locked' : 'Unlocked'}</span>
         </button>
+        <button className="replay-workspace-fullscreen-toggle" type="button" disabled={!document.fullscreenEnabled || isFullscreen} aria-label="Enter fullscreen" title="Enter fullscreen" onClick={handleEnterFullscreen}>
+          <FullscreenIcon />
+          <span>Fullscreen</span>
+        </button>
+        {fullscreenError !== null && <p className="replay-workspace-fullscreen-error" role="alert">{fullscreenError}</p>}
         {isPanelManagerOpen && <PanelManager panels={panels} layout={layout} isDefaultLayout={isDefaultLayout} isLocked={workspaceMode === 'locked'} closeButtonRef={(element) => { panelManagerCloseRef.current = element }} onTogglePinning={togglePanelPinning} onResetLayout={resetLayout} onClose={closePanelManager} />}
       </div>
       <DragDropProvider
@@ -711,6 +736,12 @@ function WorkspaceModeIcon({ locked }: { readonly locked: boolean }) {
     {locked
       ? <path d="M4 7V5a4 4 0 0 1 8 0v2h1v7H3V7h1Zm1.5 0h5V5a2.5 2.5 0 0 0-5 0v2Z" />
       : <path d="M5 7V5a3 3 0 0 1 5.8-1l1.4-.5A4.5 4.5 0 0 0 3.5 5v2h-1v7h11V7H5Zm-.5 1H12v5H4.5V8Z" />}
+  </svg>
+}
+
+function FullscreenIcon() {
+  return <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16">
+    <path d="M2 2h5v1.5H3.5V6H2V2Zm7 0h5v4h-1.5V3.5H9V2ZM2 10h1.5v2.5H6V14H2v-4Zm10 2.5V10h1.5v4H9v-1.5h3Z" />
   </svg>
 }
 
