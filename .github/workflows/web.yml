@@ -2,8 +2,12 @@ name: Web
 
 on:
   pull_request:
+    paths:
+      - 'web/**'
   push:
     branches: [main]
+    paths:
+      - 'web/**'
   workflow_dispatch:
 
 permissions:
