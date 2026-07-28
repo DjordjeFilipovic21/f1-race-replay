@@ -166,70 +166,69 @@ test('renders persistent workspace headers in canonical order with definition-dr
     'replay-panel-frame',
     'replay-panel-frame',
   ])
-  expect(screen.getByRole('button', { name: 'Hide Player panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Leaderboard panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Race control panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Driver panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Telemetry panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Lap analysis panel' }).getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByRole('button', { name: 'Hide Strategy panel' }).getAttribute('aria-pressed')).toBe('true')
+  const playerUnpin = screen.getByRole('button', { name: 'Unpin Player panel' })
+  expect(playerUnpin.classList.contains('replay-panel-unpin')).toBe(true)
+  expect(playerUnpin.hasAttribute('aria-pressed')).toBe(false)
   const playerPanel = document.querySelector('.replay-control-area')
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
-  expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('⠿ Track map')
+  expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('Track map')
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '2', '1', '2'])
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1', '1', '1', '1'])
 })
 
-test('hides and restores timestamp and lap navigation with the Player panel', () => {
-  vi.useFakeTimers()
+test('unpins and restores timestamp and lap navigation with the Player panel', () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Player panel' }))
-  act(() => vi.advanceTimersByTime(240))
-  expect(screen.queryByLabelText('Replay time')).toBeNull()
-  expect(screen.queryByLabelText('Lap navigation')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+  expect(screen.queryByRole('form', { name: 'Replay time' })).toBeNull()
+  expect(screen.queryByRole('form', { name: 'Lap navigation' })).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Show Player panel' }))
-  expect(screen.getByLabelText('Replay time')).toBeTruthy()
-  expect(screen.getByLabelText('Lap navigation')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Pin Player panel' }))
+  expect(screen.getByRole('form', { name: 'Replay time' })).toBeTruthy()
+  expect(screen.getByRole('form', { name: 'Lap navigation' })).toBeTruthy()
 })
 
-test('keeps a collapsed panel frame and its drag handle mounted', () => {
+test('removes an unpinned panel frame and restores it with its drag handle from Panel Manager', () => {
   const { controller } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
 
-  expect(document.querySelector('.replay-workspace')?.children).toHaveLength(8)
+  expect(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).toHaveLength(7)
+  expect(screen.queryByRole('button', { name: 'Move Track map panel' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  expect(screen.getByRole('button', { name: 'Pin Track map panel' }).getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(screen.getByRole('button', { name: 'Pin Track map panel' }))
   expect(screen.getByRole('button', { name: 'Move Track map panel' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
 })
 
-test('hides and restores panels while cleaning up and remounting specialized subscriptions', () => {
-  vi.useFakeTimers()
+test('unpins and restores panels while cleaning up and remounting specialized subscriptions', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Track map panel' }))
-  act(() => vi.advanceTimersByTime(240))
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
   expect(screen.queryByRole('group', { name: 'Test Circuit live track map' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Show Track map panel' }).getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  expect(screen.getByRole('button', { name: 'Pin Track map panel' }).getAttribute('aria-pressed')).toBe('false')
   expect(getUnsubscribeCalls()).toBe(1)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Show Track map panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Pin Track map panel' }))
   expect(screen.getByRole('group', { name: 'Test Circuit live track map' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Hide Track map panel' }).getAttribute('aria-pressed')).toBe('true')
+  const trackMapUnpin = within(screen.getByRole('region', { name: 'Track map' })).getByRole('button', { name: 'Unpin Track map panel' })
+  expect(trackMapUnpin.classList.contains('replay-panel-unpin')).toBe(true)
+  expect(trackMapUnpin.hasAttribute('aria-pressed')).toBe(false)
   expect(controller.subscribe).toHaveBeenCalledTimes(5)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Leaderboard panel' }))
-  act(() => vi.advanceTimersByTime(240))
+  fireEvent.click(screen.getByRole('button', { name: 'Close Panel Manager' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Leaderboard panel' }))
   expect(screen.queryByRole('table')).toBeNull()
   expect(getUnsubscribeCalls()).toBe(2)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Show Leaderboard panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Pin Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
   expect(controller.subscribe).toHaveBeenCalledTimes(6)
 })

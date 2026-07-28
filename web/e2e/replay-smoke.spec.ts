@@ -21,8 +21,12 @@ test('loads deterministic replay and supports its critical controls', async ({ p
   await page.getByRole('button', { name: 'Select George Russell' }).click()
   await expect(page.getByRole('button', { name: 'Select George Russell' })).toHaveAttribute('aria-pressed', 'true')
 
-  await page.getByRole('button', { name: 'Hide Track map panel' }).click()
-  await expect(page.getByRole('button', { name: 'Show Track map panel' })).toHaveAttribute('aria-pressed', 'false')
+  await page.getByRole('button', { name: 'Unpin Track map panel' }).click()
+  await expect(page.getByRole('region', { name: 'Track map', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Panel Manager' }).click()
+  await expect(page.getByRole('dialog', { name: 'Panel Manager' })).toBeVisible()
+  await page.getByRole('button', { name: 'Pin Track map panel' }).click()
+  await expect(page.getByRole('region', { name: 'Track map', exact: true })).toBeVisible()
 })
 
 test('recovers when the initial replay pointer request fails', async ({ page }) => {
