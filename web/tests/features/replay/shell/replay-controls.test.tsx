@@ -173,8 +173,8 @@ test('renders persistent workspace headers in canonical order with definition-dr
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('Track map')
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '2', '1', '2'])
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '1', '1', '1', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '1', '2', '2'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '4', '4', '2', '2'])
 })
 
 test('unpins and restores timestamp and lap navigation with the Player panel', () => {
@@ -649,18 +649,18 @@ test('shares leaderboard clicks with the Driver and Telemetry panels and selecte
   const replay = {
     ...readySnapshot.replay!,
     leaderboardOrder: ['VER', 'NOR'],
-    drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 2 } },
+    drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 2, speed: 111 } },
   }
   const { controller, setSnapshot } = createController({ ...readySnapshot, replay })
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={twoDrivers} trackAssets={trackAssets} />)
 
   expect(screen.getByRole('region', { name: 'Driver' }).textContent).toContain('Max Verstappen')
-  expect(screen.getByRole('region', { name: 'Telemetry' }).textContent).toContain('Max Verstappen')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).textContent).toContain('246 km/h')
   fireEvent.click(screen.getByRole('button', { name: 'Select Max Verstappen' }))
   setSnapshot({ ...readySnapshot, replay: { ...replay, leaderboardOrder: ['NOR', 'VER'] } })
 
   expect(screen.getByRole('region', { name: 'Driver' }).textContent).toContain('Max Verstappen')
-  expect(screen.getByRole('region', { name: 'Telemetry' }).textContent).toContain('Max Verstappen')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).textContent).toContain('246 km/h')
   expect(screen.getByRole('button', { name: 'Select Max Verstappen' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('class')).toContain('live-track-map__marker--selected')
 })

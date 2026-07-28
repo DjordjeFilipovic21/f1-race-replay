@@ -47,7 +47,7 @@ export const LapAnalysisPanel = memo(function LapAnalysisPanel({
   if (!hasCompletedLaps) {
     return (
       <article className="lap-analysis-panel" aria-labelledby="lap-analysis-title">
-        <PanelHeader driver={driver} />
+        <PanelHeader />
         <p className="lap-analysis-panel__empty" role="status">No completed laps yet.</p>
       </article>
     )
@@ -55,7 +55,7 @@ export const LapAnalysisPanel = memo(function LapAnalysisPanel({
 
   return (
     <article className="lap-analysis-panel" aria-labelledby="lap-analysis-title">
-      <PanelHeader driver={driver} />
+      <PanelHeader />
       <div className="lap-analysis-panel__layout">
         <LapTimeChart laps={completedLaps} />
         <LapSummary latestLap={latestLap!} bestLap={bestLap} />
@@ -78,11 +78,10 @@ export const LapAnalysisPanel = memo(function LapAnalysisPanel({
   )
 })
 
-function PanelHeader({ driver }: { readonly driver: DriverMetadata }) {
+function PanelHeader() {
   return (
     <header className="lap-analysis-panel__header">
-      <p className="lap-analysis-panel__eyebrow">Lap analysis</p>
-      <h2 id="lap-analysis-title">{driver.displayName} <span>#{driver.carNumber}</span></h2>
+      <h2 id="lap-analysis-title">Lap analysis</h2>
     </header>
   )
 }

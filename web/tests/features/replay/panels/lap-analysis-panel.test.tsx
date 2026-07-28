@@ -38,7 +38,9 @@ describe('LapAnalysisPanel', () => {
       <LapAnalysisPanel drivers={DRIVERS} selectedDriverId="VER" lapSector={lapSector} sectorColours={sectorColours} />,
     )
 
-    expect(screen.getByRole('heading', { name: /max verstappen/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Lap analysis' })).toBeTruthy()
+    expect(screen.queryByText('Max Verstappen')).toBeNull()
+    expect(screen.queryByText('#1')).toBeNull()
     expect(screen.getByRole('img', { name: /lap time chart for 3 completed laps/i })).toBeTruthy()
     expect(screen.getByText('Latest')).toBeTruthy()
     expect(screen.getByText('Best')).toBeTruthy()
@@ -309,7 +311,7 @@ describe('LapAnalysisPanel', () => {
       <LapAnalysisPanel drivers={DRIVERS} selectedDriverId="VER" lapSector={lapSector} sectorColours={sectorColours} />,
     )
 
-    expect(screen.getByRole('heading', { name: /max verstappen/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Lap analysis' })).toBeTruthy()
     expect(screen.getByText('Latest')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show lap history' })).toBeTruthy()
   })
@@ -337,7 +339,7 @@ describe('LapAnalysisPanel', () => {
       <LapAnalysisPanel drivers={DRIVERS} selectedDriverId="VER" lapSector={lapSector} sectorColours={sectorColours} />,
     )
 
-    expect(screen.getByRole('heading', { name: /max verstappen/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Lap analysis' })).toBeTruthy()
     expect(screen.getByText('Latest')).toBeTruthy()
   })
 })

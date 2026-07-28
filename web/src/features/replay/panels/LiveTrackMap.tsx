@@ -64,56 +64,58 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
 
   return (
     <section className="live-track-map" aria-label={`${trackAssets.trackName} track map`}>
-      <p
-        ref={statusRef}
-        className={`live-track-map__status live-track-map__status--${initialStatus.tone}`}
-        role="status"
-        aria-live="polite"
-        aria-label={`Track status: ${initialStatus.label}`}
-        data-track-status={initialStatus.tone}
-      >
-        {initialStatus.label}
-      </p>
-      {geometry === null ? (
-        <p className="live-track-map__empty" role="status">Track geometry is unavailable for this replay.</p>
-      ) : (
-        <svg
-          className="live-track-map__svg"
-          role="group"
-          aria-label={`${trackAssets.trackName} live track map`}
-          viewBox={formatViewBox(geometry.viewBox)}
-          preserveAspectRatio="xMidYMid meet"
+      <div className="live-track-map__canvas">
+        <p
+          ref={statusRef}
+          className={`live-track-map__status live-track-map__status--${initialStatus.tone}`}
+          role="status"
+          aria-live="polite"
+          aria-label={`Track status: ${initialStatus.label}`}
+          data-track-status={initialStatus.tone}
         >
-          <path ref={(element) => setBoundaryRef(boundaryRefs.current, 0, element)} className={`live-track-map__boundary live-track-map__boundary--${initialStatus.tone}`} d={geometry.outerBoundary} data-track-status={initialStatus.tone} />
-          <path ref={(element) => setBoundaryRef(boundaryRefs.current, 1, element)} className={`live-track-map__boundary live-track-map__boundary--${initialStatus.tone}`} d={geometry.innerBoundary} data-track-status={initialStatus.tone} />
-          <path className="live-track-map__center-line" d={geometry.centerLine} />
-          <line
-            className="live-track-map__start-finish"
-            x1={geometry.startFinish[0].x}
-            y1={geometry.startFinish[0].y}
-            x2={geometry.startFinish[1].x}
-            y2={geometry.startFinish[1].y}
-          />
-          {orderMarkers(drivers, selectedDriverId).map((driver) => (
-            <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} color={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
-              <circle className="live-track-map__driver-dot" cx="0" cy="0" r={geometry.markerRadius} fill="currentColor" />
-              <text x="0" y="0" fontSize={geometry.markerLabelSize} aria-hidden="true">{driver.id}</text>
-            </g>
-          ))}
-          <g
-            ref={safetyCarRef}
-            className="live-track-map__safety-car-marker"
-            role="img"
-            aria-label="Safety Car (SC)"
-            data-track-status="hidden"
-            transform="translate(0 0)"
-            visibility="hidden"
+          {initialStatus.label}
+        </p>
+        {geometry === null ? (
+          <p className="live-track-map__empty" role="status">Track geometry is unavailable for this replay.</p>
+        ) : (
+          <svg
+            className="live-track-map__svg"
+            role="group"
+            aria-label={`${trackAssets.trackName} live track map`}
+            viewBox={formatViewBox(geometry.viewBox)}
+            preserveAspectRatio="xMidYMid meet"
           >
-            <circle cx="0" cy="0" r={geometry.markerRadius} />
-            <text x="0" y="0" fontSize={geometry.markerLabelSize}>SC</text>
-          </g>
-        </svg>
-      )}
+            <path ref={(element) => setBoundaryRef(boundaryRefs.current, 0, element)} className={`live-track-map__boundary live-track-map__boundary--${initialStatus.tone}`} d={geometry.outerBoundary} data-track-status={initialStatus.tone} />
+            <path ref={(element) => setBoundaryRef(boundaryRefs.current, 1, element)} className={`live-track-map__boundary live-track-map__boundary--${initialStatus.tone}`} d={geometry.innerBoundary} data-track-status={initialStatus.tone} />
+            <path className="live-track-map__center-line" d={geometry.centerLine} />
+            <line
+              className="live-track-map__start-finish"
+              x1={geometry.startFinish[0].x}
+              y1={geometry.startFinish[0].y}
+              x2={geometry.startFinish[1].x}
+              y2={geometry.startFinish[1].y}
+            />
+            {orderMarkers(drivers, selectedDriverId).map((driver) => (
+              <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} color={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
+                <circle className="live-track-map__driver-dot" cx="0" cy="0" r={geometry.markerRadius} fill="currentColor" />
+                <text x="0" y="0" fontSize={geometry.markerLabelSize} aria-hidden="true">{driver.id}</text>
+              </g>
+            ))}
+            <g
+              ref={safetyCarRef}
+              className="live-track-map__safety-car-marker"
+              role="img"
+              aria-label="Safety Car (SC)"
+              data-track-status="hidden"
+              transform="translate(0 0)"
+              visibility="hidden"
+            >
+              <circle cx="0" cy="0" r={geometry.markerRadius} />
+              <text x="0" y="0" fontSize={geometry.markerLabelSize}>SC</text>
+            </g>
+          </svg>
+        )}
+      </div>
     </section>
   )
 })

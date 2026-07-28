@@ -11,7 +11,7 @@
   .replay-panel, .app-diagnostic { padding: 1.5rem; }
   .replay-panel__header { align-items: end; grid-template-columns: 1fr auto; }
   .live-track-map__svg { min-height: 20rem; }
-  .replay-workspace { align-items: start; gap: 12px; grid-auto-flow: dense; grid-auto-rows: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .replay-workspace { align-items: start; gap: var(--replay-workspace-gap); grid-auto-flow: dense; grid-auto-rows: var(--replay-workspace-row-height); grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
   .driver-telemetry-panel__layout { grid-template-columns: minmax(9rem, .8fr) minmax(0, 1fr); }
   .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

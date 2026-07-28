@@ -118,6 +118,9 @@ describe('TyreStrategyPanel rendering', () => {
     )
 
     expect(screen.getByRole('status').textContent).toContain('No stint data is available yet')
+    expect(screen.getByRole('heading', { name: 'Strategy' })).toBeTruthy()
+    expect(screen.queryByText('Max Verstappen')).toBeNull()
+    expect(screen.queryByText('#1')).toBeNull()
   })
 
   test('renders race-distance timeline with compound labels and lap ranges', () => {
@@ -146,6 +149,10 @@ describe('TyreStrategyPanel rendering', () => {
         pitLossModel={null}
       />,
     )
+
+    expect(screen.getByRole('heading', { name: 'Strategy' })).toBeTruthy()
+    expect(screen.queryByText('Max Verstappen')).toBeNull()
+    expect(screen.queryByText('#1')).toBeNull()
 
     // Compound labels appear in segments
     expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)

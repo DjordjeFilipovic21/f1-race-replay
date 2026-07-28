@@ -7,6 +7,7 @@ h1 { font-size: 1.35rem; }
 h2 { font-size: 1rem; }
 .replay-time, .replay-lap { color: #f4f5f6; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; font-weight: 800; }
 .replay-time-editor, .replay-lap-editor { align-items: center; display: flex; flex-wrap: wrap; gap: .2rem; }
+.replay-control-area .replay-time-editor { margin-top: .5rem; }
 .replay-time-editor, .replay-lap-editor { background: #111315; border: 1px solid var(--border); min-height: 44px; padding: .25rem .4rem; }
 .replay-time-editor { container-type: inline-size; }
 .replay-time-display, .replay-lap-display { align-items: center; display: inline-flex; white-space: nowrap; }

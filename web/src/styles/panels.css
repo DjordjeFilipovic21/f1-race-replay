@@ -11,7 +11,7 @@
 .driver-info-panel__segment dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .7rem; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .driver-info-panel__empty { color: var(--text-muted); font-size: .9rem; }
 .driver-telemetry-panel { --driver-telemetry-team-color: #7a8794; background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
-.driver-telemetry-panel__header { align-items: stretch; background: linear-gradient(105deg, #050607, #171c20); display: grid; grid-template-columns: 5px minmax(0, 1fr); gap: .65rem; padding: .7rem; }
+.driver-telemetry-panel__header { align-items: stretch; background: linear-gradient(105deg, #171c20, #101316); display: grid; grid-template-columns: 5px minmax(0, 1fr); gap: .65rem; padding: .7rem; }
 .driver-telemetry-panel__accent { background: var(--driver-telemetry-team-color); }
 .driver-telemetry-panel__eyebrow, .driver-telemetry-panel__reading dt, .driver-telemetry-panel__gauge-copy span { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
 .driver-telemetry-panel__header h2 { font-size: 1rem; line-height: 1.2; }
@@ -29,7 +29,7 @@
 .driver-telemetry-panel__reading dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .76rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
 .race-control-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; display: grid; gap: .75rem; min-width: 0; overflow: hidden; padding-bottom: .75rem; }
-.race-control-panel__header { background: linear-gradient(105deg, #050607, #171c20); display: grid; gap: .15rem; padding: .7rem; }
+.race-control-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
 .race-control-panel__eyebrow { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
 .race-control-panel__header h2 { font-size: 1rem; line-height: 1.2; }
 .race-control-panel__status { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 .75rem; }
@@ -50,7 +50,7 @@
 @keyframes race-control-message-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-.35rem); } }
 
 .lap-analysis-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
-.lap-analysis-panel__header { background: linear-gradient(105deg, #050607, #171c20); display: grid; gap: .15rem; padding: .7rem; }
+.lap-analysis-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
 .lap-analysis-panel__eyebrow { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
 .lap-analysis-panel__header h2 { font-size: 1rem; line-height: 1.2; }
 .lap-analysis-panel__header h2 span { color: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .8em; }
@@ -86,7 +86,7 @@
 .lap-analysis-panel__history { overflow: auto; }
 
 .tyre-strategy-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
-.tyre-strategy-panel__header { background: linear-gradient(105deg, #050607, #171c20); display: grid; gap: .15rem; padding: .7rem; }
+.tyre-strategy-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
 .tyre-strategy-panel__eyebrow { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
 .tyre-strategy-panel__header h2 { font-size: 1rem; line-height: 1.2; }
 .tyre-strategy-panel__header h2 span { color: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .8em; }
