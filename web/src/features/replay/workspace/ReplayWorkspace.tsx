@@ -90,6 +90,7 @@ const PANEL_EXIT_ANIMATION_DURATION_MS = 120
 const PANEL_EXIT_ANIMATION_FALLBACK_MS = PANEL_EXIT_ANIMATION_DURATION_MS + 60
 const FLIP_ANIMATION_DURATION_MS = 240
 const FLIP_ANIMATION_FALLBACK_MS = FLIP_ANIMATION_DURATION_MS + 60
+const MODE_TRANSITION_DURATION_MS = 420
 
 export interface ReplayPanelRect {
   readonly left: number
@@ -98,19 +99,23 @@ export interface ReplayPanelRect {
   readonly height: number
 }
 
-export function computeReplayPanelFlipKeyframes(from: ReplayPanelRect, to: ReplayPanelRect): Keyframe[] {
+type ReplayPanelFlipDirection = 'natural' | 'from-below'
+
+export function computeReplayPanelFlipKeyframes(from: ReplayPanelRect, to: ReplayPanelRect, direction: ReplayPanelFlipDirection = 'natural'): Keyframe[] {
   const scaleX = from.width > 0 && to.width > 0 ? from.width / to.width : 1
   const scaleY = from.height > 0 && to.height > 0 ? from.height / to.height : 1
+  const naturalTranslateY = from.top - to.top
+  const translateY = direction === 'from-below' ? Math.max(Math.abs(naturalTranslateY), 12) : naturalTranslateY
   return [
-    { transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${scaleX}, ${scaleY})` },
+    { transform: `translate(${from.left - to.left}px, ${translateY}px) scale(${scaleX}, ${scaleY})` },
     { transform: 'translate(0px, 0px) scale(1, 1)' },
   ]
 }
 
-export function animateReplayPanelFlip(element: HTMLElement, from: ReplayPanelRect, to: ReplayPanelRect): Animation | null {
+export function animateReplayPanelFlip(element: HTMLElement, from: ReplayPanelRect, to: ReplayPanelRect, duration = FLIP_ANIMATION_DURATION_MS, direction: ReplayPanelFlipDirection = 'natural'): Animation | null {
   if (prefersReducedMotion() || typeof element.animate !== 'function') return null
-  const animation = element.animate(computeReplayPanelFlipKeyframes(from, to), {
-    duration: FLIP_ANIMATION_DURATION_MS,
+  const animation = element.animate(computeReplayPanelFlipKeyframes(from, to, direction), {
+    duration,
     easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
     fill: 'forwards',
     id: 'replay-panel-flip',
@@ -146,6 +151,8 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const exitSnapshotSequenceRef = useRef(0)
   const flipFirstRectsRef = useRef<ReadonlyMap<ReplayPanelId, ReplayPanelRect>>(new Map())
   const flipAnimationsRef = useRef(new Map<ReplayPanelId, ReplayPanelFlipAnimationRecord>())
+  const flipDurationRef = useRef(FLIP_ANIMATION_DURATION_MS)
+  const flipDirectionRef = useRef<ReplayPanelFlipDirection>('natural')
   const workspaceGapPx = workspaceMode === 'locked' ? LOCKED_WORKSPACE_GAP_PX : REPLAY_WORKSPACE_GAP_PX
   const workspaceStyle: ReplayWorkspaceStyle = {
     '--replay-workspace-gap': `${workspaceGapPx}px`,
@@ -224,8 +231,16 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   }
 
   const toggleWorkspaceMode = useCallback(() => {
+    const shouldAnimate = !prefersReducedMotion()
+    cancelFlipAnimations()
+    if (shouldAnimate) {
+      captureFlipPositions()
+      flipDurationRef.current = MODE_TRANSITION_DURATION_MS
+      flipDirectionRef.current = workspaceMode === 'locked' ? 'from-below' : 'natural'
+    }
     setWorkspaceMode((current) => current === 'locked' ? 'unlocked' : 'locked')
-  }, [])
+    if (shouldAnimate) setFlipRevision((revision) => revision + 1)
+  }, [cancelFlipAnimations, captureFlipPositions, workspaceMode])
 
   useEffect(() => {
     if (!isPanelManagerOpen) return
@@ -285,7 +300,11 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
 
   useLayoutEffect(() => {
     const firstRects = flipFirstRectsRef.current
+    const duration = flipDurationRef.current
+    const direction = flipDirectionRef.current
     flipFirstRectsRef.current = new Map()
+    flipDurationRef.current = FLIP_ANIMATION_DURATION_MS
+    flipDirectionRef.current = 'natural'
     if (firstRects.size === 0 || prefersReducedMotion()) return
 
     panelElementsRef.current.forEach((element, id) => {
@@ -293,7 +312,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
       if (from === undefined || entryPanelIds.has(id)) return
       const to = readReplayPanelRect(element)
       if (isSameReplayPanelRect(from, to)) return
-      const animation = animateReplayPanelFlip(element, from, to)
+      const animation = animateReplayPanelFlip(element, from, to, duration, direction)
       if (animation === null) return
       const record: ReplayPanelFlipAnimationRecord = { animation, cleanup: () => undefined, timeout: 0 }
       const cleanup = () => {
@@ -305,7 +324,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
       }
       record.cleanup = cleanup
       flipAnimationsRef.current.set(id, record)
-      record.timeout = window.setTimeout(cleanup, FLIP_ANIMATION_FALLBACK_MS)
+      record.timeout = window.setTimeout(cleanup, Math.max(FLIP_ANIMATION_FALLBACK_MS, duration + 60))
       animation.addEventListener('finish', cleanup)
       animation.finished.then(cleanup, () => undefined)
     })

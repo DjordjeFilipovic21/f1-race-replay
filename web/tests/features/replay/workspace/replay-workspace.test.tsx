@@ -91,6 +91,17 @@ test('computes a FLIP translation and size correction from the captured rectangl
   ])
 })
 
+test('starts an unlocking FLIP below the final panel position', () => {
+  expect(computeReplayPanelFlipKeyframes(
+    { left: 100, top: 280, width: 100, height: 50 },
+    { left: 120, top: 300, width: 200, height: 100 },
+    'from-below',
+  )).toEqual([
+    { transform: 'translate(-20px, 20px) scale(0.5, 0.5)' },
+    { transform: 'translate(0px, 0px) scale(1, 1)' },
+  ])
+})
+
 test('invokes WAAPI with restrained FLIP timing when available', () => {
   const previousDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
   const animation = {
@@ -404,6 +415,33 @@ test('switches the shared workspace gap metric with lock mode', () => {
   expect(workspace.dataset.workspaceMode).toBe('unlocked')
 })
 
+test('animates panel geometry when switching workspace mode', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const animate = vi.fn(() => ({
+    addEventListener: vi.fn(),
+    cancel: vi.fn(),
+    finished: new Promise<never>(() => undefined),
+    removeEventListener: vi.fn(),
+  }) as unknown as Animation)
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const index = panels.findIndex((panel) => panel.label === this.getAttribute('aria-label'))
+    const isLocked = this.closest('.replay-workspace')?.getAttribute('data-workspace-mode') === 'locked'
+    const top = Math.max(index, 0) * (isLocked ? 90 : 100)
+    return { bottom: top + 80, height: 80, left: 0, right: 100, toJSON: () => ({}), top, width: 100, x: 0, y: top } as DOMRect
+  })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
+
+    expect(animate).toHaveBeenCalled()
+    expect(animate).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ duration: 420 }))
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+  }
+})
+
 test('remeasures panel row spans when the mode changes the grid gap', () => {
   // Arrange - make panel measurement deterministic and notify observers synchronously.
   const previousResizeObserver = globalThis.ResizeObserver
@@ -455,10 +493,10 @@ test('collapses only locked drag chrome while retaining semantic panel content',
 
   // Assert - CSS hides header chrome, while the semantic controls and panel body remain in the DOM.
   const telemetryRegion = screen.getByRole('region', { name: 'Telemetry' })
-  expect(lockedHeaderRule).toContain('height: 0')
-  expect(lockedHeaderRule).toContain('overflow: hidden')
+  expect(lockedHeaderRule).toContain('max-height: 0')
+  expect(lockedHeaderRule).toContain('opacity: 0')
   expect(lockedHeaderRule).toContain('pointer-events: none')
-  expect(lockedBodyRule).toContain('background: #101316')
+  expect(lockedBodyRule).toContain('background-color: #101316')
   expect(within(telemetryRegion).getByRole('button', { name: 'Move Telemetry panel' })).toBeTruthy()
   expect(within(telemetryRegion).getByText('Telemetry content')).toBeTruthy()
 })
@@ -467,9 +505,9 @@ test('swaps drag chrome for internal gradient headers across workspace modes', (
   const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header)'
   const unlockedHeaderScope = ":is(.replay-workspace, .replay-panel-drag-snapshot)[data-workspace-mode='unlocked']"
 
-  expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { display: none; }`)
+  expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} .race-control-panel { padding-top: .75rem; }`)
-  expect(appWorkspaceStyles).toContain(`.replay-workspace[data-workspace-mode='locked'] ${gradientHeaders} { display: grid; }`)
+  expect(appWorkspaceStyles).toContain(`:is(.replay-workspace, .replay-panel-drag-snapshot) ${gradientHeaders} { max-height: 6rem; opacity: 1;`)
 })
 
 test('marks each panel frame with a stable id and scopes locked surface merging away from Player', () => {
@@ -481,15 +519,15 @@ test('marks each panel frame with a stable id and scopes locked surface merging 
 
   expect(screen.getByRole('region', { name: 'Player' }).getAttribute('data-panel-id')).toBe('player')
   expect(screen.getByRole('region', { name: 'Telemetry' }).getAttribute('data-panel-id')).toBe('telemetry')
-  expect(lockedSurfaceRule).toContain('background: #101316')
-  expect(nonPlayerBodyRule).toContain('background: #101316')
+  expect(lockedSurfaceRule).toContain('background-color: #101316')
+  expect(nonPlayerBodyRule).toContain('background-color: #101316')
   expect(nonPlayerBodyRule).toContain('padding: .5rem')
   expect(lockedTrackMapRule).toContain('border: 0')
   expect(nonPlayerContentRule).toContain('background: transparent !important')
   expect(nonPlayerContentRule).toContain('border: 0 !important')
   expect(nonPlayerContentRule).toContain('box-shadow: none !important')
   expect(appWorkspaceStyles).toContain(".replay-panel-frame__body > :not(.replay-error-boundary)")
-  expect(appWorkspaceStyles).toContain(".replay-workspace--locked .replay-panel-frame__body { background: #101316; }")
+  expect(appWorkspaceStyles).toContain(".replay-workspace--locked .replay-panel-frame__body { background-color: #101316;")
 })
 
 test('keeps responsive masonry CSS tied to the shared gap and row metrics', () => {
