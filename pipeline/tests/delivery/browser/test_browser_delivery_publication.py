@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import stat
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -28,6 +30,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 import f1_replay_pipeline.delivery.browser.browser_delivery_publication as publication
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
+    BrowserDeliveryCleanupError, BrowserDeliveryDurabilityUncertainError,
     BrowserDeliveryPublicationError, BrowserValidationProgress, _artifact_payloads,
     _contract_validators, _load_contract_schemas, _prepared_artifacts,
     _validate_delivery_payloads, publish_browser_delivery, validate_complete_browser_delivery,
@@ -102,6 +105,240 @@ def test_publication_is_byte_identical(tmp_path: Path) -> None:
     assert [path.read_bytes() for path in (first.manifest_path, first.track_assets_path, *first.chunk_paths)] == [
         path.read_bytes() for path in (second.manifest_path, second.track_assets_path, *second.chunk_paths)
     ]
+
+
+def test_directory_durability_is_ordered_before_pointer_selection(tmp_path: Path, monkeypatch) -> None:
+    events: list[tuple[str, str]] = []
+    real_fsync = publication.os.fsync
+    real_replace = publication.os.replace
+
+    def record_fsync(descriptor: int) -> None:
+        path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            events.append(("fsync", path.name))
+        real_fsync(descriptor)
+
+    def record_replace(source, destination, **kwargs) -> None:
+        if destination == "delivery-one":
+            events.append(("rename", "generation"))
+        elif destination == "browser-current.json":
+            events.append(("replace", "pointer"))
+        real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(publication.os, "fsync", record_fsync)
+    monkeypatch.setattr(publication.os, "replace", record_replace)
+
+    _publish(tmp_path / "browser")
+
+    generation_rename = events.index(("rename", "generation"))
+    pointer_replace = events.index(("replace", "pointer"))
+    assert events.index(("fsync", "browser")) < generation_rename
+    assert events.index(("fsync", "generations"), generation_rename) < pointer_replace
+    assert events.index(("fsync", "browser"), pointer_replace) > pointer_replace
+
+
+@pytest.mark.parametrize("unsupported_errno", [errno.EINVAL, errno.ENOTSUP, errno.EBADF])
+def test_unsupported_directory_fsync_is_tolerated(
+    tmp_path: Path, monkeypatch, unsupported_errno: int,
+) -> None:
+    real_fsync = publication.os.fsync
+
+    def reject_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(unsupported_errno, "directory fsync unsupported")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(publication.os, "fsync", reject_directory_fsync)
+
+    result = _publish(tmp_path / "browser")
+
+    assert result.delivery_version == "delivery-one"
+    assert result.pointer_path.exists()
+
+
+def test_unsupported_postcommit_fsync_with_release_failure_is_uncertain(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    class FailingLease:
+        def release(self) -> None:
+            raise OSError("injected browser lease release")
+
+    class FailingLock:
+        def acquire(self, _target_parent: Path) -> FailingLease:
+            return FailingLease()
+
+    real_fsync = publication.os.fsync
+
+    def reject_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.ENOTSUP, "directory fsync unsupported")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(publication, "LocalRecoveryLock", FailingLock)
+    monkeypatch.setattr(publication.os, "fsync", reject_directory_fsync)
+
+    with pytest.raises(BrowserDeliveryDurabilityUncertainError) as raised:
+        _publish(tmp_path / "browser")
+
+    assert raised.value.result.delivery_version == "delivery-one"
+    assert not raised.value.durability_confirmed
+    assert {str(error) for error in raised.value.cleanup_errors} == {
+        "unable to release verifiable browser publication ownership",
+    }
+
+
+def test_precommit_directory_fsync_failure_preserves_prior_pointer(tmp_path: Path, monkeypatch) -> None:
+    browser = tmp_path / "browser"
+    previous = _publish(browser)
+    pointer_before = previous.pointer_path.read_bytes()
+    real_fsync = publication.os.fsync
+
+    def fail_staged_directory(descriptor: int) -> None:
+        if Path(os.readlink(f"/proc/self/fd/{descriptor}")).name == "chunks":
+            raise OSError("injected staged directory fsync")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(publication.os, "fsync", fail_staged_directory)
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="secure browser publication failed") as raised:
+        publish_browser_delivery(
+            browser_parent=browser, delivery_version="delivery-two",
+            delivery=_delivery(), schema_root=SCHEMA_ROOT,
+        )
+
+    assert not isinstance(raised.value, BrowserDeliveryDurabilityUncertainError)
+    assert raised.value.__cause__ is not None
+    assert "staged directory fsync" in str(raised.value.__cause__)
+    assert previous.pointer_path.read_bytes() == pointer_before
+
+
+def test_postcommit_directory_fsync_failure_preserves_committed_result(tmp_path: Path, monkeypatch) -> None:
+    browser = tmp_path / "browser"
+    _publish(browser)
+    real_fsync = publication.os.fsync
+
+    def fail_browser_root_fsync(descriptor: int) -> None:
+        if Path(os.readlink(f"/proc/self/fd/{descriptor}")).name == browser.name:
+            raise OSError("injected post-commit directory fsync")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(publication.os, "fsync", fail_browser_root_fsync)
+
+    with pytest.raises(BrowserDeliveryDurabilityUncertainError, match="durability is uncertain") as raised:
+        publish_browser_delivery(
+            browser_parent=browser, delivery_version="delivery-two",
+            delivery=_delivery(), schema_root=SCHEMA_ROOT,
+        )
+
+    assert raised.value.result.delivery_version == "delivery-two"
+    assert json.loads((browser / "browser-current.json").read_bytes())["deliveryVersion"] == "delivery-two"
+
+
+def test_ambiguous_pointer_replace_reports_observed_commit_as_uncertain(tmp_path: Path, monkeypatch) -> None:
+    browser = tmp_path / "browser"
+    _publish(browser)
+    real_replace = publication.os.replace
+
+    def replace_then_fail(source, destination, **kwargs) -> None:
+        real_replace(source, destination, **kwargs)
+        if destination == "browser-current.json":
+            raise OSError("injected ambiguous pointer replace")
+
+    monkeypatch.setattr(publication.os, "replace", replace_then_fail)
+
+    with pytest.raises(BrowserDeliveryDurabilityUncertainError) as raised:
+        publish_browser_delivery(
+            browser_parent=browser, delivery_version="delivery-two",
+            delivery=_delivery(), schema_root=SCHEMA_ROOT,
+        )
+
+    assert raised.value.result.delivery_version == "delivery-two"
+    assert json.loads((browser / "browser-current.json").read_bytes())["deliveryVersion"] == "delivery-two"
+
+
+def test_release_failure_is_cleanup_error_after_successful_commit(tmp_path: Path, monkeypatch) -> None:
+    class FailingLease:
+        def release(self) -> None:
+            raise OSError("injected browser lease release")
+
+    class FailingLock:
+        def acquire(self, _target_parent: Path) -> FailingLease:
+            return FailingLease()
+
+    monkeypatch.setattr(publication, "LocalRecoveryLock", FailingLock)
+
+    with pytest.raises(BrowserDeliveryCleanupError, match="cleanup failures") as raised:
+        _publish(tmp_path / "browser")
+
+    assert raised.value.committed
+    assert raised.value.result is not None
+    assert raised.value.result.delivery_version == "delivery-one"
+    assert {str(error) for error in raised.value.cleanup_errors} == {
+        "unable to release verifiable browser publication ownership",
+    }
+
+
+def test_root_descriptor_is_closed_before_lease_release(tmp_path: Path, monkeypatch) -> None:
+    root_descriptors: list[int] = []
+
+    real_open_directory = publication._open_directory_no_follow
+
+    def capture_root_descriptor(path: Path) -> int:
+        descriptor = real_open_directory(path)
+        root_descriptors.append(descriptor)
+        return descriptor
+
+    class Lease:
+        closed_before_release = False
+
+        def release(self) -> None:
+            try:
+                os.fstat(root_descriptors[0])
+            except OSError:
+                self.closed_before_release = True
+
+    lease = Lease()
+
+    class Lock:
+        def acquire(self, _target_parent: Path) -> Lease:
+            return lease
+
+    monkeypatch.setattr(publication, "_open_directory_no_follow", capture_root_descriptor)
+    monkeypatch.setattr(publication, "LocalRecoveryLock", Lock)
+
+    _publish(tmp_path / "browser")
+
+    assert lease.closed_before_release
+
+
+def test_release_failure_does_not_mask_precommit_failure(tmp_path: Path, monkeypatch) -> None:
+    class FailingLease:
+        def release(self) -> None:
+            raise OSError("injected browser lease release")
+
+    class FailingLock:
+        def acquire(self, _target_parent: Path) -> FailingLease:
+            return FailingLease()
+
+    real_fsync = publication.os.fsync
+
+    def fail_staged_directory(descriptor: int) -> None:
+        if Path(os.readlink(f"/proc/self/fd/{descriptor}")).name == "chunks":
+            raise OSError("injected primary staged fsync")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(publication, "LocalRecoveryLock", FailingLock)
+    monkeypatch.setattr(publication.os, "fsync", fail_staged_directory)
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="secure browser publication failed") as raised:
+        _publish(tmp_path / "browser")
+
+    assert not isinstance(raised.value, BrowserDeliveryCleanupError)
+    assert raised.value.__cause__ is not None
+    assert "primary staged fsync" in str(raised.value.__cause__)
+    assert {str(error) for error in raised.value.cleanup_errors} == {
+        "unable to release verifiable browser publication ownership",
+    }
 
 
 def test_publication_writes_and_references_timeline_summary(tmp_path: Path) -> None:

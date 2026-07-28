@@ -210,8 +210,8 @@ def _complete_tables() -> dict[str, Any]:
             {
                 "DriverNumber": ["44", "1"],
                 "LapNumber": [1, 1],
-                "LapStartTime": [pd.Timedelta("0s"), pd.Timedelta("0s")],
-                "LapTime": [pd.Timedelta("00:01:32.500"), pd.NaT],
+                "LapStartTime": [pd.Timedelta(0, unit="s"), pd.Timedelta(0, unit="s")],
+                "LapTime": [pd.Timedelta(92_500, unit="ms"), pd.NaT],
                 "Compound": ["SOFT", pd.NA],
             }
         ),
@@ -221,8 +221,8 @@ def _complete_tables() -> dict[str, Any]:
         "car_data": {
             "44": pd.DataFrame(
                 {
-                    "SessionTime": [pd.Timedelta("1s"), pd.Timedelta("1.240s"), pd.Timedelta("1.240s")],
-                    "Time": [pd.Timedelta("1s"), pd.Timedelta("1.240s"), pd.Timedelta("1.240s")],
+                    "SessionTime": [pd.Timedelta(1, unit="s"), pd.Timedelta(1_240, unit="ms"), pd.Timedelta(1_240, unit="ms")],
+                    "Time": [pd.Timedelta(1, unit="s"), pd.Timedelta(1_240, unit="ms"), pd.Timedelta(1_240, unit="ms")],
                     "Date": [pd.Timestamp("2026-03-08T05:00:01"), pd.NaT, pd.Timestamp("2026-03-08T05:00:01.240")],
                     "Speed": [280.0, np.nan, 281.0],
                     "RPM": [11000, pd.NA, 11100],
@@ -234,14 +234,14 @@ def _complete_tables() -> dict[str, Any]:
                 }
             ),
             "1": pd.DataFrame(
-                {"SessionTime": [pd.Timedelta("1.720s")], "Time": [pd.Timedelta("1.720s")], "Speed": [300.0], "Source": ["car"]}
+                {"SessionTime": [pd.Timedelta(1_720, unit="ms")], "Time": [pd.Timedelta(1_720, unit="ms")], "Speed": [300.0], "Source": ["car"]}
             ),
         },
         "pos_data": {
             "44": pd.DataFrame(
                 {
-                    "SessionTime": [pd.Timedelta("1.100s"), pd.Timedelta("1.480s"), pd.Timedelta("1.480s")],
-                    "Time": [pd.Timedelta("1.100s"), pd.Timedelta("1.480s"), pd.Timedelta("1.480s")],
+                    "SessionTime": [pd.Timedelta(1_100, unit="ms"), pd.Timedelta(1_480, unit="ms"), pd.Timedelta(1_480, unit="ms")],
+                    "Time": [pd.Timedelta(1_100, unit="ms"), pd.Timedelta(1_480, unit="ms"), pd.Timedelta(1_480, unit="ms")],
                     "Date": [pd.Timestamp("2026-03-08T05:00:01.100"), pd.NaT, pd.Timestamp("2026-03-08T05:00:01.480")],
                     "X": [10.0, np.nan, 11.0],
                     "Y": [20.0, 21.0, 21.0],
@@ -251,14 +251,14 @@ def _complete_tables() -> dict[str, Any]:
                 }
             ),
             "1": pd.DataFrame(
-                {"SessionTime": [pd.Timedelta("2.030s")], "Time": [pd.Timedelta("2.030s")], "X": [30.0], "Source": ["pos"]}
+                {"SessionTime": [pd.Timedelta(2_030, unit="ms")], "Time": [pd.Timedelta(2_030, unit="ms")], "X": [30.0], "Source": ["pos"]}
             ),
         },
         "weather_data": pd.DataFrame(
-            {"Time": [pd.Timedelta("0s"), pd.Timedelta("1min")], "AirTemp": [24.5, np.nan], "Humidity": [pd.NA, 61.0], "Rainfall": [False, pd.NA]}
+            {"Time": [pd.Timedelta(0, unit="s"), pd.Timedelta(1, unit="min")], "AirTemp": [24.5, np.nan], "Humidity": [pd.NA, 61.0], "Rainfall": [False, pd.NA]}
         ),
         "track_status": pd.DataFrame(
-            {"Time": [pd.Timedelta("0s"), pd.Timedelta("1.500s")], "Status": ["1", "2"], "Message": ["AllClear", None]}
+            {"Time": [pd.Timedelta(0, unit="s"), pd.Timedelta(1_500, unit="ms")], "Status": ["1", "2"], "Message": ["AllClear", None]}
         ),
         "race_control_messages": pd.DataFrame(
             {
