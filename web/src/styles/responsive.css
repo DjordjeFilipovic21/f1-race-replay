@@ -1,0 +1,41 @@
+@media (min-width: 375px) {
+  .live-leaderboard__table th, .live-leaderboard__table td { padding-inline: .5rem; }
+}
+
+@container (max-width: 14rem) {
+  .replay-time-duration { display: none; }
+}
+
+@media (min-width: 768px) {
+  .app-shell { padding: 2rem; }
+  .replay-panel, .app-diagnostic { padding: 1.5rem; }
+  .replay-panel__header { align-items: end; grid-template-columns: 1fr auto; }
+  .live-track-map__svg { min-height: 20rem; }
+  .replay-workspace { align-items: start; gap: 12px; grid-auto-flow: dense; grid-auto-rows: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
+  .driver-telemetry-panel__layout { grid-template-columns: minmax(9rem, .8fr) minmax(0, 1fr); }
+  .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+@media (min-width: 1024px) {
+  .replay-workspace { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .replay-panel-frame { grid-column-start: var(--replay-panel-desktop-column); }
+  .replay-navigation { grid-template-columns: minmax(0, 1fr); justify-items: stretch; }
+  .replay-controls { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 1440px) {
+  .replay-panel { padding: 1.75rem; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button, select { transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease; }
+  .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
+  .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
+  .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
+  .replay-panel-frame__body { transition: grid-template-rows 240ms ease, opacity 180ms ease, padding 240ms ease, transform 240ms ease; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .race-control-panel__message, .race-control-panel__message--exiting { animation: none; }
+}

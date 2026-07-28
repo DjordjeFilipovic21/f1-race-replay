@@ -3,6 +3,7 @@ import { isSortable, useSortable } from '@dnd-kit/react/sortable'
 import { pointerDistance, pointerIntersection, type CollisionDetector } from '@dnd-kit/collision'
 import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
+import { ReplayErrorBoundary } from '../shell/ReplayErrorBoundary'
 import {
   commitReplayPanelDrag,
   isSameReplayPanelLayout,
@@ -294,7 +295,7 @@ function ReplayPanelFrame({ panel, visible, index, rowSpan, desktopColumnStart, 
     '--replay-panel-desktop-column': responsiveColumnStart(desktopColumnStart, panel.columns, 4),
   }
   return <SortablePanel id={panel.id} index={index} className="replay-panel-frame" style={style} label={panel.label} visible={visible} isDragging={isDragging} onMeasure={onMeasure} onPanelElement={onPanelElement} onToggle={onToggle}>
-    {contentVisibility !== 'hidden' && <div className={`replay-panel-frame__body${contentVisibility === 'entering' ? ' replay-panel-frame__body--entering' : contentVisibility === 'exiting' ? ' replay-panel-frame__body--exiting' : ''}`} aria-hidden={contentVisibility === 'exiting'} inert={contentVisibility === 'exiting'}>{panel.element}</div>}
+    {contentVisibility !== 'hidden' && <div className={`replay-panel-frame__body${contentVisibility === 'entering' ? ' replay-panel-frame__body--entering' : contentVisibility === 'exiting' ? ' replay-panel-frame__body--exiting' : ''}`} aria-hidden={contentVisibility === 'exiting'} inert={contentVisibility === 'exiting'}><ReplayErrorBoundary label={`${panel.label} panel`}>{panel.element}</ReplayErrorBoundary></div>}
   </SortablePanel>
 }
 

@@ -135,6 +135,30 @@ test('slides a panel body out and back in when its visibility changes', () => {
   expect(body?.getAttribute('aria-hidden')).toBe('false')
 })
 
+test('contains a panel render failure and retries only the failed panel', () => {
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  let shouldThrow = true
+  const UnstablePanel = () => {
+    if (shouldThrow) throw new Error('Telemetry renderer failed')
+    return <p>Recovered content</p>
+  }
+  const panelsWithFailure: readonly ReplayWorkspacePanel[] = [
+    { ...panels[0], element: <UnstablePanel /> },
+    panels[1],
+  ]
+
+  render(<ReplayWorkspace panels={panelsWithFailure} />)
+
+  expect(screen.getByRole('alert', { name: 'Player panel error' }).textContent).toContain('Telemetry renderer failed')
+  expect(screen.getByText('Track content')).toBeTruthy()
+
+  shouldThrow = false
+  fireEvent.click(screen.getByRole('button', { name: 'Retry player panel' }))
+
+  expect(screen.getByText('Recovered content')).toBeTruthy()
+  expect(screen.queryByRole('alert', { name: 'Player panel error' })).toBeNull()
+})
+
 function workspacePanelLabels(): string[] {
   return Array.from(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).map((panel) => panel.getAttribute('aria-label') ?? '')
 }

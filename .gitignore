@@ -28,6 +28,8 @@ still_frame.png
 /web/node_modules/
 /web/dist/
 /web/public/
+/web/playwright-report/
+/web/test-results/
 
 # OS / IDE files
 .DS_Store

@@ -110,6 +110,24 @@ describe('replay controller', () => {
     expect(scheduler.cancelled).toEqual([1])
   })
 
+  test('does not publish an asynchronous chunk completion after disposal', async () => {
+    const base = await loadReplayIndex({ source: fixtureSource })
+    const deferred = createDeferred<ReplayChunk>()
+    const controller = createReplayController({
+      index: Object.freeze({ ...base, loadChunk: (sequence: number) => sequence === 1 ? deferred.promise : base.loadChunk(sequence) }),
+      scheduler: createScheduler(),
+    })
+    const listener = vi.fn()
+    controller.subscribe(listener)
+
+    controller.dispose()
+    deferred.resolve(await base.loadChunk(1))
+    await flushAsyncWork()
+
+    expect(listener).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().status).toBe('loading')
+  })
+
   test('retains events from a delayed promoted chunk at the following handoff', async () => {
     const base = await loadReplayIndex({ source: fixtureSource })
     const deferred = createDeferred<ReplayChunk>()
