@@ -69,6 +69,17 @@ test('distinguishes the default layout from user layout choices', () => {
   expect(isDefaultReplayPanelLayout(panelIds, commitReplayPanelDrag(defaultLayout, { id: 'leaderboard', index: 0 }))).toBe(false)
 })
 
+test('returns from custom to default after swapped panels are restored', () => {
+  const panelIds = ['player', 'track-map', 'leaderboard'] as const
+  const defaultLayout = createDefaultReplayPanelLayout(panelIds)
+  const swappedLayout = commitReplayPanelDrag(defaultLayout, { id: 'player', index: 0 })
+  const restoredLayout = commitReplayPanelDrag(swappedLayout, { id: 'player', index: 1 })
+
+  expect(isDefaultReplayPanelLayout(panelIds, defaultLayout)).toBe(true)
+  expect(isDefaultReplayPanelLayout(panelIds, swappedLayout)).toBe(false)
+  expect(isDefaultReplayPanelLayout(panelIds, restoredLayout)).toBe(true)
+})
+
 test('reorders only the displayed pinned subset while retaining unpinned slots', () => {
   const reordered = commitReplayPanelDrag(layout, { id: 'track-map', index: 0 })
   expect(reordered).toEqual(layout)

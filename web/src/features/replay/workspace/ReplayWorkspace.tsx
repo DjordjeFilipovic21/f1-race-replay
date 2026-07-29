@@ -8,7 +8,6 @@ import {
   commitReplayPanelDrag,
   createDefaultReplayPanelLayout,
   defaultReplayPanelColumn,
-  isDefaultReplayPanelLayout,
   isSameReplayPanelLayout,
   isReplayPanelId,
   reconcileReplayPanelLayout,
@@ -18,7 +17,7 @@ import {
 } from './replay-panel-layout'
 import { loadReplayWorkspacePreferences, saveReplayWorkspacePreferences, type ReplayWorkspaceMode, type ReplayWorkspaceStorage } from './replay-workspace-preferences'
 import { LOCKED_WORKSPACE_GAP_PX, MASONRY_ROW_HEIGHT_PX, REPLAY_WORKSPACE_GAP_PX, masonryRowSpan } from './replay-workspace-masonry'
-import { canonicalDesktopColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount, type MasonryPlacementItem, type PanelVerticalGeometry } from './replay-workspace-placement'
+import { canonicalDesktopColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, isSameMasonryLayout, previewMasonryRow, resolveMasonryLayout, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount, type MasonryPlacementItem, type PanelVerticalGeometry } from './replay-workspace-placement'
 
 export type { ReplayPanelId, ReplayPanelLayoutItem } from './replay-panel-layout'
 
@@ -154,7 +153,6 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const panelManagerToggleRef = useRef<HTMLButtonElement | null>(null)
   const panelManagerCloseRef = useRef<HTMLButtonElement | null>(null)
   const dragMoveRef = useRef<DragMoveState | null>(null)
-  const dragOriginRectRef = useRef<ReplayPanelRect | null>(null)
   const dropPreviewRef = useRef<ReplayDropPreview | null>(null)
   const panelElementsRef = useRef(new Map<ReplayPanelId, HTMLElement>())
   const exitSnapshotSequenceRef = useRef(0)
@@ -323,7 +321,8 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     const panel = panelsById.get(item.id)
     return panel === undefined ? [] : [{ panel, layout: item }]
   })
-  const isDefaultLayout = isDefaultReplayPanelLayout(panelIds, layout)
+  const defaultLayout = createDefaultReplayPanelLayout(panelIds)
+  const isDefaultLayout = isSameReplayWorkspaceVisualLayout(layout, defaultLayout, panelsById, rowSpans, columnCount)
   const pinnedPanelCount = layout.filter((item) => item.pinned).length
 
   useLayoutEffect(() => {
@@ -381,16 +380,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     const columns: 1 | 2 = panel.columns === 2 && nextColumnCount > 1 ? 2 : 1
     const columnStart = responsiveColumnStart(desktopColumnStart, panel.columns, nextColumnCount)
     const rowSpan = rowSpans[move.id] ?? 1
-    const items: readonly MasonryPlacementItem[] = layout.flatMap((item) => {
-      if (!item.pinned) return []
-      const registered = panelsById.get(item.id)
-      return registered === undefined ? [] : [{
-        id: item.id,
-        columnStart: responsiveColumnStart(item.desktopColumnStart, registered.columns, nextColumnCount),
-        columns: (registered.columns === 2 && nextColumnCount > 1 ? 2 : 1) as 1 | 2,
-        rowSpan: rowSpans[item.id] ?? 1,
-      }]
-    })
+    const items = createWorkspaceMasonryItems(layout, panelsById, rowSpans, nextColumnCount)
     const geometryById = new Map<string, PanelVerticalGeometry>()
     panelElementsRef.current.forEach((element, id) => {
       const { bottom, top } = element.getBoundingClientRect()
@@ -445,10 +435,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') return
           dragMoveRef.current = null
           updateDropPreview(null)
-          const id = panelIdFromSortableId(event.operation.source?.id)
-          const sourceElement = id === null ? undefined : panelElementsRef.current.get(id)
-          dragOriginRectRef.current = sourceElement === undefined ? null : readReplayPanelRect(sourceElement)
-          setActivePanelId(id)
+          setActivePanelId(panelIdFromSortableId(event.operation.source?.id))
         }}
         onDragMove={(event) => {
           if (workspaceMode === 'locked') {
@@ -478,16 +465,14 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') {
             setActivePanelId(null)
             dragMoveRef.current = null
-            dragOriginRectRef.current = null
             updateDropPreview(null)
             return
           }
           setActivePanelId(null)
+          const lastDragMove = dragMoveRef.current
           dragMoveRef.current = null
-          const dragOriginRect = dragOriginRectRef.current
-          dragOriginRectRef.current = null
           const source = event.operation.source
-          if (event.canceled || !isSortable(source)) {
+          if (event.canceled || !isSortable(source) || lastDragMove === null) {
             updateDropPreview(null)
             return
           }
@@ -496,22 +481,21 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
             updateDropPreview(null)
             return
           }
-          const center = event.operation.shape?.current.center
-          if (center !== undefined && dragOriginRect !== null && isPointInsideReplayPanelRect(center.x, center.y, dragOriginRect)) {
-            updateDropPreview(null)
-            return
-          }
+          const center = event.operation.shape?.current.center ?? { x: lastDragMove.centerX, y: lastDragMove.centerY }
           const destination = dropPreviewRef.current?.id === id
             ? dropPreviewRef.current
-            : center === undefined
-            ? null
             : createDropPreview({ id, index: source.index, centerX: center.x, centerY: center.y }, columnCount)
           updateDropPreview(null)
-          setLayout((current) => commitReplayPanelDrag(current, {
-            id,
-            index: destination?.index ?? source.index,
-            desktopColumnStart: destination?.desktopColumnStart ?? null,
-          }))
+          setLayout((current) => {
+            const next = commitReplayPanelDrag(current, {
+              id,
+              index: destination?.index ?? source.index,
+              desktopColumnStart: destination?.desktopColumnStart ?? null,
+            })
+            const canonicalDefault = createDefaultReplayPanelLayout(panelIds)
+            const normalized = isSameReplayWorkspaceVisualLayout(next, canonicalDefault, panelsById, rowSpans, columnCount) ? canonicalDefault : next
+            return isSameReplayPanelLayout(current, normalized) ? current : normalized
+          })
         }}
       >
         <div ref={workspaceRef} className={`replay-workspace replay-workspace--${workspaceMode}`} data-workspace-mode={workspaceMode} style={workspaceStyle}>
@@ -593,8 +577,24 @@ function isSameReplayPanelRect(left: ReplayPanelRect, right: ReplayPanelRect): b
   return left.left === right.left && left.top === right.top && left.width === right.width && left.height === right.height
 }
 
-function isPointInsideReplayPanelRect(x: number, y: number, rect: ReplayPanelRect): boolean {
-  return Number.isFinite(x) && Number.isFinite(y) && x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height
+function createWorkspaceMasonryItems(layout: readonly ReplayPanelLayoutItem[], panelsById: ReadonlyMap<ReplayPanelId, ReplayWorkspacePanel>, rowSpans: Readonly<Record<ReplayPanelId, number>>, columnCount: number): readonly MasonryPlacementItem[] {
+  return layout.flatMap((item) => {
+    if (!item.pinned) return []
+    const panel = panelsById.get(item.id)
+    return panel === undefined ? [] : [{
+      id: item.id,
+      columnStart: responsiveColumnStart(item.desktopColumnStart, panel.columns, columnCount),
+      columns: (panel.columns === 2 && columnCount > 1 ? 2 : 1) as 1 | 2,
+      rowSpan: rowSpans[item.id] ?? 1,
+    }]
+  })
+}
+
+function isSameReplayWorkspaceVisualLayout(left: readonly ReplayPanelLayoutItem[], right: readonly ReplayPanelLayoutItem[], panelsById: ReadonlyMap<ReplayPanelId, ReplayWorkspacePanel>, rowSpans: Readonly<Record<ReplayPanelId, number>>, columnCount: number): boolean {
+  return isSameMasonryLayout(
+    resolveMasonryLayout(createWorkspaceMasonryItems(left, panelsById, rowSpans, columnCount), columnCount),
+    resolveMasonryLayout(createWorkspaceMasonryItems(right, panelsById, rowSpans, columnCount), columnCount),
+  )
 }
 
 function EmptyReplayWorkspace({ onOpenPanelManager }: { readonly onOpenPanelManager: () => void }) {
