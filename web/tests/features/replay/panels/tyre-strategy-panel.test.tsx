@@ -8,10 +8,9 @@ import {
   compoundColor,
   formatCompound,
   formatLapRange,
-  formatPitLossMs,
   formatSignedGapMs,
 } from '../../../../src/features/replay/panels/TyreStrategyPanel'
-import type { DriverMetadata, PitLossModel, StintSummary } from '../../../../src/data/replay/types'
+import type { DriverMetadata, StintSummary } from '../../../../src/data/replay/types'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
 
 const drivers: readonly DriverMetadata[] = [
@@ -35,26 +34,6 @@ function createStintSummary(driverStints: Record<string, {
     contractVersion: 'v1',
     fixtureId: 'fixture-1',
     drivers: driverStints,
-  }
-}
-
-function createPitLossModel(overrides: {
-  baselineMs?: number
-  priorWeight?: number
-  timeMs?: readonly number[]
-  estimatedLossMs?: readonly number[]
-  observedSampleCount?: readonly number[]
-} = {}): PitLossModel {
-  const baselineMs = overrides.baselineMs ?? 22_000
-  return {
-    contractVersion: 'v1',
-    fixtureId: 'fixture-1',
-    method: 'global-prior-weighted-mean-v1',
-    baselineMs,
-    priorWeight: overrides.priorWeight ?? 2,
-    timeMs: overrides.timeMs ?? [0],
-    estimatedLossMs: overrides.estimatedLossMs ?? [baselineMs],
-    observedSampleCount: overrides.observedSampleCount ?? [0],
   }
 }
 
@@ -83,7 +62,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId={null}
         snapshot={snapshot}
         stintSummary={null}
-        pitLossModel={null}
       />,
     )
 
@@ -97,7 +75,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={null}
         stintSummary={null}
-        pitLossModel={null}
       />,
     )
 
@@ -113,7 +90,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -146,7 +122,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -185,7 +160,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -216,7 +190,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -248,7 +221,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -263,243 +235,10 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={advancedSnapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
     expect(screen.getByLabelText(/Pit stop before stint 2/)).toBeTruthy()
-  })
-
-  test('labels pit-loss estimate as Baseline when no calibrated samples exist', () => {
-    const snapshot = createSnapshot(120_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-    const pitLossModel = createPitLossModel()
-
-    render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    expect(screen.getByText('Baseline')).toBeTruthy()
-    expect(screen.getByText('+22.000s')).toBeTruthy()
-  })
-
-  test('labels pit-loss estimate with sample count when calibrated', () => {
-    const snapshot = createSnapshot(120_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-    const pitLossModel = createPitLossModel({
-      timeMs: [0, 60_000, 120_000],
-      estimatedLossMs: [22_000, 23_500, 24_100],
-      observedSampleCount: [0, 1, 3],
-    })
-
-    render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    expect(screen.getByText('3 samples')).toBeTruthy()
-    expect(screen.getByText('+24.100s')).toBeTruthy()
-  })
-
-  test('pit-loss estimate respects causal boundary (only uses samples at or before session cursor)', () => {
-    const snapshot = createSnapshot(90_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-    const pitLossModel = createPitLossModel({
-      timeMs: [0, 60_000, 120_000],
-      estimatedLossMs: [22_000, 23_500, 24_100],
-      observedSampleCount: [0, 1, 3],
-    })
-
-    render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    // At sessionTimeMs=90000, only the 60000 sample is causal
-    expect(screen.getByText('1 sample')).toBeTruthy()
-    expect(screen.getByText('+23.500s')).toBeTruthy()
-  })
-
-  test('renders projected rejoin card when pit-loss data is available', () => {
-    const snapshot = createSnapshot(120_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-    const pitLossModel = createPitLossModel()
-
-    render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    expect(screen.getByText('Projected rejoin')).toBeTruthy()
-    expect(screen.getByText('P2')).toBeTruthy()
-    expect(screen.getByText('Based on current gaps')).toBeTruthy()
-  })
-
-  test('renders projected rejoin as unavailable when no pit-loss model', () => {
-    const snapshot = createSnapshot(120_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-
-    render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={null}
-      />,
-    )
-
-    // Both Pit-loss estimate and Projected rejoin cards show "Unavailable"
-    // when their respective data is absent
-    const rejoinLabel = screen.getByText('Projected rejoin')
-    expect(rejoinLabel).toBeTruthy()
-    const rejoinCard = rejoinLabel.closest('.tyre-strategy-panel__card')
-    expect(rejoinCard).not.toBeNull()
-    expect(rejoinCard!.textContent).toContain('Unavailable')
-  })
-
-  test('removes future stints and pit-loss samples when the replay cursor moves backward', () => {
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1, 2, 3],
-        compound: ['SOFT', 'MEDIUM', 'HARD'],
-        startLap: [1, 15, 30],
-        endLap: [14, 29, null],
-        startTimeMs: [0, 60_000, 120_000],
-        endTimeMs: [55_000, 115_000, null],
-        tyreLifeAtStart: [0, 0, 0],
-        isFreshTyre: [true, true, true],
-        pitInTimeMs: [52_000, 112_000, null],
-        pitOutTimeMs: [58_000, 118_000, null],
-      },
-    })
-    const pitLossModel = createPitLossModel({
-      timeMs: [0, 60_000, 120_000],
-      estimatedLossMs: [22_000, 23_500, 24_100],
-      observedSampleCount: [0, 1, 3],
-    })
-
-    const advancedSnapshot = createSnapshot(130_000)
-    const { rerender } = render(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={advancedSnapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Medium').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Hard').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('3 samples')).toBeTruthy()
-    expect(screen.getByText('+24.100s')).toBeTruthy()
-
-    const earlySnapshot = createSnapshot(30_000)
-    rerender(
-      <TyreStrategyPanel
-        drivers={drivers}
-        selectedDriverId="VER"
-        snapshot={earlySnapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByText('Medium')).toBeNull()
-    expect(screen.queryByText('Hard')).toBeNull()
-    expect(screen.queryByText('3 samples')).toBeNull()
-    expect(screen.queryByText('+24.100s')).toBeNull()
-    expect(screen.getByText('Baseline')).toBeTruthy()
-    expect(screen.getByText('+22.000s')).toBeTruthy()
   })
 
   test('renders empty segment when totalLaps is provided and exceeds visible stint laps', () => {
@@ -525,7 +264,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
         totalLaps={57}
       />,
     )
@@ -556,7 +294,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
         totalLaps={10}
       />,
     )
@@ -587,7 +324,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
         totalLaps={0}
       />,
     )
@@ -599,7 +335,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
         totalLaps={-5}
       />,
     )
@@ -611,7 +346,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
         totalLaps={10.5}
       />,
     )
@@ -641,7 +375,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -677,7 +410,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
 
@@ -686,44 +418,6 @@ describe('TyreStrategyPanel rendering', () => {
     expect(bar).not.toBeNull()
     expect(bar!.style.minHeight).toBe('4rem')
     expect(bar!.style.overflow).not.toBe('hidden')
-  })
-
-  test('falls back to raw nearest driver ID when driver metadata is missing', () => {
-    const snapshot = createSnapshot(120_000)
-    const stintSummary = createStintSummary({
-      VER: {
-        stintNumber: [1],
-        compound: ['SOFT'],
-        startLap: [1],
-        endLap: [null],
-        startTimeMs: [0],
-        endTimeMs: [null],
-        tyreLifeAtStart: [0],
-        isFreshTyre: [true],
-        pitInTimeMs: [null],
-        pitOutTimeMs: [null],
-      },
-    })
-    const pitLossModel = createPitLossModel({ estimatedLossMs: [2_000] })
-
-    // Only provide metadata for VER — NOR (the nearest comparator) has no metadata
-    const partialDrivers: readonly DriverMetadata[] = [
-      { id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' },
-    ]
-
-    render(
-      <TyreStrategyPanel
-        drivers={partialDrivers}
-        selectedDriverId="VER"
-        snapshot={snapshot}
-        stintSummary={stintSummary}
-        pitLossModel={pitLossModel}
-      />,
-    )
-
-    // The card should still show the nearest driver by its ID fallback
-    expect(screen.getByText('Projected rejoin')).toBeTruthy()
-    expect(screen.getByText('NOR')).toBeTruthy()
   })
 
   test('does not break hook order when selectedDriverId and snapshot transition from unavailable to available', () => {
@@ -752,7 +446,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId={null}
         snapshot={null}
         stintSummary={null}
-        pitLossModel={null}
       />,
     )
     expect(screen.getByRole('status').textContent).toContain('Tyre strategy is unavailable')
@@ -765,7 +458,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
     expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)
@@ -777,7 +469,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId={null}
         snapshot={null}
         stintSummary={null}
-        pitLossModel={null}
       />,
     )
     expect(screen.getByRole('status').textContent).toContain('Tyre strategy is unavailable')
@@ -789,7 +480,6 @@ describe('TyreStrategyPanel rendering', () => {
         selectedDriverId="VER"
         snapshot={snapshot}
         stintSummary={stintSummary}
-        pitLossModel={null}
       />,
     )
     expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)
@@ -819,12 +509,6 @@ describe('Pure helper functions', () => {
   test('formatLapRange handles ongoing and completed stints', () => {
     expect(formatLapRange(1, 14)).toBe('Lap 1–14')
     expect(formatLapRange(15, null)).toBe('Lap 15–ongoing')
-  })
-
-  test('formatPitLossMs formats estimate with 3 decimal places', () => {
-    expect(formatPitLossMs(null)).toBe('—')
-    expect(formatPitLossMs(22_000)).toBe('+22.000s')
-    expect(formatPitLossMs(23_456)).toBe('+23.456s')
   })
 
   test('formatSignedGapMs formats signed gap with 3 decimal places', () => {

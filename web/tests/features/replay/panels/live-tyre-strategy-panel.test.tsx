@@ -81,7 +81,6 @@ test('does not publish playing snapshot changes before 1 second', () => {
       refreshKey={0}
       selectedDriverId="VER"
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )
@@ -114,7 +113,6 @@ test('publishes playing snapshot changes at 1 second', () => {
       refreshKey={0}
       selectedDriverId="VER"
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )
@@ -140,7 +138,6 @@ test('flushes immediately when refreshKey changes', () => {
       refreshKey={0}
       selectedDriverId="VER"
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )
@@ -157,7 +154,6 @@ test('flushes immediately when refreshKey changes', () => {
       refreshKey={1}
       selectedDriverId="VER"
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )
@@ -178,7 +174,6 @@ test('driver-selection changes render from the latest retained throttled snapsho
       refreshKey={0}
       selectedDriverId={null}
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )
@@ -195,7 +190,6 @@ test('driver-selection changes render from the latest retained throttled snapsho
       refreshKey={0}
       selectedDriverId="VER"
       stintSummary={stintSummary}
-      pitLossModel={null}
       totalLaps={20}
     />,
   )

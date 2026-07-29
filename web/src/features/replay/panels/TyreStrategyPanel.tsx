@@ -1,8 +1,6 @@
 import { memo, useMemo, type CSSProperties } from 'react'
-import type { DriverMetadata, PitLossModel, StintSummary } from '../../../data/replay/types'
+import type { DriverMetadata, StintSummary } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
-import { selectPitLossEstimate } from '../selectors/pit-loss-selectors'
-import { selectPitRejoinProjection } from '../selectors/pit-rejoin-selectors'
 import { selectStintData, type VisibleStint } from '../selectors/stint-selectors'
 import hardTyreImage from '../../../assets/tyres/hard.png'
 import intermediateTyreImage from '../../../assets/tyres/intermediate.png'
@@ -15,7 +13,6 @@ export interface TyreStrategyPanelProps {
   readonly selectedDriverId: string | null
   readonly snapshot: ReplaySnapshot | null
   readonly stintSummary: StintSummary | null | undefined
-  readonly pitLossModel: PitLossModel | null | undefined
   readonly totalLaps?: number | null
 }
 
@@ -39,17 +36,15 @@ const COMPOUND_FALLBACK = '#7a8794'
 const TEAM_ACCENT_FALLBACK = '#7a8794'
 const HEX_COLOR = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 const PANEL_BACKGROUND = '#101316'
-const SURFACE_MUTED = '#1a2025'
 const BORDER_COLOR = 'var(--border, #35404a)'
 const TEXT_MUTED = 'var(--text-muted, #aeb9c2)'
 
-/** Renders the selected driver's stint timeline, pit-loss estimate, and projected rejoin. */
+/** Renders the selected driver's stint timeline. */
 export const TyreStrategyPanel = memo(function TyreStrategyPanel({
   drivers,
   selectedDriverId,
   snapshot,
   stintSummary,
-  pitLossModel,
   totalLaps,
 }: TyreStrategyPanelProps) {
   // All hooks are called unconditionally before any early return so hook order
@@ -57,14 +52,6 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
   const stintSelection = useMemo(
     () => selectStintData(stintSummary, snapshot ?? 0, selectedDriverId ?? ''),
     [stintSummary, snapshot, selectedDriverId],
-  )
-  const pitLoss = useMemo(
-    () => selectPitLossEstimate(pitLossModel, snapshot ?? 0),
-    [pitLossModel, snapshot],
-  )
-  const rejoinProjection = useMemo(
-    () => selectPitRejoinProjection(snapshot, selectedDriverId, pitLoss),
-    [snapshot, selectedDriverId, pitLoss],
   )
 
   const driver = selectedDriverId === null
@@ -117,17 +104,6 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
           totalLaps={resolvedTotalLaps}
           currentLap={currentDriverLap}
         />
-        <aside
-          className="tyre-strategy-panel__details"
-          style={detailsStyle()}
-          aria-label="Pit-loss estimate and projected rejoin"
-        >
-          <PitLossCard estimate={pitLoss} />
-          <ProjectedRejoinCard
-            projection={rejoinProjection}
-            drivers={drivers}
-          />
-        </aside>
       </div>
     </article>
   )
@@ -325,69 +301,6 @@ function tyreImageFor(compound: string | null): string | null {
   return TYRE_IMAGES[upper] ?? null
 }
 
-// --- Cards ---
-
-interface PitLossCardProps {
-  readonly estimate: ReturnType<typeof selectPitLossEstimate>
-}
-
-function PitLossCard({ estimate }: PitLossCardProps) {
-  const lossLabel = formatPitLossMs(estimate?.estimatedLossMs ?? null)
-  const sourceLabel = estimate === null
-    ? 'Unavailable'
-    : estimate.isBaseline
-      ? 'Baseline'
-      : `${estimate.observedSampleCount} sample${estimate.observedSampleCount === 1 ? '' : 's'}`
-
-  return (
-    <div className="tyre-strategy-panel__card" style={cardStyle()}>
-      <p style={cardEyebrowStyle()}>Pit-loss estimate</p>
-      <p style={cardValueStyle()} aria-live="polite">
-        {lossLabel}
-      </p>
-      <p style={cardMetaStyle()} aria-label={`Pit-loss source: ${sourceLabel}`}>
-        {sourceLabel}
-      </p>
-    </div>
-  )
-}
-
-interface ProjectedRejoinCardProps {
-  readonly projection: ReturnType<typeof selectPitRejoinProjection>
-  readonly drivers: readonly DriverMetadata[]
-}
-
-function ProjectedRejoinCard({ projection, drivers }: ProjectedRejoinCardProps) {
-  if (projection === null) {
-    return (
-      <div className="tyre-strategy-panel__card" style={cardStyle()}>
-        <p style={cardEyebrowStyle()}>Projected rejoin</p>
-        <p style={cardValueStyle()}>—</p>
-        <p style={cardMetaStyle()}>Unavailable</p>
-      </div>
-    )
-  }
-
-  const nearestDriver = drivers.find(({ id }) => id === projection.nearestDriverId) ?? null
-  const nearestLabel = nearestDriver?.id ?? projection.nearestDriverId
-  const signedLabel = formatSignedGapMs(projection.signedGapVsNearestMs)
-
-  return (
-    <div className="tyre-strategy-panel__card" style={cardStyle()}>
-      <p style={cardEyebrowStyle()}>Projected rejoin</p>
-      <p style={cardValueStyle()} aria-live="polite">
-        P{projection.projectedPosition}
-      </p>
-      <p style={cardMetaStyle()}>
-        <span style={signedGapColorStyle(projection.signedGapVsNearestMs)}>{signedLabel}</span>
-        {' vs '}
-        <strong>{nearestLabel}</strong>
-      </p>
-      <p style={cardFootnoteStyle()}>Based on current gaps</p>
-    </div>
-  )
-}
-
 // --- Pure helpers ---
 
 export function compoundColor(compound: string | null): string {
@@ -405,12 +318,6 @@ export function formatCompound(compound: string | null): string {
 export function formatLapRange(startLap: number, endLap: number | null): string {
   if (endLap === null) return `Lap ${startLap}–ongoing`
   return `Lap ${startLap}–${endLap}`
-}
-
-export function formatPitLossMs(estimatedLossMs: number | null): string {
-  if (estimatedLossMs === null || !Number.isFinite(estimatedLossMs)) return '—'
-  const seconds = estimatedLossMs / 1000
-  return `+${seconds.toFixed(3)}s`
 }
 
 export function formatSignedGapMs(gapMs: number): string {
@@ -499,13 +406,6 @@ function timelineBarStyle(): CSSProperties {
   }
 }
 
-function detailsStyle(): CSSProperties {
-  return {
-    display: 'grid',
-    gap: '.5rem',
-  }
-}
-
 function raceSegmentStyle(color: string, widthPercent: number): CSSProperties {
   return {
     alignItems: 'center',
@@ -590,62 +490,4 @@ function inlinePitMarkerStyle(): CSSProperties {
 
 function pitMarkerIconStyle(): CSSProperties {
   return { fontSize: '.65rem' }
-}
-
-function cardStyle(): CSSProperties {
-  return {
-    background: SURFACE_MUTED,
-    borderLeft: '2px solid #3a434c',
-    padding: '.5rem .55rem',
-  }
-}
-
-function cardEyebrowStyle(): CSSProperties {
-  return {
-    color: TEXT_MUTED,
-    fontSize: '.58rem',
-    fontWeight: 800,
-    letterSpacing: '.06em',
-    margin: 0,
-    textTransform: 'uppercase' as const,
-  }
-}
-
-function cardValueStyle(): CSSProperties {
-  return {
-    fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace',
-    fontSize: '.95rem',
-    fontVariantNumeric: 'tabular-nums',
-    fontWeight: 800,
-    margin: '.15rem 0 0',
-  }
-}
-
-function cardMetaStyle(): CSSProperties {
-  return {
-    color: TEXT_MUTED,
-    fontSize: '.62rem',
-    fontWeight: 700,
-    margin: '.2rem 0 0',
-  }
-}
-
-function cardFootnoteStyle(): CSSProperties {
-  return {
-    color: TEXT_MUTED,
-    fontSize: '.52rem',
-    fontWeight: 600,
-    margin: '.15rem 0 0',
-    fontStyle: 'italic',
-  }
-}
-
-function signedGapColorStyle(gapMs: number): CSSProperties {
-  const color = gapMs > 0 ? '#ff3138' : gapMs < 0 ? '#3dcc6b' : TEXT_MUTED
-  return {
-    color,
-    fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace',
-    fontVariantNumeric: 'tabular-nums',
-    fontWeight: 800,
-  }
 }

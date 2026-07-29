@@ -1,4 +1,4 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy' | 'pit-loss-position'
 
 const DESKTOP_WORKSPACE_COLUMNS = 4
 
@@ -11,6 +11,7 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   telemetry: 2,
   'lap-analysis': 1,
   strategy: 2,
+  'pit-loss-position': 1,
 }
 
 const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
@@ -22,6 +23,7 @@ const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
   telemetry: 2,
   'lap-analysis': 4,
   strategy: 2,
+  'pit-loss-position': 4,
 }
 
 export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Object.freeze([
@@ -33,10 +35,11 @@ export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Obj
   { id: 'lap-analysis', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['lap-analysis'] },
   { id: 'telemetry', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.telemetry },
   { id: 'strategy', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.strategy },
+  { id: 'pit-loss-position', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['pit-loss-position'] },
 ])
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy' || value === 'pit-loss-position'
 }
 
 export interface ReplayPanelLayoutItem {
