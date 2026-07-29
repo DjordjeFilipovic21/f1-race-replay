@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboardPanel } from '../../../../src/features/replay/panels/LiveLeaderboardPanel'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
+import type { PenaltySidecar } from '../../../../src/data/replay/types'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
 
 const drivers = [{ id: 'NOR', displayName: 'Lando Norris', teamName: 'McLaren', colorHex: '#ff8000', carNumber: '4' }]
@@ -61,4 +62,34 @@ test('bounds playing table updates while publishing pause and explicit refresh i
   publish(129, 7_000)
   rerender(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={1} selectedDriverId="NOR" onDriverSelect={onDriverSelect} />)
   expect(screen.getByText('+7.000')).toBeTruthy()
+})
+
+test('threads penaltySidecar through to the leaderboard and renders the penalty indicator causally', () => {
+  vi.useFakeTimers()
+  const penaltySidecar: PenaltySidecar = {
+    contractVersion: 'v1',
+    fixtureId: 'test',
+    penaltyIssuances: [
+      { driverId: 'NOR', sessionTimeMs: 50, penaltyType: 'time', reason: 'Collision', rawMessage: '10s penalty' },
+    ],
+  }
+  let controllerSnapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(1_000), crossedEvents: [], error: null }
+  const listeners = new Set<() => void>()
+  const controller: ReplayController = {
+    getSnapshot: () => controllerSnapshot,
+    subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener) },
+    start: vi.fn(), pause: vi.fn(), seek: vi.fn(), setSpeed: vi.fn(), retry: vi.fn(async () => undefined), dispose: vi.fn(),
+  }
+  const publish = (timeMs: number) => act(() => {
+    controllerSnapshot = { ...controllerSnapshot, timeMs, replay: { ...replay(1_000), sessionTimeMs: timeMs } }
+    listeners.forEach((listener) => listener())
+  })
+
+  publish(49)
+  render(<LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={0} penaltySidecar={penaltySidecar} />)
+  expect(document.querySelector('.live-leaderboard__penalty-indicator')).toBeNull()
+
+  publish(50)
+  expect(document.querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+  expect(document.querySelector('.live-leaderboard__penalty-indicator')!.getAttribute('aria-label')).toBe('Penalty issued')
 })

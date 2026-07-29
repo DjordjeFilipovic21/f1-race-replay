@@ -797,7 +797,7 @@ def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_pat
 
     _publish(tmp_path / "browser")
 
-    assert calls == 7
+    assert calls == 8
 
 
 def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:

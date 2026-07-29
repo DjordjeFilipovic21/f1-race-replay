@@ -20,12 +20,13 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-leaderboard__table tbody th { font-weight: 700; }
 .live-leaderboard__position { background: #f4f5f6 !important; border-radius: 0 0 .35rem 0; color: #111315; font-size: .75rem; font-weight: 900; padding: 0 !important; text-align: center !important; }
 .live-leaderboard__team-accent { background: var(--live-leaderboard-team-color, #7a8794) !important; padding: 0 !important; }
-.live-leaderboard__driver { color: #f4f5f6; font-size: .86rem; font-weight: 900; letter-spacing: -.03em; padding-left: .45rem !important; }
-.live-leaderboard__driver button { background: transparent; border: 0; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; min-height: 2rem; padding: 0; text-align: left; width: 100%; }
+.live-leaderboard__driver { color: #f4f5f6; font-size: .86rem; font-weight: 900; letter-spacing: -.03em; padding-left: .45rem !important; position: relative; }
+.live-leaderboard__driver button { background: transparent; border: 0; box-sizing: border-box; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; min-height: 2rem; padding: 0 1.125rem 0 0; text-align: left; width: 100%; }
 .live-leaderboard__driver button:hover:not(:disabled) { color: var(--focus); }
 .live-leaderboard__row--selected > .live-leaderboard__driver, .live-leaderboard__row--selected > .live-leaderboard__gap { background: color-mix(in srgb, var(--live-leaderboard-team-color) 18%, #111315) !important; }
 .live-leaderboard__driver button[aria-pressed='true'] { color: #fff; }
 .live-leaderboard__gap { background: rgb(0 0 0 / 35%) !important; color: #f3f4f5; font-size: .7rem; font-variant-numeric: tabular-nums; font-weight: 800; text-align: right !important; white-space: nowrap; }
+.live-leaderboard__penalty-indicator { align-items: center; background: var(--timeline-red, #ff5158); border-radius: .125rem; color: #fff; display: inline-flex; font-size: .6rem; font-weight: 900; height: .875rem; justify-content: center; line-height: 1; pointer-events: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: .875rem; }
 .live-leaderboard__tyre { align-items: center; display: inline-flex; gap: .35rem; justify-content: flex-end; }
 .live-leaderboard__tyre-image { display: block; height: 1.4rem; object-fit: contain; width: 1.4rem; }
 .live-leaderboard__tyre-age { min-width: 3.25rem; }

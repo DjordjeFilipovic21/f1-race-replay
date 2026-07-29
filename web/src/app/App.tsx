@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { loadReplayIndex } from '../data/replay/loader'
 import { createFetchSource } from '../data/replay/source'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../engine/replay'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PitLossModel, StintSummary, TimelineSummary, TrackAssets } from '../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, StintSummary, TimelineSummary, TrackAssets } from '../data/replay/types'
 import { ReplayControls } from '../features/replay/shell/ReplayControls'
 import { ReplayErrorBoundary } from '../features/replay/shell/ReplayErrorBoundary'
 
@@ -18,6 +18,7 @@ interface ReadyReplay {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly penaltySidecar?: PenaltySidecar
 }
 
 export default function App() {
@@ -39,7 +40,7 @@ export default function App() {
         if (stale) return
         controller = createReplayController({ index, coordinateInterpolation })
         const chunks = index.manifest.chunks
-        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, lapStarts: index.manifest.lapStarts, ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }), ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }), ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }), ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }), trackAssets: index.trackAssets, coordinateInterpolation })
+        setReplay({ controller, startMs: chunks[0].startMs, endMs: chunks[chunks.length - 1].endMs, drivers: index.manifest.drivers, lapStarts: index.manifest.lapStarts, ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }), ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }), ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }), ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }), ...(index.penaltySidecar === undefined ? {} : { penaltySidecar: index.penaltySidecar }), trackAssets: index.trackAssets, coordinateInterpolation })
       },
       (loadError: unknown) => {
         if (!stale) setError(loadError)

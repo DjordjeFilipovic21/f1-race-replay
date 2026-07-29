@@ -21,6 +21,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     MAX_INT64,
+    PENALTY_SIDECAR_SCHEMA_ID,
     PIT_LOSS_MODEL_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
@@ -53,6 +54,7 @@ _TIMELINE_SUMMARY_SCHEMA = TIMELINE_SUMMARY_SCHEMA_ID
 _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
 _STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
 _PIT_LOSS_MODEL_SCHEMA = PIT_LOSS_MODEL_SCHEMA_ID
+_PENALTY_SIDECAR_SCHEMA = PENALTY_SIDECAR_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 _UNSUPPORTED_DIRECTORY_FSYNC = {errno.EINVAL, errno.ENOTSUP, errno.EBADF}
 
@@ -135,6 +137,7 @@ class PublishedBrowserDelivery:
     lap_sector_sidecar_path: Path | None = None
     stint_summary_path: Path | None = None
     pit_loss_model_path: Path | None = None
+    penalty_sidecar_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -192,12 +195,14 @@ def validate_complete_browser_delivery(
         sidecar_reference = manifest.get("lapSectorSidecar")
         stint_reference = manifest.get("stintSummary")
         pit_loss_reference = manifest.get("pitLossModel")
+        penalty_reference = manifest.get("penaltySidecar")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
             *((sidecar_reference,) if sidecar_reference is not None else ()),
             *((stint_reference,) if stint_reference is not None else ()),
             *((pit_loss_reference,) if pit_loss_reference is not None else ()),
+            *((penalty_reference,) if penalty_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -298,12 +303,18 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         if not isinstance(pit_loss_reference, dict) or pit_loss_reference.get("path") != "pit-loss-model.json":
             raise BrowserDeliveryPublicationError("manifest pit loss model reference is invalid")
         expected_paths.add("pit-loss-model.json")
+    penalty_reference = manifest.get("penaltySidecar")
+    if penalty_reference is not None:
+        if not isinstance(penalty_reference, dict) or penalty_reference.get("path") != "penalty-sidecar.json":
+            raise BrowserDeliveryPublicationError("manifest penalty sidecar reference is invalid")
+        expected_paths.add("penalty-sidecar.json")
     total = (
         len(chunk_refs) + 2
         + (1 if timeline_reference is not None else 0)
         + (1 if sidecar_reference is not None else 0)
         + (1 if stint_reference is not None else 0)
         + (1 if pit_loss_reference is not None else 0)
+        + (1 if penalty_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -350,6 +361,16 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_pit_loss_model_contract(pit_loss_model, manifest)
         completed += 1
         _emit_validation_progress(emit, completed, total, "pit loss model schema")
+    if penalty_reference is not None:
+        penalty_sidecar = json.loads(encoded["penalty-sidecar.json"])
+        if not isinstance(penalty_sidecar, dict):
+            raise BrowserDeliveryPublicationError("penalty sidecar must be a JSON object")
+        _validate_schema_instance(
+            validators["penalty-sidecar"], penalty_sidecar, "penalty sidecar",
+        )
+        _validate_penalty_sidecar_contract(penalty_sidecar, manifest)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
     previous = None
     for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
@@ -383,6 +404,7 @@ def _prepared_artifacts(
         + (2 if sidecar is not None else 0)
         + (2 if delivery.stint_summary is not None else 0)
         + (2 if delivery.pit_loss_model is not None else 0)
+        + (2 if delivery.penalty_sidecar is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
@@ -447,6 +469,20 @@ def _prepared_artifacts(
         _emit_validation_progress(emit, completed, total, "pit loss model")
         completed += 1
         _emit_validation_progress(emit, completed, total, "pit loss model schema")
+
+    penalty_sidecar = delivery.penalty_sidecar
+    penalty_artifact: PreparedArtifact | None = None
+    penalty_contract = None
+    if penalty_sidecar is not None:
+        penalty_contract = _schema_compatible_value(penalty_sidecar.as_dict())
+        _validate_schema_instance(
+            validators["penalty-sidecar"], penalty_contract, "penalty sidecar",
+        )
+        penalty_artifact = _prepare_artifact("penalty-sidecar.json", penalty_contract)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "penalty sidecar")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
 
     previous = None
     chunk_artifacts = []
@@ -515,6 +551,16 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest pit loss model reference has no pit loss model payload"
         )
+    if penalty_artifact is not None:
+        manifest["penaltySidecar"] = {
+            "path": penalty_artifact.path,
+            "schemaId": _PENALTY_SIDECAR_SCHEMA,
+            "sha256": penalty_artifact.sha256,
+        }
+    elif "penaltySidecar" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest penalty sidecar reference has no penalty sidecar payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest)
     if sidecar_contract is not None:
@@ -523,9 +569,11 @@ def _prepared_artifacts(
         _validate_stint_summary_contract(stint_contract, manifest)
     if pit_loss_contract is not None:
         _validate_pit_loss_model_contract(pit_loss_contract, manifest)
+    if penalty_contract is not None:
+        _validate_penalty_sidecar_contract(penalty_contract, manifest)
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
-        pit_loss_artifact,
+        pit_loss_artifact, penalty_artifact,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
@@ -537,6 +585,7 @@ def _prepared_artifacts(
         *((sidecar_artifact,) if sidecar_artifact is not None else ()),
         *((stint_artifact,) if stint_artifact is not None else ()),
         *((pit_loss_artifact,) if pit_loss_artifact is not None else ()),
+        *((penalty_artifact,) if penalty_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -577,6 +626,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("stint-summary.json")
     if delivery.pit_loss_model is not None:
         expected_paths.add("pit-loss-model.json")
+    if delivery.penalty_sidecar is not None:
+        expected_paths.add("penalty-sidecar.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -589,6 +640,7 @@ def _validate_manifest_contract(
     sidecar_artifact: PreparedArtifact | None = None,
     stint_artifact: PreparedArtifact | None = None,
     pit_loss_artifact: PreparedArtifact | None = None,
+    penalty_artifact: PreparedArtifact | None = None,
 ) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
@@ -634,6 +686,16 @@ def _validate_manifest_contract(
         "sha256": pit_loss_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("pit loss model reference disagrees with its payload")
+    penalty_reference = manifest.get("penaltySidecar")
+    if penalty_artifact is None:
+        if penalty_reference is not None or delivery.penalty_sidecar is not None:
+            raise BrowserDeliveryPublicationError("manifest penalty sidecar reference disagrees with its payload")
+    elif penalty_reference != {
+        "path": penalty_artifact.path,
+        "schemaId": _PENALTY_SIDECAR_SCHEMA,
+        "sha256": penalty_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError("penalty sidecar reference disagrees with its payload")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -717,6 +779,19 @@ def _validate_lap_sector_sidecar_contract(sidecar, manifest) -> None:
     driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
     if set(sidecar.get("drivers", {})) != driver_ids:
         raise BrowserDeliveryPublicationError("lap sector sidecar drivers disagree with the manifest")
+
+
+def _validate_penalty_sidecar_contract(sidecar, manifest) -> None:
+    """Ensure issued-penalty identities belong to the published replay."""
+    if sidecar.get("contractVersion") != "v1" or sidecar.get("fixtureId") != manifest.get("fixtureId"):
+        raise BrowserDeliveryPublicationError("penalty sidecar disagrees with the manifest")
+    driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
+    issuances = sidecar.get("penaltyIssuances")
+    if not isinstance(issuances, list) or any(
+        not isinstance(issuance, dict) or issuance.get("driverId") not in driver_ids
+        for issuance in issuances
+    ):
+        raise BrowserDeliveryPublicationError("penalty sidecar driver IDs disagree with the manifest")
 
 
 def _validate_stint_summary_contract(summary, manifest) -> None:
@@ -820,7 +895,7 @@ def _load_contract_schemas(
     try:
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
-            "browser-lap-sector-sidecar", "stint-summary", "pit-loss-model",
+            "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
         ):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
@@ -1067,6 +1142,7 @@ def _delivery_result(
         generation / "lap-sector-sidecar.json" if "lap-sector-sidecar.json" in digests else None,
         generation / "stint-summary.json" if "stint-summary.json" in digests else None,
         generation / "pit-loss-model.json" if "pit-loss-model.json" in digests else None,
+        generation / "penalty-sidecar.json" if "penalty-sidecar.json" in digests else None,
     )
 
 

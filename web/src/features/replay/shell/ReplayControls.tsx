@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PitLossModel, ReplayEvent, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayEvent, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
@@ -28,10 +28,11 @@ export interface ReplayControlsProps {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly penaltySidecar?: PenaltySidecar
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -149,7 +150,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       id: 'leaderboard',
       label: 'Leaderboard',
       columns: 1,
-      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} lapSectorSidecar={lapSectorSidecar} />,
+      element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} lapSectorSidecar={lapSectorSidecar} penaltySidecar={penaltySidecar} />,
     },
     {
       id: 'race-control',

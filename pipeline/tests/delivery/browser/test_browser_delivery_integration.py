@@ -116,6 +116,66 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     assert PREVIOUS_VALUE_FIELD_SEMANTICS["gear"] == "previous"
 
 
+def test_penalty_sidecar_is_published_only_when_issuances_exist_and_validates(
+    tmp_path: Path,
+) -> None:
+    frames = _canonical_frames()
+    frames["race_control_messages"] = pl.DataFrame([
+        _row(
+            "race_control_messages",
+            session_time_ms=9_000,
+            message_index=0,
+            message=(
+                "FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 44 (HAM) - "
+                "CAUSING A COLLISION"
+            ),
+            driver_id=None,
+            lap_number=9,
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["race_control_messages"]), strict=True)
+    canonical_parent = tmp_path / "canonical-with-penalty"
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.penalty_sidecar is not None
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-with-penalty",
+        delivery_version="delivery-v1",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(published.manifest_path)
+    assert manifest["penaltySidecar"]["path"] == "penalty-sidecar.json"
+    assert published.penalty_sidecar_path is not None
+    penalty = _load_json(published.penalty_sidecar_path)
+    schemas, registry = _registry()
+    Draft202012Validator(schemas["penalty-sidecar"], registry=registry).validate(penalty)
+    assert penalty["penaltyIssuances"][0]["driverId"] == "HAM"
+
+    no_penalty_frames = _canonical_frames()
+    no_penalty_parent = tmp_path / "canonical-without-penalty"
+    publish_canonical_generation(
+        frames=no_penalty_frames, target_parent=no_penalty_parent, generation_id="canonical-v2",
+    )
+    no_penalty_delivery = build_browser_delivery(
+        read_validated_canonical_generation(no_penalty_parent), _track_assets(),
+    )
+    no_penalty_published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-without-penalty",
+        delivery_version="delivery-v1",
+        delivery=no_penalty_delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    no_penalty_manifest = _load_json(no_penalty_published.manifest_path)
+    assert no_penalty_delivery.penalty_sidecar is None
+    assert "penaltySidecar" not in no_penalty_manifest
+    assert no_penalty_published.penalty_sidecar_path is None
+
+
 def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
     publish_canonical_generation(
@@ -1061,7 +1121,7 @@ def _registry() -> tuple[dict[str, object], Registry]:
         name: _load_json(CONTRACT_ROOT / "schemas" / f"{name}.schema.json")
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
-            "browser-lap-sector-sidecar", "stint-summary", "pit-loss-model",
+            "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
         )
     }
     registry = Registry()
