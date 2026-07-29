@@ -242,6 +242,19 @@ test('shows a static panel snapshot and blurs the source while dragging', () => 
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
 })
 
+test('keeps the default layout when a panel is released inside its original slot', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 400, height: 400, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
+})
+
 test('unpins a panel immediately and restores it from Panel Manager', () => {
   render(<ReplayWorkspace panels={panels} />)
 
@@ -267,20 +280,20 @@ test('marks persisted panel choices as custom and resets them to default', () =>
   const storage = memoryStorage()
   const { unmount } = render(<ReplayWorkspace panels={panels} storage={storage} />)
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
 
   expect(screen.getByText('Custom')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Reset to default' }).hasAttribute('disabled')).toBe(false)
+  expect(screen.getByText('4/5 panels')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(false)
   unmount()
 
   render(<ReplayWorkspace panels={panels} storage={storage} />)
   expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
 
   expect(screen.getByText('Default')).toBeTruthy()
+  expect(screen.getByText('5/5 panels')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Reset to default' }).hasAttribute('disabled')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
 })
 
 test('restores a committed drag position from persisted preferences', () => {
@@ -550,8 +563,7 @@ test('resetting the layout while locked keeps the workspace locked', () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
   fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
 
   expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
   expect(document.querySelector('.replay-workspace')?.getAttribute('data-workspace-mode')).toBe('locked')

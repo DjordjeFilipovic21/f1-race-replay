@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
-import { clampColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount } from '../../../../src/features/replay/workspace/replay-workspace-placement'
-import { commitReplayPanelDrag } from '../../../../src/features/replay/workspace/replay-panel-layout'
+import { canonicalDesktopColumnStart, clampColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount } from '../../../../src/features/replay/workspace/replay-workspace-placement'
+import { commitReplayPanelDrag, createDefaultReplayPanelLayout, isDefaultReplayPanelLayout } from '../../../../src/features/replay/workspace/replay-panel-layout'
 
 test('maps a dropped shape center to its legal desktop column', () => {
   expect(columnStartFromDropCenter(50, 0, 400, 4, 1)).toBe(1)
@@ -16,6 +16,18 @@ test('clamps column starts and maps stored desktop placement to responsive lanes
   expect(responsiveColumnStart(4, 2, 4)).toBe(3)
   expect(responsiveColumnStart(4, 2, 1)).toBe(1)
   expect(responsiveColumnStart(4, 1, 1)).toBe(1)
+})
+
+test('restores default status when a panel returns to its default responsive lane', () => {
+  const panelIds = ['player'] as const
+  const defaultLayout = createDefaultReplayPanelLayout(panelIds)
+  const customLayout = commitReplayPanelDrag(defaultLayout, { id: 'player', index: 0, desktopColumnStart: 1 })
+  const restoredColumn = canonicalDesktopColumnStart(2, 4, 1, 2)
+  const restoredLayout = commitReplayPanelDrag(customLayout, { id: 'player', index: 0, desktopColumnStart: restoredColumn })
+
+  expect(isDefaultReplayPanelLayout(panelIds, customLayout)).toBe(false)
+  expect(restoredColumn).toBe(4)
+  expect(isDefaultReplayPanelLayout(panelIds, restoredLayout)).toBe(true)
 })
 
 test('uses the workspace breakpoints for active placement columns', () => {

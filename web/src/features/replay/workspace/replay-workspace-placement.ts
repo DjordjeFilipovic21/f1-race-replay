@@ -65,6 +65,14 @@ export function responsiveColumnStart(desktopColumnStart: number, panelColumns: 
   return clampColumnStart(columnCount === TABLET_WORKSPACE_COLUMNS ? Math.min(desktopColumnStart, 2) : desktopColumnStart, columnCount, panelColumns)
 }
 
+/** Restores the canonical desktop value when a responsive drop matches the default lane. */
+export function canonicalDesktopColumnStart(columnStart: number, defaultDesktopColumnStart: number, panelColumns: 1 | 2, columnCount: number): number {
+  const responsiveStart = clampColumnStart(columnStart, columnCount, panelColumns)
+  return responsiveStart === responsiveColumnStart(defaultDesktopColumnStart, panelColumns, columnCount)
+    ? defaultDesktopColumnStart
+    : responsiveStart
+}
+
 export function workspaceColumnCount(viewportWidth: number): number {
   if (!Number.isFinite(viewportWidth) || viewportWidth < 768) return 1
   return viewportWidth >= 1024 ? DESKTOP_WORKSPACE_COLUMNS : TABLET_WORKSPACE_COLUMNS
