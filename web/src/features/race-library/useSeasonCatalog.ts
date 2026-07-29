@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { loadCatalog } from '../../data/catalog/loader'
 import { createFetchSource } from '../../data/replay/source'
 import type { CatalogV2 } from '../../data/catalog/types'
+import type { ReplaySource } from '../../data/replay/types'
 
 export interface UseSeasonCatalogOptions {
   readonly seasonsBaseUrl: string
@@ -10,6 +11,8 @@ export interface UseSeasonCatalogOptions {
 
 export interface SeasonCatalogState {
   readonly catalog: CatalogV2 | null
+  /** Source rooted at the requested season, for small catalog-adjacent assets. */
+  readonly source: ReplaySource
   readonly isLoading: boolean
   readonly error: Error | null
   readonly retry: () => void
@@ -20,6 +23,8 @@ export function useSeasonCatalog({ seasonsBaseUrl, year }: UseSeasonCatalogOptio
   const [catalog, setCatalog] = useState<CatalogV2 | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  const catalogSource = useMemo(() => createFetchSource(seasonsBaseUrl), [seasonsBaseUrl])
+  const source = useMemo(() => createFetchSource(resolveSeasonUrl(seasonsBaseUrl, year)), [seasonsBaseUrl, year])
 
   useEffect(() => {
     let stale = false
@@ -30,7 +35,7 @@ export function useSeasonCatalog({ seasonsBaseUrl, year }: UseSeasonCatalogOptio
     const load = async (): Promise<void> => {
       try {
         const loadedCatalog = await loadCatalog({
-          source: createFetchSource(seasonsBaseUrl),
+          source: catalogSource,
           year,
         })
         if (stale) return
@@ -47,8 +52,13 @@ export function useSeasonCatalog({ seasonsBaseUrl, year }: UseSeasonCatalogOptio
     return () => {
       stale = true
     }
-  }, [attempt, seasonsBaseUrl, year])
+  }, [attempt, catalogSource, year])
 
   const retry = useCallback(() => setAttempt((value) => value + 1), [])
-  return { catalog, isLoading, error, retry }
+  return { catalog, source, isLoading, error, retry }
+}
+
+function resolveSeasonUrl(seasonsBaseUrl: string, year: number): string {
+  const baseUrl = seasonsBaseUrl.endsWith('/') ? seasonsBaseUrl : `${seasonsBaseUrl}/`
+  return `${baseUrl}${year}/`
 }

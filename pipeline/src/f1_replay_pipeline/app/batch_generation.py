@@ -42,6 +42,7 @@ from f1_replay_pipeline.app.catalog_v2_schema import (
     CatalogV2SessionRecord,
     session_code_from_generation_id,
 )
+from f1_replay_pipeline.app.catalog_visuals import create_circuit_preview, resolve_venue_coordinates
 from f1_replay_pipeline.app.session_pointer_publication import (
     browser_session_pointer_path,
     canonical_session_pointer_path,
@@ -704,6 +705,27 @@ def _require_no_follow_directory(path: Path, label: str) -> None:
         os.close(descriptor)
 
 
+def _open_no_follow_directory(path: Path, label: str) -> int:
+    """Open a directory and each ancestor without following symlinks."""
+    absolute = Path(os.path.abspath(path))
+    descriptor = os.open(absolute.anchor, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        for component in absolute.parts[1:]:
+            child = os.open(
+                component,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a directory")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -810,6 +832,13 @@ def publish_catalog(
                 record[name] = value
             elif prior and name in prior:
                 record[name] = prior[name]
+        record["visual"] = _publish_race_visual_metadata(
+            root, result.request, race, valid, code, prior,
+            country=cast(str | None, record.get("country")),
+            location=cast(str | None, record.get("location")),
+        )
+        if record["visual"] is None:
+            record.pop("visual")
         records[race.race_id] = record
     payload = CatalogV2Payload(
         result.request.year,
@@ -820,6 +849,94 @@ def publish_catalog(
     path = root / "catalog.json"
     _atomic_write_json(path, payload)
     return path
+
+
+def _publish_race_visual_metadata(
+    root: Path,
+    request: BatchRequest,
+    race: BatchRaceResult,
+    valid: bool,
+    session_code: str,
+    prior: dict[str, object] | None,
+    *,
+    country: str | None,
+    location: str | None,
+) -> dict[str, object] | None:
+    """Resolve coordinates and best-effort publish a validated circuit preview."""
+    coordinates = resolve_venue_coordinates(country, location)
+    if coordinates is None:
+        prior_visual = prior.get("visual") if prior is not None else None
+        return prior_visual if isinstance(prior_visual, dict) else None
+
+    visual: dict[str, object] = {
+        "latitude": coordinates.latitude,
+        "longitude": coordinates.longitude,
+    }
+    if valid:
+        preview = _read_circuit_preview_source(request.browser_root / race.race_id, session_code)
+        if preview is not None:
+            try:
+                preview_payload = create_circuit_preview(preview)
+                if preview_payload is not None:
+                    preview_path = _circuit_preview_path(root, race.race_id)
+                    _atomic_write_json(preview_path, preview_payload)
+                    visual["circuitPreview"] = preview_path.relative_to(root).as_posix()
+            except Exception:
+                # Coordinates remain useful when the optional asset is bad or
+                # cannot be durably staged; catalog publication must continue.
+                pass
+    return visual
+
+
+def _read_circuit_preview_source(browser_root: Path, session_code: str) -> dict[str, object] | None:
+    """Read track-assets only after rechecking its guarded browser reference."""
+    try:
+        browser_pointer = read_session_browser_pointer(browser_root, session_code)
+        manifest_file = read_regular_file_no_follow(browser_pointer.manifest_path, "browser manifest")
+        verify_regular_file_identity(browser_pointer.manifest_path, manifest_file, "browser manifest")
+        manifest = json.loads(manifest_file.data)
+        reference = manifest.get("trackAssets") if isinstance(manifest, dict) else None
+        if not _browser_reference_valid(browser_pointer.manifest_path.parent, reference):
+            return None
+        if not isinstance(reference, dict):
+            return None
+        relative = _safe_relative_path(reference.get("path"))
+        asset_path = _browser_file(browser_pointer.manifest_path.parent, relative.parts, "track assets")
+        asset_file = read_regular_file_no_follow(asset_path, "track assets")
+        if _sha256(asset_file.data) != reference.get("sha256"):
+            return None
+        verify_regular_file_identity(asset_path, asset_file, "track assets")
+        asset = json.loads(asset_file.data)
+        return asset if isinstance(asset, dict) else None
+    except Exception:
+        return None
+
+
+def _circuit_preview_path(root: Path, race_id: str) -> Path:
+    safe_race_id = _safe_component(race_id, "catalog race_id")
+    _ensure_safe_child_directory(root, "visuals", "catalog visuals directory")
+    _ensure_safe_child_directory(root / "visuals", safe_race_id, "catalog race visuals directory")
+    return root / "visuals" / safe_race_id / "circuit-preview.json"
+
+
+def _ensure_safe_child_directory(parent: Path, name: str, label: str) -> None:
+    """Create one directory component without following a symlink."""
+    _require_no_follow_directory(parent, f"{label} parent")
+    descriptor = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=descriptor)
+            os.fsync(descriptor)
+        except FileExistsError:
+            pass
+        child = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptor)
+        try:
+            if not stat.S_ISDIR(os.fstat(child).st_mode):
+                raise ValueError(f"{label} must be a directory")
+        finally:
+            os.close(child)
+    finally:
+        os.close(descriptor)
 
 
 def verify_catalog(
@@ -979,11 +1096,24 @@ def _race_model(record: dict[str, object]) -> CatalogV2RaceRecord:
         for session in raw_sessions
         if isinstance(session, dict)
     ) if isinstance(raw_sessions, list) else ()
+    visual = record.get("visual")
+    visual_values: dict[str, object] = {}
+    if visual is not None:
+        if (
+            not isinstance(visual, dict)
+            or set(visual) - {"latitude", "longitude", "circuitPreview"}
+            or not {"latitude", "longitude"}.issubset(visual)
+        ):
+            raise ValueError("catalog race visual metadata is malformed")
+        visual_values = visual
     return CatalogV2RaceRecord(
         cast(str, record["race_id"]), cast(int, record["round_number"]),
         cast(str, record["event_name"]), sessions,
         cast(str | None, record.get("country")), cast(str | None, record.get("location")),
         cast(str | None, record.get("event_date")),
+        cast(float | None, visual_values.get("latitude")),
+        cast(float | None, visual_values.get("longitude")),
+        cast(str | None, visual_values.get("circuitPreview")),
     )
 
 
@@ -991,26 +1121,34 @@ def _atomic_write_json(path: Path, value: object) -> None:
     """Replace the catalog only after its complete deterministic payload is written."""
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
     root = path.parent
-    _require_no_follow_directory(root, "season catalog root")
-    temporary = root / f".catalog-{uuid4().hex}.tmp"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    directory_descriptor = _open_no_follow_directory(root, "season catalog root")
+    temporary_name = f".catalog-{uuid4().hex}.tmp"
     try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_descriptor,
+        )
         with os.fdopen(descriptor, "wb") as target:
             target.write(payload)
             target.flush()
             os.fsync(target.fileno())
-        os.replace(temporary, path)
-        directory_descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+        os.fsync(directory_descriptor)
     except Exception:
         try:
-            temporary.unlink()
+            os.unlink(temporary_name, dir_fd=directory_descriptor)
         except FileNotFoundError:
             pass
         raise
+    finally:
+        os.close(directory_descriptor)
 
 
 __all__ = [

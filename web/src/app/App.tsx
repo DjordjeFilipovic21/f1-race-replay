@@ -28,7 +28,7 @@ export default function App() {
   const [urlSelection, setUrlSelection] = useUrlSelection()
   const [localSelection, setLocalSelection] = useState<LocalSelection>(() => toLocalSelection(urlSelection))
   const requestedYear = urlSelection?.year ?? localSelection.year
-  const { catalog: loadedCatalog, isLoading, error, retry } = useSeasonCatalog({ seasonsBaseUrl, year: requestedYear })
+  const { catalog: loadedCatalog, source, isLoading, error, retry } = useSeasonCatalog({ seasonsBaseUrl, year: requestedYear })
   const catalog = loadedCatalog?.year === requestedYear ? loadedCatalog : null
   const urlReplayTarget = resolveReplayTarget(catalog, urlSelection, seasonsBaseUrl)
   const localReplayTarget = resolveReplayTarget(catalog, localSelection, seasonsBaseUrl)
@@ -73,6 +73,7 @@ export default function App() {
   return (
     <RaceLibraryPage
       catalog={catalog}
+      source={source}
       selectedRaceId={localSelection.race}
       selectedSessionCode={localSelection.session}
       isLoading={isLoading}

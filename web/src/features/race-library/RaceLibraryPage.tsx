@@ -1,10 +1,12 @@
 import { selectReplaySession } from '../../data/catalog/guards'
 import type { CatalogV2 } from '../../data/catalog/types'
+import type { ReplaySource } from '../../data/replay/types'
 import { LibraryMessage } from './LibraryMessage'
 import { RaceList } from './RaceList'
 
 export interface RaceLibraryPageProps {
   readonly catalog: CatalogV2 | null
+  readonly source?: ReplaySource
   readonly selectedRaceId: string | null
   readonly selectedSessionCode: string | null
   readonly isLoading: boolean
@@ -18,6 +20,7 @@ export interface RaceLibraryPageProps {
 
 export function RaceLibraryPage({
   catalog,
+  source,
   selectedRaceId,
   selectedSessionCode,
   isLoading,
@@ -94,6 +97,7 @@ export function RaceLibraryPage({
             )}
             <RaceList
               races={catalog.races}
+              source={source}
               selectedRaceId={selectedRaceId}
               selectedSessionCode={selectedSessionCode}
               onSelectRace={handleSelectRace}

@@ -1,6 +1,6 @@
 import { assertSafeRelativePath } from '../replay/source'
-import { array, exact, freeze, integer, nullable, object, string, type ObjectValue } from '../replay/value-guards'
-import type { BrowserPointerResolution, CatalogSelection, CatalogV2, CatalogV2Race, CatalogV2Session } from './types'
+import { array, exact, finite, freeze, integer, nullable, object, string, type ObjectValue } from '../replay/value-guards'
+import type { BrowserPointerResolution, CatalogSelection, CatalogV2, CatalogV2Race, CatalogV2RaceVisual, CatalogV2Session } from './types'
 
 const SAFE_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
@@ -25,7 +25,7 @@ export function parseCatalogV2(value: unknown): CatalogV2 {
 export function parseCatalogV2Race(value: unknown, index?: number): CatalogV2Race {
   const label = index === undefined ? 'race' : `catalog.races[${index}]`
   const item = object(value, label)
-  exact(item, ['race_id', 'round_number', 'event_name', 'sessions'], ['country', 'location', 'event_date'], label)
+  exact(item, ['race_id', 'round_number', 'event_name', 'sessions'], ['country', 'location', 'event_date', 'visual'], label)
 
   const sessions = array(item.sessions, `${label}.sessions`).map((session, sessionIndex) => parseCatalogV2Session(session, label, sessionIndex))
   const sessionCodes = sessions.map(({ session_code }) => session_code)
@@ -38,8 +38,26 @@ export function parseCatalogV2Race(value: unknown, index?: number): CatalogV2Rac
     ...optionalText(item, 'country', label),
     ...optionalText(item, 'location', label),
     ...optionalText(item, 'event_date', label),
+    ...optionalVisual(item, label),
     sessions: freeze(sessions),
   })
+}
+
+export function parseVisualMetadata(value: unknown, label = 'race.visual'): CatalogV2RaceVisual {
+  const item = object(value, label)
+  exact(item, ['latitude', 'longitude'], ['circuitPreview'], label)
+
+  const latitude = finite(item.latitude, `${label}.latitude`)
+  if (latitude < -90 || latitude > 90) throw new Error(`${label}.latitude must be between -90 and 90`)
+  const longitude = finite(item.longitude, `${label}.longitude`)
+  if (longitude < -180 || longitude > 180) throw new Error(`${label}.longitude must be between -180 and 180`)
+
+  const circuitPreview = 'circuitPreview' in item
+    ? safePointer(item.circuitPreview, `${label}.circuitPreview`)
+    : undefined
+  return freeze(circuitPreview === undefined
+    ? { latitude, longitude }
+    : { latitude, longitude, circuitPreview })
 }
 
 export function parseCatalogV2Session(value: unknown, raceLabel = 'race', index?: number): CatalogV2Session {
@@ -142,6 +160,11 @@ function optionalText(item: ObjectValue, field: string, label: string): Partial<
   if (!(field in item)) return {}
   if (item[field] === null) return { [field]: null }
   return { [field]: requiredText(item[field], `${label}.${field}`) }
+}
+
+function optionalVisual(item: ObjectValue, label: string): { visual?: CatalogV2RaceVisual } {
+  if (!('visual' in item)) return {}
+  return { visual: parseVisualMetadata(item.visual, `${label}.visual`) }
 }
 
 function requiredText(value: unknown, label: string): string {

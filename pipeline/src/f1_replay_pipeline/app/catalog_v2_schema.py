@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import PurePosixPath
 import re
 
@@ -16,6 +17,7 @@ BROWSER_POINTER_FORMAT = "browser-delivery-v1"
 _SUFFIX = re.compile(r"-(?:force|browser)-[0-9]+$")
 _RACE_ID = re.compile(r"^(?P<year>[0-9]{4})-round-(?P<round>[0-9]+)(?:-[A-Za-z0-9._-]+)?$")
 _GENERATION_ID = re.compile(r"^(?P<year>[0-9]{4})-round-(?P<round>[0-9]+)-(?P<session>.+)$")
+_SAFE_RELATIVE_POSIX_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
 
 
 def serialize_catalog_json(value: object) -> bytes:
@@ -66,6 +68,25 @@ def _require_pointer(value: object, label: str) -> str:
     text = _require_text(value, label)
     path = PurePosixPath(text)
     if path.is_absolute() or "\\" in text or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"{label} must be a safe relative POSIX path")
+    return text
+
+
+def _require_coordinate(value: object, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a finite number")
+    try:
+        coordinate = float(value)
+    except (OverflowError, ValueError) as error:
+        raise ValueError(f"{label} must be a finite number") from error
+    if not math.isfinite(coordinate) or not minimum <= coordinate <= maximum:
+        raise ValueError(f"{label} must be between {minimum:g} and {maximum:g}")
+    return coordinate
+
+
+def _require_visual_pointer(value: object, label: str) -> str:
+    text = _require_text(value, label)
+    if _SAFE_RELATIVE_POSIX_PATH.fullmatch(text) is None:
         raise ValueError(f"{label} must be a safe relative POSIX path")
     return text
 
@@ -128,6 +149,9 @@ class CatalogV2RaceRecord:
     country: str | None = None
     location: str | None = None
     event_date: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    circuit_preview: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "race_id", _require_safe_text(self.race_id, "race_id"))
@@ -147,6 +171,16 @@ class CatalogV2RaceRecord:
         for value, label in ((self.country, "country"), (self.location, "location"), (self.event_date, "event_date")):
             if value is not None:
                 _require_text(value, label)
+        coordinates = (self.latitude, self.longitude)
+        if any(value is not None for value in coordinates):
+            if not all(value is not None for value in coordinates):
+                raise ValueError("latitude and longitude must be provided together")
+            object.__setattr__(self, "latitude", _require_coordinate(self.latitude, "latitude", -90, 90))
+            object.__setattr__(self, "longitude", _require_coordinate(self.longitude, "longitude", -180, 180))
+        elif self.circuit_preview is not None:
+            raise ValueError("circuit_preview requires latitude and longitude")
+        if self.circuit_preview is not None:
+            object.__setattr__(self, "circuit_preview", _require_visual_pointer(self.circuit_preview, "circuit_preview"))
 
     def to_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -158,6 +192,14 @@ class CatalogV2RaceRecord:
         for name, item in (("country", self.country), ("location", self.location), ("event_date", self.event_date)):
             if item is not None:
                 value[name] = item
+        if self.latitude is not None:
+            visual: dict[str, object] = {
+                "latitude": self.latitude,
+                "longitude": self.longitude,
+            }
+            if self.circuit_preview is not None:
+                visual["circuitPreview"] = self.circuit_preview
+            value["visual"] = visual
         return value
 
 

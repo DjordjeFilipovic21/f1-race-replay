@@ -11,6 +11,12 @@ export interface CatalogV2Session {
   readonly browser_pointer: string | null
 }
 
+export interface CatalogV2RaceVisual {
+  readonly latitude: number
+  readonly longitude: number
+  readonly circuitPreview?: string
+}
+
 export interface CatalogV2Race {
   readonly race_id: string
   readonly round_number: number
@@ -18,6 +24,7 @@ export interface CatalogV2Race {
   readonly country?: string | null
   readonly location?: string | null
   readonly event_date?: string | null
+  readonly visual?: CatalogV2RaceVisual
   readonly sessions: readonly CatalogV2Session[]
 }
 

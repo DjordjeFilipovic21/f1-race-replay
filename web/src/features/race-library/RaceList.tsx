@@ -1,9 +1,11 @@
 import { useId } from 'react'
 import type { CatalogV2Race } from '../../data/catalog/types'
+import type { ReplaySource } from '../../data/replay/types'
 import { RaceDetails } from './RaceDetails'
 
 interface RaceListProps {
   readonly races: readonly CatalogV2Race[]
+  readonly source?: ReplaySource
   readonly selectedRaceId: string | null
   readonly selectedSessionCode: string | null
   readonly onSelectRace: (raceId: string) => void
@@ -14,6 +16,7 @@ interface RaceListProps {
 
 export function RaceList({
   races,
+  source,
   selectedRaceId,
   selectedSessionCode,
   onSelectRace,
@@ -89,13 +92,16 @@ export function RaceList({
               aria-label={`${race.event_name} details`}
               hidden={!isSelected}
             >
-              <RaceDetails
-                race={race}
-                selectedSessionCode={selectedSessionCode}
-                onSelectSession={onSelectSession}
-                canOpenWorkspace={canOpenWorkspace}
-                onOpenWorkspace={onOpenWorkspace}
-              />
+              {isSelected && (
+                <RaceDetails
+                  race={race}
+                  source={source}
+                  selectedSessionCode={selectedSessionCode}
+                  onSelectSession={onSelectSession}
+                  canOpenWorkspace={canOpenWorkspace}
+                  onOpenWorkspace={onOpenWorkspace}
+                />
+              )}
             </div>
           </div>
         )

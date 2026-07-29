@@ -3,6 +3,9 @@
   .landing-shell { padding: 1.5rem 1.25rem; }
   .library-container { padding: 1.25rem; }
   .library-race-card { padding: 1.125rem; }
+  .library-details__visuals { gap: 1.125rem; padding: 1.125rem; }
+  .race-globe { padding: 0.625rem; }
+  .circuit-preview { padding: 0.875rem; }
 }
 
 @container (max-width: 14rem) {
@@ -25,6 +28,7 @@
   .landing-header__subtitle { font-size: 1.125rem; }
   .library-container { gap: 1.75rem; padding: 1.75rem; }
   .library-races { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .library-details__visuals { gap: 1.25rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 1.25rem; }
 }
 
 @media (min-width: 1024px) {
@@ -38,6 +42,9 @@
   .library-container__header { flex-direction: row; gap: 1.5rem; }
   .library-races { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
   .library-race-card { padding: 1.25rem; }
+  .library-details__visuals { gap: 1.5rem; padding: 1.5rem; }
+  .race-globe { padding: 0.75rem; }
+  .circuit-preview { padding: 1rem; }
 }
 
 @media (min-width: 1440px) {
@@ -46,6 +53,7 @@
   .landing-shell { padding: 3rem 2rem; }
   .landing-header__title { font-size: 3.5rem; }
   .library-container { padding: 2.5rem; }
+  .library-details__visuals { gap: 1.75rem; padding: 1.75rem; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

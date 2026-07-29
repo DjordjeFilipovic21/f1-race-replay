@@ -19,6 +19,7 @@ from f1_replay_pipeline.app.catalog_v2_schema import (
     CatalogV2SessionRecord,
     session_code_from_generation_id,
 )
+from f1_replay_pipeline.app.catalog_visuals import resolve_venue_coordinates
 from f1_replay_pipeline.app.session_pointer_publication import (
     deterministic_session_browser_pointer_bytes,
     deterministic_session_canonical_pointer_bytes,
@@ -359,11 +360,16 @@ def migrate_catalog_v1_to_v2(
             f"canonical/{race_id}/sessions/{session_code}/current.json",
             f"browser/{race_id}/sessions/{session_code}/browser-current.json",
         )
+        coordinates = resolve_venue_coordinates(
+            scheduled.country, scheduled.location,
+        ) if scheduled is not None else None
         race_record = CatalogV2RaceRecord(
             race_id, round_number, event_name, (session,),
             scheduled.country if scheduled else None,
             scheduled.location if scheduled else None,
             scheduled.event_date if scheduled else None,
+            latitude=coordinates.latitude if coordinates is not None else None,
+            longitude=coordinates.longitude if coordinates is not None else None,
         )
         prepared.append(_PreparedRace(
             race_id, canonical_root, browser_root, session_code,

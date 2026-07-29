@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,20 @@ from typing import cast
 
 import pytest
 
-from f1_replay_pipeline.app.batch_generation import BatchRaceResult, BatchRequest, BatchResult, ScheduledRace, _browser_output_valid, _retained_catalog_records, _run_race, _shallow_browser_output_valid, publish_catalog, run_batch, verify_catalog
+from f1_replay_pipeline.app.batch_generation import (
+    BatchRaceResult,
+    BatchRequest,
+    BatchResult,
+    ScheduledRace,
+    _atomic_write_json,
+    _browser_output_valid,
+    _retained_catalog_records,
+    _run_race,
+    _shallow_browser_output_valid,
+    publish_catalog,
+    run_batch,
+    verify_catalog,
+)
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryCleanupError,
     BrowserDeliveryCommittedError,
@@ -248,6 +262,70 @@ def test_generate_uses_season_output_defaults_and_formats_a_real_progress_bar(
     captured = capsys.readouterr()
     assert "progress 100% | race 1/1" in captured.err
     assert "canonical_generating" in captured.err
+
+
+def test_atomic_json_write_keeps_replacement_in_open_directory_during_directory_swap(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root = tmp_path / "catalog"
+    outside = tmp_path / "outside"
+    original_root = tmp_path / "catalog-original"
+    root.mkdir()
+    outside.mkdir()
+    destination = root / "catalog.json"
+    destination.write_text("old", encoding="utf-8")
+    outside_destination = outside / "catalog.json"
+    outside_destination.write_text("sentinel", encoding="utf-8")
+    real_replace = os.replace
+
+    def swap_before_replace(source, target, *, src_dir_fd=None, dst_dir_fd=None):
+        root.rename(original_root)
+        root.symlink_to(outside, target_is_directory=True)
+        return real_replace(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "replace", swap_before_replace)
+
+    _atomic_write_json(destination, {"safe": True})
+
+    assert json.loads((original_root / "catalog.json").read_text(encoding="utf-8")) == {"safe": True}
+    assert outside_destination.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_atomic_json_write_cleans_temporary_file_by_open_directory_after_swap(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root = tmp_path / "catalog"
+    outside = tmp_path / "outside"
+    original_root = tmp_path / "catalog-original"
+    root.mkdir()
+    outside.mkdir()
+    destination = root / "catalog.json"
+    destination.write_text("old", encoding="utf-8")
+
+    def fail_after_swap(_source, _target, *, src_dir_fd=None, dst_dir_fd=None):
+        root.rename(original_root)
+        root.symlink_to(outside, target_is_directory=True)
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(os, "replace", fail_after_swap)
+
+    with pytest.raises(OSError, match="simulated replacement failure"):
+        _atomic_write_json(destination, {"safe": True})
+
+    assert list(original_root.glob(".catalog-*.tmp")) == []
+    assert list(outside.glob(".catalog-*.tmp")) == []
+
+
+def test_atomic_json_write_rejects_symlinked_directory_without_touching_target(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "catalog"
+    root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        _atomic_write_json(root / "catalog.json", {"safe": True})
+
+    assert list(outside.iterdir()) == []
 
 
 def _valid_browser_artifacts(tmp_path: Path, *, source_generation_id: str = "generation", source_manifest_sha256: str = "a" * 64, reference_path: str = "track-assets.json") -> tuple[GenerationPublicationResult, Path]:
