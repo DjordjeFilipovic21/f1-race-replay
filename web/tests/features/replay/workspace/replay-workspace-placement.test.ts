@@ -14,11 +14,19 @@ test('clamps column starts and maps stored desktop placement to responsive lanes
   expect(responsiveColumnStart(4, 2, 2)).toBe(1)
   expect(responsiveColumnStart(2, 2, 4)).toBe(2)
   expect(responsiveColumnStart(4, 2, 4)).toBe(3)
+  expect(responsiveColumnStart(4, 2, 1)).toBe(1)
   expect(responsiveColumnStart(4, 1, 1)).toBe(1)
 })
 
 test('uses the workspace breakpoints for active placement columns', () => {
-  expect([workspaceColumnCount(767), workspaceColumnCount(768), workspaceColumnCount(1024)]).toEqual([1, 2, 4])
+  // Arrange - sample the supported narrow, tablet, desktop, and wide viewport boundaries.
+  const viewportWidths = [375, 767, 768, 1023, 1024, 1440]
+
+  // Act - resolve the responsive masonry column count at each boundary.
+  const columnCounts = viewportWidths.map((width) => workspaceColumnCount(width))
+
+  // Assert - the placement model matches the responsive layout breakpoints without a wide-screen regression.
+  expect(columnCounts).toEqual([1, 1, 2, 2, 4, 4])
 })
 
 test('holds a column near its boundary while allowing deliberate crossings', () => {

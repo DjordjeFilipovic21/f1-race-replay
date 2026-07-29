@@ -158,7 +158,10 @@ test('updates the accessible flag status and boundary semantics without rerender
 
   const status = screen.getByRole('status', { name: 'Track status: Safety Car' })
   const marker = screen.getByRole('img', { name: 'Safety Car (SC)' })
+  const canvas = document.querySelector('.live-track-map__canvas')
   expect(status.textContent).toBe('Safety Car')
+  expect(canvas?.contains(status)).toBe(true)
+  expect(canvas?.contains(screen.getByRole('group', { name: `${trackAssets.trackName} live track map` }))).toBe(true)
   expect(document.querySelectorAll('.live-track-map__boundary--yellow')).toHaveLength(2)
   expect(marker.getAttribute('visibility')).toBe('visible')
   expect(marker.getAttribute('transform')).toBe('translate(0 9)')

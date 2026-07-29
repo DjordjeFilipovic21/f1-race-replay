@@ -3,7 +3,7 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .replay-message { background: #171a1e; border-left: 2px solid var(--focus); color: var(--text-muted); font-size: .9rem; padding: .6rem .75rem; }
 .replay-message--error, .app-diagnostic--error { color: var(--danger); display: grid; gap: .75rem; }
 .live-leaderboard { min-width: 0; }
-.live-leaderboard__header { align-items: start; display: flex; flex-wrap: nowrap; gap: .5rem; justify-content: flex-end; margin-bottom: .5rem; }
+.live-leaderboard__header { align-items: start; display: flex; flex-wrap: nowrap; gap: .5rem; justify-content: flex-start; margin-bottom: .5rem; }
 .live-leaderboard__gap-toggle { display: inline-grid; grid-template-columns: repeat(3, minmax(max-content, 1fr)); white-space: nowrap; }
 .live-leaderboard__gap-toggle button { border: 1px solid var(--border-strong); background: var(--interactive); color: #c7cdd3; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .68rem; font-weight: 800; letter-spacing: .06em; min-height: 2rem; padding: .3rem .5rem; text-transform: uppercase; }
 .live-leaderboard__gap-toggle button:hover:not(:disabled) { background: var(--interactive-hover); color: #f4f5f6; }

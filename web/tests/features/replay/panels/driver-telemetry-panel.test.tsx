@@ -19,7 +19,9 @@ afterEach(cleanup)
 test('renders telemetry for the selected driver with textual values', () => {
   render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={snapshot} />)
 
-  expect(screen.getByRole('heading', { name: /max verstappen/i })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Live telemetry' })).toBeTruthy()
+  expect(screen.queryByText('Max Verstappen')).toBeNull()
+  expect(screen.queryByText('#1')).toBeNull()
   expect(screen.getByText('287 km/h')).toBeTruthy()
   expect(screen.getByText('11,450 RPM')).toBeTruthy()
   expect(screen.getByText('Applied')).toBeTruthy()

@@ -144,10 +144,7 @@ function renderHeader(driver: DriverMetadata): React.JSX.Element {
     <header className="tyre-strategy-panel__header" style={headerStyle(teamAccentValue(driver.colorHex))}>
       <span className="tyre-strategy-panel__accent" style={accentBarStyle(teamAccentValue(driver.colorHex))} aria-hidden="true" />
       <div>
-        <p className="tyre-strategy-panel__eyebrow" style={eyebrowStyle()}>Strategy</p>
-        <h2 id="tyre-strategy-title" style={titleStyle()}>
-          {driver.displayName} <span style={mutedTextStyle()}>#{driver.carNumber}</span>
-        </h2>
+        <h2 id="tyre-strategy-title" style={titleStyle()}>Strategy</h2>
       </div>
     </header>
   )
@@ -450,8 +447,7 @@ function emptyStyle(): CSSProperties {
 function headerStyle(teamColor: string): CSSProperties {
   return {
     alignItems: 'stretch',
-    background: 'linear-gradient(105deg, #050607, #171c20)',
-    display: 'grid',
+    background: 'linear-gradient(105deg, #171c20, #101316)',
     gridTemplateColumns: '5px minmax(0, 1fr)',
     gap: '.65rem',
     padding: '.7rem',
@@ -463,23 +459,8 @@ function accentBarStyle(teamColor: string): CSSProperties {
   return { background: teamColor }
 }
 
-function eyebrowStyle(): CSSProperties {
-  return {
-    color: TEXT_MUTED,
-    fontSize: '.62rem',
-    fontWeight: 800,
-    letterSpacing: '.08em',
-    margin: 0,
-    textTransform: 'uppercase' as const,
-  }
-}
-
 function titleStyle(): CSSProperties {
   return { fontSize: '1rem', lineHeight: 1.2, margin: 0 }
-}
-
-function mutedTextStyle(): CSSProperties {
-  return { color: TEXT_MUTED }
 }
 
 function layoutStyle(): CSSProperties {

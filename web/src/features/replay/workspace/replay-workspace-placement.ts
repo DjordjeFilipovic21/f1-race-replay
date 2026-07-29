@@ -1,6 +1,8 @@
 export const TABLET_WORKSPACE_COLUMNS = 2
 export const DESKTOP_WORKSPACE_COLUMNS = 4
-export const WORKSPACE_GAP_PX = 12
+import { REPLAY_WORKSPACE_GAP_PX } from './replay-workspace-masonry'
+
+export const WORKSPACE_GAP_PX = REPLAY_WORKSPACE_GAP_PX
 export const COLUMN_HYSTERESIS_PX = 8
 
 export interface MasonryPlacementItem {

@@ -14,15 +14,26 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
 }
 
 const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
-  player: 1,
+  player: 4,
   'track-map': 2,
-  leaderboard: 4,
+  leaderboard: 1,
   'race-control': 1,
-  driver: 1,
-  telemetry: 1,
-  'lap-analysis': 1,
-  strategy: 1,
+  driver: 4,
+  telemetry: 2,
+  'lap-analysis': 4,
+  strategy: 2,
 }
+
+export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Object.freeze([
+  { id: 'race-control', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['race-control'] },
+  { id: 'track-map', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['track-map'] },
+  { id: 'player', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.player },
+  { id: 'leaderboard', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.leaderboard },
+  { id: 'driver', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.driver },
+  { id: 'lap-analysis', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['lap-analysis'] },
+  { id: 'telemetry', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.telemetry },
+  { id: 'strategy', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.strategy },
+])
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
   return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy'
@@ -48,6 +59,15 @@ export function replayPanelColumns(id: ReplayPanelId): 1 | 2 {
   return REPLAY_PANEL_COLUMNS[id]
 }
 
+export function createDefaultReplayPanelLayout(panelIds: readonly ReplayPanelId[]): readonly ReplayPanelLayoutItem[] {
+  const registeredIds = new Set(panelIds)
+  return REPLAY_PANEL_DEFAULT_LAYOUT.filter(({ id }) => registeredIds.has(id))
+}
+
+export function isDefaultReplayPanelLayout(panelIds: readonly ReplayPanelId[], layout: readonly ReplayPanelLayoutItem[]): boolean {
+  return isSameReplayPanelLayout(createDefaultReplayPanelLayout(panelIds), reconcileReplayPanelLayout(panelIds, layout))
+}
+
 /** Reconciles panel registry changes without replacing a user's local layout choices. */
 export function reconcileReplayPanelLayout(panelIds: readonly ReplayPanelId[], layout: readonly ReplayPanelLayoutItem[]): readonly ReplayPanelLayoutItem[] {
   const registeredIds = new Set(panelIds)
@@ -55,7 +75,7 @@ export function reconcileReplayPanelLayout(panelIds: readonly ReplayPanelId[], l
   const retainedIds = new Set(retained.map(({ id }) => id))
   return [
     ...retained.map((item) => ({ ...item, desktopColumnStart: normalizeDesktopColumn(item.desktopColumnStart, item.id) })),
-    ...panelIds.filter((id) => !retainedIds.has(id)).map((id) => ({ id, pinned: true, desktopColumnStart: defaultReplayPanelColumn(id) })),
+    ...createDefaultReplayPanelLayout(panelIds).filter(({ id }) => !retainedIds.has(id)),
   ]
 }
 

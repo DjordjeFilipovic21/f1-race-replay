@@ -1,8 +1,11 @@
 import { expect, test } from 'vitest'
 import {
   commitReplayPanelDrag,
+  createDefaultReplayPanelLayout,
   defaultReplayPanelColumn,
+  isDefaultReplayPanelLayout,
   isReplayPanelId,
+  REPLAY_PANEL_DEFAULT_LAYOUT,
   replayPanelColumns,
   reconcileReplayPanelLayout,
   toggleReplayPanelPinning,
@@ -43,7 +46,27 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy')]).toEqual([1, 2, 4, 1, 1, 1, 1, 1])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy')]).toEqual([4, 2, 1, 1, 4, 2, 4, 2])
+})
+
+test('defines a stable default layout independently of panel registry order', () => {
+  expect(createDefaultReplayPanelLayout(['strategy', 'player', 'leaderboard'])).toEqual([
+    { id: 'player', pinned: true, desktopColumnStart: 4 },
+    { id: 'leaderboard', pinned: true, desktopColumnStart: 1 },
+    { id: 'strategy', pinned: true, desktopColumnStart: 2 },
+  ])
+  expect(REPLAY_PANEL_DEFAULT_LAYOUT.map(({ id }) => id)).toEqual([
+    'race-control', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy',
+  ])
+})
+
+test('distinguishes the default layout from user layout choices', () => {
+  const panelIds = ['player', 'track-map', 'leaderboard'] as const
+  const defaultLayout = createDefaultReplayPanelLayout(panelIds)
+
+  expect(isDefaultReplayPanelLayout(panelIds, defaultLayout)).toBe(true)
+  expect(isDefaultReplayPanelLayout(panelIds, toggleReplayPanelPinning(defaultLayout, 'track-map'))).toBe(false)
+  expect(isDefaultReplayPanelLayout(panelIds, commitReplayPanelDrag(defaultLayout, { id: 'leaderboard', index: 0 }))).toBe(false)
 })
 
 test('reorders only the displayed pinned subset while retaining unpinned slots', () => {
@@ -71,7 +94,7 @@ test('adds the two-column telemetry panel to legacy layouts without changing sav
     { id: 'track-map', pinned: false, desktopColumnStart: 2 },
     { id: 'leaderboard', pinned: true, desktopColumnStart: 4 },
     { id: 'driver', pinned: true, desktopColumnStart: 3 },
-    { id: 'telemetry', pinned: true, desktopColumnStart: 1 },
+    { id: 'telemetry', pinned: true, desktopColumnStart: 2 },
   ])
 })
 
@@ -79,8 +102,8 @@ test('adds and removes the new panels while retaining registered layout choices'
   const withNewPanels = reconcileReplayPanelLayout(['player', 'lap-analysis', 'strategy'] as const, layout)
   expect(withNewPanels).toEqual([
     { id: 'player', pinned: true, desktopColumnStart: 1 },
-    { id: 'lap-analysis', pinned: true, desktopColumnStart: 1 },
-    { id: 'strategy', pinned: true, desktopColumnStart: 1 },
+    { id: 'lap-analysis', pinned: true, desktopColumnStart: 4 },
+    { id: 'strategy', pinned: true, desktopColumnStart: 2 },
   ])
   expect(reconcileReplayPanelLayout(['player'] as const, withNewPanels)).toEqual([
     { id: 'player', pinned: true, desktopColumnStart: 1 },

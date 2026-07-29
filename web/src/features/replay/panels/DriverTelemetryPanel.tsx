@@ -31,7 +31,7 @@ export const DriverTelemetryPanel = memo(function DriverTelemetryPanel({ drivers
     <article className="driver-telemetry-panel" aria-labelledby="driver-telemetry-title" style={teamAccentStyle(driver.colorHex)}>
       <header className="driver-telemetry-panel__header">
         <span className="driver-telemetry-panel__accent" aria-hidden="true" />
-        <div><p className="driver-telemetry-panel__eyebrow">Live telemetry</p><h2 id="driver-telemetry-title">{driver.displayName} <span>#{driver.carNumber}</span></h2></div>
+        <div><h2 id="driver-telemetry-title">Live telemetry</h2></div>
       </header>
       <div className="driver-telemetry-panel__layout">
         <ThrottleGauge value={sampled?.throttle ?? null} displayValue={readings[2].value} />
