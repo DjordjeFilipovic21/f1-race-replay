@@ -334,6 +334,56 @@ test('marks persisted panel choices as custom and resets them to default', () =>
   expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
 })
 
+test('animates visible panels from a custom layout back to their default positions', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const animate = vi.fn(() => ({
+    addEventListener: vi.fn(),
+    cancel: vi.fn(),
+    finished: new Promise<never>(() => undefined),
+    removeEventListener: vi.fn(),
+  }) as unknown as Animation)
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const panelIndex = panels.findIndex((panel) => panel.label === this.getAttribute('aria-label'))
+    const visiblePanels = document.querySelectorAll('.replay-workspace > .replay-panel-frame').length
+    const left = Math.max(0, panelIndex - (panels.length - visiblePanels)) * 100
+    return { bottom: 100, height: 100, left, right: left + 100, toJSON: () => ({}), top: 0, width: 100, x: left, y: 0 } as DOMRect
+  })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    animate.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+
+    expect(animate).toHaveBeenCalled()
+    expect(animate).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ duration: 240 }))
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+  }
+})
+
+test('resets immediately without FLIP animation when reduced motion is preferred', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const previousMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+  const animate = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true })) })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+
+    expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
+    expect(animate).not.toHaveBeenCalled()
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+    restorePrototypeDescriptor(window, 'matchMedia', previousMatchMediaDescriptor)
+  }
+})
+
 test('restores a committed drag position from persisted preferences', () => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     bottom: 200, height: 100, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
@@ -599,14 +649,17 @@ test('keeps responsive masonry CSS tied to the shared gap and row metrics', () =
   expect(desktopRule).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))')
 })
 
-test('resetting the layout while locked keeps the workspace locked', () => {
+test('disables reset while locked and preserves the custom layout', () => {
   render(<ReplayWorkspace panels={panels} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
   fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+  const resetLayout = screen.getByRole('button', { name: 'Reset layout' })
 
-  expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
+  expect(resetLayout.hasAttribute('disabled')).toBe(true)
+  fireEvent.click(resetLayout)
+  expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+  expect(screen.getByText('Custom')).toBeTruthy()
   expect(document.querySelector('.replay-workspace')?.getAttribute('data-workspace-mode')).toBe('locked')
   expect(screen.getByRole('button', { name: 'Unlock workspace' })).toBeTruthy()
 })
