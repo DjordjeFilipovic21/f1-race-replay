@@ -44,6 +44,12 @@ export interface PitLossModelReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface PenaltySidecarReference extends ArtifactReference {
+  readonly path: 'penalty-sidecar.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
+  readonly sha256: string
+}
+
 export interface LapSectorDriverColumns {
   readonly lapNumber: readonly number[]
   readonly lapStartMs: readonly number[]
@@ -93,6 +99,22 @@ export interface PitLossModel {
   readonly observedSampleCount: readonly number[]
 }
 
+export interface PenaltyIssuance {
+  readonly driverId: string
+  readonly sessionTimeMs: number
+  readonly penaltyType: string
+  readonly reason: string
+  readonly rawMessage: string
+  readonly lapNumber?: number
+}
+
+/** Penalties record issuance; they do not indicate an active or unserved state. */
+export interface PenaltySidecar {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly penaltyIssuances: readonly PenaltyIssuance[]
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -123,6 +145,7 @@ export interface ReplayManifest {
   readonly lapSectorSidecar?: LapSectorSidecarReference
   readonly stintSummary?: StintSummaryReference
   readonly pitLossModel?: PitLossModelReference
+  readonly penaltySidecar?: PenaltySidecarReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
@@ -237,6 +260,7 @@ export interface ReplayData {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly penaltySidecar?: PenaltySidecar
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -248,6 +272,7 @@ export interface ReplayIndex {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly penaltySidecar?: PenaltySidecar
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

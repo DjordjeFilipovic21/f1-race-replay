@@ -203,3 +203,30 @@ after-pit position prediction without embedding arrays into replay chunks:
 See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#optional-pit-loss-model)
 for the full contract including placeholder semantics, refinement rules,
 eligibility criteria, and causal availability.
+
+## 10. Optional issued-penalty sidecar
+
+The manifest may carry a `penaltySidecar` reference (`path`, `schemaId`, and
+`sha256`) pointing to `penalty-sidecar.json`. The sidecar contains definitive
+race-control issuance records with canonical driver identity, issuance time,
+penalty type, reason, raw message text, and optional `lapNumber`. A canonical
+race-control row may have a null `driver_id`; the pipeline resolves its car
+number or abbreviation against driver metadata before publishing the record.
+
+The leaderboard marker is an **issued-penalty marker**, not an active- or
+unserved-penalty indicator. It is shown for a driver when an issuance has
+`sessionTimeMs <= replayTimeMs`, remains shown through the end of replay, and
+disappears only when the cursor is moved before that issuance. Playback and
+arbitrary seeks use this same causal comparison.
+
+FastF1 and the underlying F1 live-timing race-control stream expose penalty
+issuance messages only. They provide no authoritative served-state field and
+no separate penalty-served stream. The browser and pipeline therefore do not
+infer served state from pit duration, telemetry, or results. An issuance must
+never be described as proof that a penalty remains active, is unserved, or has
+been served.
+
+The sidecar and manifest reference are optional. Core chunks and older
+manifests remain valid without them. See [Replay Data Contract — Optional
+issued-penalty sidecar](replay-data-contract.md#optional-issued-penalty-sidecar)
+for the schema and publication guarantees.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { loadReplayIndex } from '../../../data/replay/loader'
 import { createFetchSource } from '../../../data/replay/source'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PitLossModel, ReplayIndex, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayIndex, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../../../engine/replay'
 
 export interface ReplayEntryOptions {
@@ -22,6 +22,7 @@ export interface ReadyReplay {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly penaltySidecar?: PenaltySidecar
 }
 
 export interface ReplayEntryState {
@@ -79,6 +80,7 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
     ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }),
     ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }),
     ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }),
+    ...(index.penaltySidecar === undefined ? {} : { penaltySidecar: index.penaltySidecar }),
     trackAssets: index.trackAssets,
     coordinateInterpolation,
   })

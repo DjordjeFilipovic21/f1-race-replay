@@ -339,6 +339,42 @@ panel, payload loader, or runtime snapshot is included.
 optional. Existing deliveries, chunks, and manifests without it remain
 valid and loadable.
 
+### Optional issued-penalty sidecar
+
+The manifest may include a compact, optional `penaltySidecar` reference for
+definitive race-control penalty issuances:
+
+```json
+"penaltySidecar": {
+  "path": "penalty-sidecar.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `penalty-sidecar.json` is a `v1` object containing
+`penaltyIssuances`. Each issuance preserves the canonical driver ID, absolute
+`sessionTimeMs`, parsed `penaltyType`, normalized `reason`, raw race-control
+`rawMessage`, and optional `lapNumber`. Canonical rows with a null
+`driver_id` are resolved through the car number and driver metadata before an
+issuance is published; unresolved identities fail closed rather than creating
+a false marker.
+
+This is intentionally an **issued-only** contract. A leaderboard `!` marker
+means that a penalty has been issued at or before the replay cursor. It does
+not mean that the penalty is currently active, remains unserved, or has been
+served. FastF1's race-control feed supplies issuance messages only and has no
+authoritative served-state field or separate penalty-served stream. Consumers
+must not infer served state from pit duration, telemetry, or final results.
+
+The sidecar is optional: existing deliveries and manifests without
+`penaltySidecar` remain valid and loadable. When present, the browser applies
+the same causal rule for playback and arbitrary seeks: an issuance is visible
+when `sessionTimeMs <= replayTimeMs`, remains visible through replay end, and
+is hidden again when seeking before its issuance time. Publication validates
+the sidecar schema, fixture identity, driver identity, and digest before the
+browser pointer is replaced.
+
 The production `projection-quality-gate-v1` assessment is per generation and
 source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,

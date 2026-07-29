@@ -93,3 +93,29 @@
 .tyre-strategy-panel__layout { display: grid; gap: .75rem; grid-template-columns: minmax(0, 1fr); padding: .75rem; }
 .tyre-strategy-panel__details { display: grid; gap: .5rem; }
 .tyre-strategy-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
+
+.after-pit-comparison { border-left-color: var(--border); }
+.after-pit-comparison__value { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .95rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: .15rem 0 0; }
+.after-pit-comparison__meta { color: var(--text-muted); font-size: .62rem; font-weight: 700; margin: .2rem 0 0; }
+.after-pit-comparison__meta strong { color: #f4f5f6; font-weight: 800; }
+.after-pit-comparison__footnote { color: var(--text-muted); font-size: .52rem; font-weight: 600; font-style: italic; margin: .15rem 0 0; }
+.after-pit-comparison__stage { display: flex; justify-content: center; margin: .3rem auto .2rem; max-width: 12.5rem; width: 100%; }
+.after-pit-comparison__svg { display: block; width: 100%; height: auto; color: #f4f5f6; }
+.after-pit-comparison__svg-title { fill: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; }
+.after-pit-comparison__svg-spine { stroke: var(--border); stroke-width: 1; }
+.after-pit-comparison__svg-scale line { stroke: var(--text-muted); stroke-width: .75; }
+.after-pit-comparison__svg-scale text { fill: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 700; }
+.after-pit-comparison__svg-label { fill: #f4f5f6; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 700; }
+.after-pit-comparison__clear-air { align-items: center; display: flex; gap: .4rem; margin-top: .15rem; }
+.after-pit-comparison__badge { background: rgb(61 204 107 / 13%); border: 1px solid #3dcc6b; border-radius: .15rem; color: #3dcc6b; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .5rem; font-weight: 900; letter-spacing: .08em; line-height: 1; padding: .15rem .3rem; }
+.after-pit-comparison__svg-clear-air-label { fill: #3dcc6b; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+.after-pit-comparison__svg-gap-label { fill: #ff5158; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 900; letter-spacing: .06em; }
+.after-pit-comparison__svg-gap-label--clear-air { fill: #ff5158; opacity: .85; }
+.after-pit-comparison__svg-behind-gap-label { fill: #3dcc6b; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 900; letter-spacing: .06em; }
+.after-pit-comparison__wind-streak { stroke: #3dcc6b; stroke-linecap: round; stroke-width: 1.2; opacity: 0; }
+.after-pit-comparison__wind-streak--1 { animation: after-pit-wind-streak 1.6s ease-in-out infinite; }
+.after-pit-comparison__wind-streak--2 { animation: after-pit-wind-streak 1.6s ease-in-out .4s infinite; }
+.after-pit-comparison__wind-streak--3 { animation: after-pit-wind-streak 1.6s ease-in-out .8s infinite; }
+@keyframes after-pit-wind-streak { 0% { opacity: 0; transform: translateY(-12px); } 20% { opacity: .7; } 80% { opacity: .7; } 100% { opacity: 0; transform: translateY(12px); } }
+@media (prefers-reduced-motion: reduce) { .after-pit-comparison__wind-streak { animation: none; opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .after-pit-comparison__gap-line { transition: none; } }

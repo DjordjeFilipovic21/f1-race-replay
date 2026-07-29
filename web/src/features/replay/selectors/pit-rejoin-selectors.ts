@@ -1,25 +1,31 @@
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 import type { PitLossSelection } from './pit-loss-selectors'
 
+export interface PitRejoinComparator {
+  readonly driverId: string
+  readonly gapMs: number
+  readonly signedGapMs: number
+}
+
 export interface PitRejoinProjection {
   readonly selectedDriverId: string
   readonly projectedGapToLeaderMs: number
   readonly projectedPosition: number
-  readonly nearestDriverId: string
-  readonly nearestDriverGapMs: number
-  readonly signedGapVsNearestMs: number
+  readonly currentPosition: number | null
+  readonly aheadComparator: PitRejoinComparator | null
+  readonly behindComparator: PitRejoinComparator | null
 }
 
 /**
  * Projects the selected driver's gap to leader after an immediate pit stop
- * and identifies the nearest competitor they would rejoin alongside.
+ * and identifies the closest competitor ahead and behind on track.
  *
  * The selected driver's gap is projected as `currentGapToLeaderMs + estimatedLossMs`.
  * All other active drivers' gaps are held fixed at their current values.
  *
- * Signed semantics: `signedGapVsNearestMs = projectedSelectedGap - comparatorGap`
- *   positive → selected driver would rejoin BEHIND that driver
- *   negative → selected driver would rejoin AHEAD
+ * Signed semantics: `signedGapMs = projectedSelectedGap - comparatorGap`
+ *   positive → selected driver would rejoin BEHIND that driver (comparator is ahead on track)
+ *   negative → selected driver would rejoin AHEAD of that driver (comparator is behind on track)
  *
  * Returns null (frozen) when any required input is unavailable, the selected
  * driver is terminal/finished/in-pit-lane, the pit-loss estimate is invalid,
@@ -46,20 +52,29 @@ export function selectPitRejoinProjection(
   if (comparators.length === 0) return NULL_PROJECTION
 
   const projectedPosition = computeProjectedPosition(comparators, projectedSelectedGap, selectedDriverId)
-  const nearest = findNearestComparator(comparators, projectedSelectedGap)
-  if (nearest === null) return NULL_PROJECTION
+  const currentPosition = readCurrentPosition(selectedSnapshot)
+  const { ahead, behind } = findSideComparators(comparators, projectedSelectedGap, selectedDriverId)
 
   return Object.freeze({
     selectedDriverId,
     projectedGapToLeaderMs: projectedSelectedGap,
     projectedPosition,
-    nearestDriverId: nearest.id,
-    nearestDriverGapMs: nearest.gap,
-    signedGapVsNearestMs: projectedSelectedGap - nearest.gap,
+    currentPosition,
+    aheadComparator: ahead,
+    behindComparator: behind,
   })
 }
 
 const NULL_PROJECTION = null as PitRejoinProjection | null
+
+/** Reads the selected driver's current valid race position, or null when unavailable. */
+function readCurrentPosition(driverSnapshot: ReplaySnapshot['drivers'][string]): number | null {
+  const position = driverSnapshot.position
+  if (position === null || position === undefined) return null
+  if (!Number.isFinite(position)) return null
+  if (!Number.isInteger(position) || position < 1) return null
+  return position
+}
 
 function isExcluded(driverSnapshot: ReplaySnapshot['drivers'][string]): boolean {
   if (driverSnapshot.isFinished === true) return true
@@ -96,16 +111,61 @@ function computeProjectedPosition(
   return position
 }
 
-function findNearestComparator(
+function findSideComparators(
   comparators: readonly { readonly id: string; readonly gap: number }[],
   projectedSelectedGap: number,
-): { readonly id: string; readonly gap: number } | null {
-  let nearest: { id: string; gap: number; absDiff: number } | null = null
+  selectedDriverId: string,
+): { ahead: PitRejoinComparator | null; behind: PitRejoinComparator | null } {
+  let ahead: PitRejoinComparator | null = null
+  let behind: PitRejoinComparator | null = null
+
   for (const comparator of comparators) {
-    const absDiff = Math.abs(projectedSelectedGap - comparator.gap)
-    if (nearest === null || absDiff < nearest.absDiff || (absDiff === nearest.absDiff && comparator.id < nearest.id)) {
-      nearest = { id: comparator.id, gap: comparator.gap, absDiff }
+    const signedGap = projectedSelectedGap - comparator.gap
+
+    if (signedGap > 0) {
+      // Comparator is ahead of selected (selected is behind comparator)
+      // We want the closest ahead comparator = smallest positive signedGap
+      if (ahead === null || signedGap < ahead.signedGapMs || (signedGap === ahead.signedGapMs && comparator.id < ahead.driverId)) {
+        ahead = Object.freeze({
+          driverId: comparator.id,
+          gapMs: comparator.gap,
+          signedGapMs: signedGap,
+        })
+      }
+    } else if (signedGap < 0) {
+      // Comparator is behind selected (selected is ahead of comparator)
+      // We want the closest behind comparator = largest negative signedGap (closest to zero)
+      if (behind === null || signedGap > behind.signedGapMs || (signedGap === behind.signedGapMs && comparator.id < behind.driverId)) {
+        behind = Object.freeze({
+          driverId: comparator.id,
+          gapMs: comparator.gap,
+          signedGapMs: signedGap,
+        })
+      }
+    } else {
+      // Equal gap (signedGap === 0): assign to one side based on driver ID ordering
+      // Same logic as computeProjectedPosition: if comparator.id < selectedDriverId, comparator is ahead
+      if (comparator.id < selectedDriverId) {
+        // Assign to ahead side
+        if (ahead === null || signedGap < ahead.signedGapMs || (signedGap === ahead.signedGapMs && comparator.id < ahead.driverId)) {
+          ahead = Object.freeze({
+            driverId: comparator.id,
+            gapMs: comparator.gap,
+            signedGapMs: signedGap,
+          })
+        }
+      } else {
+        // Assign to behind side
+        if (behind === null || signedGap > behind.signedGapMs || (signedGap === behind.signedGapMs && comparator.id < behind.driverId)) {
+          behind = Object.freeze({
+            driverId: comparator.id,
+            gapMs: comparator.gap,
+            signedGapMs: signedGap,
+          })
+        }
+      }
     }
   }
-  return nearest === null ? null : { id: nearest.id, gap: nearest.gap }
+
+  return { ahead, behind }
 }

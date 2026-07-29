@@ -46,6 +46,7 @@ vi.mock('@dnd-kit/react', () => ({
     <button type="button" onClick={() => onDragMove?.(trackLaneDragEvent)}>Preview Track lane</button>
     <button type="button" onClick={() => onDragMove?.({ ...dragEvent, operation: { ...dragEvent.operation, source: null } })}>Invalidate preview</button>
     <button type="button" onClick={() => { onDragEnd?.(dragEvent); mockDragSource = null }}>Commit drop</button>
+    <button type="button" onClick={() => { onDragEnd?.({ ...dragEvent, canceled: true }); mockDragSource = null }}>Cancel drag</button>
   </div>,
   DragOverlay: ({ children }: { readonly children: ReactNode | ((source: { readonly id: string; readonly index: number }) => ReactNode) }) => <>{typeof children === 'function' && mockDragSource !== null ? children(mockDragSource) : typeof children === 'function' ? null : children}</>,
 }))
@@ -188,7 +189,7 @@ test('cancels prior FLIP animations before replacing them on a rapid unpin', () 
   }
 })
 
-test('renders prospective cross-column order, restores invalid previews, and commits the exact displayed destination', () => {
+test('renders prospective cross-column order and normalizes a visually equivalent commit to default', () => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     bottom: 200, height: 100, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
   })
@@ -220,8 +221,9 @@ test('renders prospective cross-column order, restores invalid previews, and com
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.cssText).toContain('height: 160px')
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
-   expect(workspacePanelLabels()).toEqual(['Track map', 'Telemetry', 'Player', 'Leaderboard', 'Driver'])
+   expect(workspacePanelLabels()).toEqual(['Track map', 'Player', 'Leaderboard', 'Driver', 'Telemetry'])
    expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+  expect(screen.getByText('Default')).toBeTruthy()
 })
 
 test('shows a static panel snapshot and blurs the source while dragging', () => {
@@ -240,6 +242,55 @@ test('shows a static panel snapshot and blurs the source while dragging', () => 
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
   expect(screen.getByRole('region', { name: 'Telemetry' }).classList.contains('replay-panel-frame--drag-source')).toBe(false)
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
+})
+
+test('keeps the default layout when a panel is released without a drag move', () => {
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
+})
+
+test('keeps the default layout when a drag is canceled', () => {
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel drag' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
+})
+
+test('commits a valid preview even when its center overlaps the source slot geometry', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 400, height: 400, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Custom')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+})
+
+test('keeps the default layout when zero-sized geometry cannot resolve a destination', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 0, height: 0, left: 0, right: 0, toJSON: () => ({}), top: 0, width: 0, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
 })
 
 test('unpins a panel immediately and restores it from Panel Manager', () => {
@@ -267,20 +318,70 @@ test('marks persisted panel choices as custom and resets them to default', () =>
   const storage = memoryStorage()
   const { unmount } = render(<ReplayWorkspace panels={panels} storage={storage} />)
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
 
   expect(screen.getByText('Custom')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Reset to default' }).hasAttribute('disabled')).toBe(false)
+  expect(screen.getByText('4/5 panels')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(false)
   unmount()
 
   render(<ReplayWorkspace panels={panels} storage={storage} />)
   expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
 
   expect(screen.getByText('Default')).toBeTruthy()
+  expect(screen.getByText('5/5 panels')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Reset to default' }).hasAttribute('disabled')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
+})
+
+test('animates visible panels from a custom layout back to their default positions', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const animate = vi.fn(() => ({
+    addEventListener: vi.fn(),
+    cancel: vi.fn(),
+    finished: new Promise<never>(() => undefined),
+    removeEventListener: vi.fn(),
+  }) as unknown as Animation)
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const panelIndex = panels.findIndex((panel) => panel.label === this.getAttribute('aria-label'))
+    const visiblePanels = document.querySelectorAll('.replay-workspace > .replay-panel-frame').length
+    const left = Math.max(0, panelIndex - (panels.length - visiblePanels)) * 100
+    return { bottom: 100, height: 100, left, right: left + 100, toJSON: () => ({}), top: 0, width: 100, x: left, y: 0 } as DOMRect
+  })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    animate.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+
+    expect(animate).toHaveBeenCalled()
+    expect(animate).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ duration: 240 }))
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+  }
+})
+
+test('resets immediately without FLIP animation when reduced motion is preferred', () => {
+  const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+  const previousMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+  const animate = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true })) })
+
+  try {
+    render(<ReplayWorkspace panels={panels} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+
+    expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
+    expect(animate).not.toHaveBeenCalled()
+  } finally {
+    restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
+    restorePrototypeDescriptor(window, 'matchMedia', previousMatchMediaDescriptor)
+  }
 })
 
 test('restores a committed drag position from persisted preferences', () => {
@@ -378,6 +479,9 @@ test('passes lock state to every sortable panel and clears active drag state wit
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+  expect(screen.getByText('Default')).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Unlock workspace' }))
   expectLatestSortableDisabled(false)
@@ -502,7 +606,7 @@ test('collapses only locked drag chrome while retaining semantic panel content',
 })
 
 test('swaps drag chrome for internal gradient headers across workspace modes', () => {
-  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header)'
+  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header)'
   const unlockedHeaderScope = ":is(.replay-workspace, .replay-panel-drag-snapshot)[data-workspace-mode='unlocked']"
 
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)
@@ -545,15 +649,17 @@ test('keeps responsive masonry CSS tied to the shared gap and row metrics', () =
   expect(desktopRule).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))')
 })
 
-test('resetting the layout while locked keeps the workspace locked', () => {
+test('disables reset while locked and preserves the custom layout', () => {
   render(<ReplayWorkspace panels={panels} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Player panel' }))
   fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }))
+  const resetLayout = screen.getByRole('button', { name: 'Reset layout' })
 
-  expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
+  expect(resetLayout.hasAttribute('disabled')).toBe(true)
+  fireEvent.click(resetLayout)
+  expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+  expect(screen.getByText('Custom')).toBeTruthy()
   expect(document.querySelector('.replay-workspace')?.getAttribute('data-workspace-mode')).toBe('locked')
   expect(screen.getByRole('button', { name: 'Unlock workspace' })).toBeTruthy()
 })

@@ -1,8 +1,9 @@
 import type {
   ArtifactReference, BrowserPointer, ChunkReference, DnfMarker, DriverColumns, DriverMetadata,
   LapSectorDriverColumns, LapSectorSidecar, LapSectorSidecarReference, PitLossModel, PitLossModelReference,
-  ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap, StintDriverColumns, StintSummary, StintSummaryReference, TimelineInterval,
-  TimelineIntervalKind, TimelineSummary, TimelineSummaryReference, TrackAssets, TrackPoint,
+  PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
+  StintDriverColumns, StintSummary, StintSummaryReference, TimelineInterval, TimelineIntervalKind, TimelineSummary,
+  TimelineSummaryReference, TrackAssets, TrackPoint,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
 
@@ -13,6 +14,7 @@ export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v
 export const BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar'
 export const STINT_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
 export const PIT_LOSS_MODEL_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model'
+export const PENALTY_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm', 'tyreAge', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -39,7 +41,7 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
@@ -50,6 +52,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   const lapSectorSidecar = item.lapSectorSidecar === undefined ? undefined : parseLapSectorSidecarReference(item.lapSectorSidecar)
   const stintSummary = item.stintSummary === undefined ? undefined : parseStintSummaryReference(item.stintSummary)
   const pitLossModel = item.pitLossModel === undefined ? undefined : parsePitLossModelReference(item.pitLossModel)
+  const penaltySidecar = item.penaltySidecar === undefined ? undefined : parsePenaltySidecarReference(item.penaltySidecar)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
@@ -68,7 +71,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
 }
 
 export function parseTimelineSummaryReference(value: unknown): TimelineSummaryReference {
@@ -111,6 +114,16 @@ export function parsePitLossModelReference(value: unknown): PitLossModelReferenc
   return freeze({ path: 'pit-loss-model.json', schemaId: PIT_LOSS_MODEL_SCHEMA, sha256 })
 }
 
+export function parsePenaltySidecarReference(value: unknown): PenaltySidecarReference {
+  const item = object(value, 'manifest.penaltySidecar')
+  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.penaltySidecar')
+  if (item.path !== 'penalty-sidecar.json') throw new Error('penalty sidecar path is unsupported')
+  if (item.schemaId !== PENALTY_SIDECAR_SCHEMA) throw new Error('penalty sidecar schema identity is unsupported')
+  const sha256 = item.sha256
+  if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.penaltySidecar.sha256 is invalid')
+  return freeze({ path: 'penalty-sidecar.json', schemaId: PENALTY_SIDECAR_SCHEMA, sha256 })
+}
+
 export function parseLapSectorSidecar(value: unknown): LapSectorSidecar {
   const item = object(value, 'lap sector sidecar')
   exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'lap sector sidecar')
@@ -149,10 +162,40 @@ export function parsePitLossModel(value: unknown): PitLossModel {
   return freeze({ contractVersion: 'v1', fixtureId, method: 'global-prior-weighted-mean-v1', baselineMs, priorWeight, timeMs, estimatedLossMs, observedSampleCount })
 }
 
+export function parsePenaltySidecar(value: unknown): PenaltySidecar {
+  const item = object(value, 'penalty sidecar')
+  exact(item, ['contractVersion', 'fixtureId', 'penaltyIssuances'], [], 'penalty sidecar')
+  if (item.contractVersion !== 'v1') throw new Error('penalty sidecar must be contract version v1')
+  const fixtureId = parseFixtureId(item.fixtureId, 'penalty sidecar fixture id')
+  const penaltyIssuances = array(item.penaltyIssuances, 'penalty sidecar penaltyIssuances').map(parsePenaltyIssuance)
+  return freeze({ contractVersion: 'v1', fixtureId, penaltyIssuances: freeze(penaltyIssuances) })
+}
+
+function parsePenaltyIssuance(value: unknown, index: number): PenaltyIssuance {
+  const label = `penalty sidecar penaltyIssuances[${index}]`
+  const item = object(value, label)
+  exact(item, ['driverId', 'sessionTimeMs', 'penaltyType', 'reason', 'rawMessage'], ['lapNumber'], label)
+  const lapNumber = item.lapNumber === undefined ? undefined : integer(item.lapNumber, `${label}.lapNumber`, 1)
+  return freeze({
+    driverId: parseDriverId(item.driverId, `${label}.driverId`),
+    sessionTimeMs: integer(item.sessionTimeMs, `${label}.sessionTimeMs`),
+    penaltyType: string(item.penaltyType, `${label}.penaltyType`),
+    reason: string(item.reason, `${label}.reason`),
+    rawMessage: string(item.rawMessage, `${label}.rawMessage`),
+    ...(lapNumber === undefined ? {} : { lapNumber }),
+  })
+}
+
 function parseFixtureId(value: unknown, label: string): string {
   const fixtureId = string(value, label)
   if (!FIXTURE_ID.test(fixtureId)) throw new Error(`${label} is invalid`)
   return fixtureId
+}
+
+function parseDriverId(value: unknown, label: string): string {
+  const driverId = string(value, label)
+  if (!DRIVER_ID.test(driverId)) throw new Error(`${label} is invalid`)
+  return driverId
 }
 
 function parseDrivers<T>(value: unknown, label: string, parse: (value: unknown, label: string) => T): Readonly<Record<string, T>> {

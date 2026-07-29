@@ -18,6 +18,8 @@ MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
 BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
+PENALTY_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar"
+BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
 STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
 PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
@@ -217,6 +219,73 @@ class BrowserLapSectorSidecar:
             "contractVersion": "v1",
             "fixtureId": self.fixture_id,
             "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
+        }
+
+
+@dataclass(frozen=True)
+class BrowserPenaltyIssuance:
+    """One immutable race-control penalty issuance.
+
+    This model intentionally has no served/active field.  Race-control data
+    establishes that a penalty was issued, but does not provide an authoritative
+    lifecycle state for it.
+    """
+
+    driver_id: str
+    session_time_ms: int
+    penalty_type: str
+    reason: str
+    raw_message: str
+    lap_number: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.driver_id, str) or not _DRIVER_ID.fullmatch(self.driver_id):
+            raise ValueError("penalty issuance driver_id must match the canonical identifier pattern")
+        if type(self.session_time_ms) is not int or not 0 <= self.session_time_ms <= MAX_INT64:
+            raise ValueError("penalty issuance session_time_ms must be a non-negative signed Int64 integer")
+        for value, label in (
+            (self.penalty_type, "penalty_type"),
+            (self.reason, "reason"),
+            (self.raw_message, "raw_message"),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"penalty issuance {label} must be a non-empty string")
+        if self.lap_number is not None and (type(self.lap_number) is not int or self.lap_number < 1):
+            raise ValueError("penalty issuance lap_number must be a positive integer or null")
+
+    def as_dict(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "driverId": self.driver_id,
+            "sessionTimeMs": self.session_time_ms,
+            "penaltyType": self.penalty_type,
+            "reason": self.reason,
+            "rawMessage": self.raw_message,
+        }
+        if self.lap_number is not None:
+            value["lapNumber"] = self.lap_number
+        return value
+
+
+@dataclass(frozen=True)
+class BrowserPenaltySidecar:
+    """Optional issued-penalty data for one browser replay."""
+
+    fixture_id: str
+    penalty_issuances: tuple[BrowserPenaltyIssuance, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("penalty sidecar fixture_id must be a non-empty string")
+        issuances = tuple(self.penalty_issuances)
+        if any(not isinstance(value, BrowserPenaltyIssuance) for value in issuances):
+            raise TypeError("penalty_issuances must contain BrowserPenaltyIssuance values")
+        object.__setattr__(self, "penalty_issuances", issuances)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "penaltyIssuances": [issuance.as_dict() for issuance in self.penalty_issuances],
         }
 
 
@@ -546,6 +615,18 @@ class BrowserLapSectorSidecarReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserPenaltySidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional issued-penalty sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "penalty-sidecar.json":
+            raise ValueError("penalty sidecar path must be penalty-sidecar.json")
+        if self.schema_id != PENALTY_SIDECAR_SCHEMA_ID:
+            raise ValueError("penalty sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserStintSummaryReference(BrowserArtifactReference):
     """Immutable manifest reference for the optional compact stint summary."""
 
@@ -581,6 +662,7 @@ class BrowserManifest:
     lap_sector_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
     stint_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     pit_loss_model: BrowserArtifactReference | Mapping[str, object] | None = None
+    penalty_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -667,12 +749,29 @@ class BrowserManifest:
             )
         elif pit_loss_model is not None:
             raise TypeError("pit_loss_model must be a BrowserArtifactReference or mapping")
+        penalty_sidecar = self.penalty_sidecar
+        if isinstance(penalty_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(penalty_sidecar) != required:
+                raise ValueError("penalty_sidecar must contain path, schemaId, and sha256")
+            penalty_sidecar = BrowserPenaltySidecarReference(
+                cast(str, penalty_sidecar["path"]),
+                cast(str, penalty_sidecar["schemaId"]),
+                cast(str, penalty_sidecar["sha256"]),
+            )
+        elif isinstance(penalty_sidecar, BrowserArtifactReference):
+            penalty_sidecar = BrowserPenaltySidecarReference(
+                penalty_sidecar.path, penalty_sidecar.schema_id, penalty_sidecar.sha256,
+            )
+        elif penalty_sidecar is not None:
+            raise TypeError("penalty_sidecar must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
         object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
         object.__setattr__(self, "stint_summary", stint_summary)
         object.__setattr__(self, "pit_loss_model", pit_loss_model)
+        object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -704,6 +803,10 @@ class BrowserManifest:
             value["pitLossModel"] = cast(
                 BrowserArtifactReference, self.pit_loss_model,
             ).as_dict()
+        if self.penalty_sidecar is not None:
+            value["penaltySidecar"] = cast(
+                BrowserArtifactReference, self.penalty_sidecar,
+            ).as_dict()
         return value
 
 
@@ -711,12 +814,16 @@ __all__ = [
     "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields",
     "BrowserDriverLapSector", "BrowserDriverStintSummary", "BrowserLapSectorSidecar",
     "BrowserLapSectorSidecarReference",
-    "BrowserLapStart", "BrowserManifest", "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserLapStart", "BrowserManifest", "BrowserPenaltyIssuance", "BrowserPenaltySidecar",
+    "BrowserPenaltySidecarReference",
+    "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
-    "PIT_LOSS_MODEL_SCHEMA_ID", "STINT_SUMMARY_SCHEMA_ID", "TIMELINE_SUMMARY_SCHEMA_ID",
+    "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
+    "STINT_SUMMARY_SCHEMA_ID",
+    "TIMELINE_SUMMARY_SCHEMA_ID",
     "TimelineSummaryKind",
     "deep_freeze_json",
 ]

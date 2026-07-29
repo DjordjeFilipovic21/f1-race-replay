@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { DriverMetadata, LapSectorSidecar } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, PenaltySidecar } from '../../../data/replay/types'
 import type { ReplayController } from '../../../engine/replay'
 import { LiveLeaderboard } from './LiveLeaderboard'
 import { createThrottledReplayStore } from '../state/throttled-replay-store'
@@ -13,10 +13,11 @@ export interface LiveLeaderboardPanelProps {
   readonly selectedDriverId?: string | null
   readonly onDriverSelect?: (driverId: string) => void
   readonly lapSectorSidecar?: LapSectorSidecar | null
+  readonly penaltySidecar?: PenaltySidecar
 }
 
 /** Keeps the table responsive without reconciling every animation frame. */
-export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ controller, drivers, refreshKey, selectedDriverId = null, onDriverSelect, lapSectorSidecar }: LiveLeaderboardPanelProps) {
+export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ controller, drivers, refreshKey, selectedDriverId = null, onDriverSelect, lapSectorSidecar, penaltySidecar }: LiveLeaderboardPanelProps) {
   const store = useMemo(() => createThrottledReplayStore(controller, LEADERBOARD_REFRESH_INTERVAL_MS), [controller])
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
 
@@ -24,5 +25,5 @@ export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ control
     store.flush()
   }, [refreshKey, store])
 
-  return <LiveLeaderboard snapshot={snapshot.replay} drivers={drivers} selectedDriverId={selectedDriverId} onDriverSelect={onDriverSelect} lapSectorSidecar={lapSectorSidecar} />
+  return <LiveLeaderboard snapshot={snapshot.replay} drivers={drivers} selectedDriverId={selectedDriverId} onDriverSelect={onDriverSelect} lapSectorSidecar={lapSectorSidecar} penaltySidecar={penaltySidecar} />
 })

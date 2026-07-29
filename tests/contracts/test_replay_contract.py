@@ -9,9 +9,11 @@ from referencing import Registry, Resource
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    PENALTY_SIDECAR_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
+    BrowserPenaltySidecarReference,
     BrowserTimelineSummaryReference,
 )
 
@@ -61,6 +63,7 @@ def load_contract_bundle():
         "trackAssets": load_json(SCHEMA_ROOT / "track-assets.schema.json"),
         "timelineSummary": load_json(SCHEMA_ROOT / "timeline-summary.schema.json"),
         "browserLapSectorSidecar": load_json(SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json"),
+        "penaltySidecar": load_json(SCHEMA_ROOT / "penalty-sidecar.schema.json"),
         "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
         "pitLossModel": load_json(SCHEMA_ROOT / "pit-loss-model.schema.json"),
     }
@@ -445,6 +448,33 @@ def test_replay_contract_lap_sector_sidecar_validates_and_is_optional(contract_b
     validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
 
 
+def test_replay_contract_penalty_sidecar_validates_and_is_optional(contract_bundle, schema_registry):
+    sidecar = {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "penaltyIssuances": [{
+            "driverId": "HAM",
+            "sessionTimeMs": 9_000,
+            "penaltyType": "TIME_10S",
+            "reason": "CAUSING A COLLISION",
+            "rawMessage": (
+                "FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 44 (HAM) - "
+                "CAUSING A COLLISION"
+            ),
+            "lapNumber": 9,
+        }],
+    }
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["penaltySidecar"] = {
+        "path": "penalty-sidecar.json",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar",
+        "sha256": "a" * 64,
+    }
+
+    validate_instance(contract_bundle["schemas"]["penaltySidecar"], sidecar, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
 def test_replay_contract_stint_summary_validates_and_is_optional(contract_bundle, schema_registry):
     summary = stint_summary_payload()
     manifest = copy.deepcopy(contract_bundle["manifest"])
@@ -513,6 +543,29 @@ def test_browser_manifest_serializes_optional_lap_sector_sidecar_reference():
     )
 
     assert manifest.as_dict()["lapSectorSidecar"] == lap_sector_sidecar_reference()
+
+
+def test_browser_manifest_serializes_optional_penalty_sidecar_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        penalty_sidecar=BrowserPenaltySidecarReference(
+            "penalty-sidecar.json", PENALTY_SIDECAR_SCHEMA_ID, "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["penaltySidecar"] == {
+        "path": "penalty-sidecar.json",
+        "schemaId": PENALTY_SIDECAR_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
 
 
 @pytest.mark.parametrize(
