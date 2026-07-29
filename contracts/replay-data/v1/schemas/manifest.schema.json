@@ -108,6 +108,9 @@
     "lapSectorSidecar": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar#/$defs/browserLapSectorSidecarFileReference"
     },
+    "penaltySidecar": {
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar#/$defs/penaltySidecarFileReference"
+    },
     "stintSummary": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary#/$defs/stintSummaryFileReference"
     },

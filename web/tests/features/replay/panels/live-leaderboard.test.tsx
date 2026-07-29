@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboard } from '../../../../src/features/replay/panels/LiveLeaderboard'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
-import type { LapSectorSidecar } from '../../../../src/data/replay/types'
+import type { LapSectorSidecar, PenaltySidecar } from '../../../../src/data/replay/types'
 
 const drivers = Object.freeze([
   Object.freeze({ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }),
@@ -414,6 +414,79 @@ test('removes future sector times when the replay cursor moves backward in Secto
   expect(norSectorsLate[2].className).toContain('live-leaderboard__sector--unavailable')
 })
 
+test('renders a red penalty indicator immediately left of the metric cell when a driver has an issued penalty', () => {
+  const sidecar = buildPenaltySidecar('VER', 10_000)
+  render(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 10_000 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  const verIndicator = rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')
+  expect(verIndicator).not.toBeNull()
+  expect(verIndicator!.getAttribute('role')).toBe('img')
+  expect(verIndicator!.getAttribute('aria-label')).toBe('Penalty issued')
+  expect(verIndicator!.getAttribute('title')).toBe('Penalty issued')
+  expect(verIndicator!.textContent).toBe('!')
+  expect(rowForDriver('NOR').querySelector('.live-leaderboard__penalty-indicator')).toBeNull()
+})
+
+test('hides the penalty indicator when seeking before penalty issuance', () => {
+  const sidecar = buildPenaltySidecar('VER', 10_000)
+  const { rerender } = render(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 9_999 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).toBeNull()
+
+  rerender(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 10_000 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+})
+
+test('displays the penalty indicator after a direct large seek past issuance', () => {
+  const sidecar = buildPenaltySidecar('VER', 10_000)
+  render(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 1_000_000 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+})
+
+test('hides the penalty indicator when the penalty sidecar is undefined', () => {
+  render(<LiveLeaderboard snapshot={snapshot()} drivers={drivers} />)
+
+  for (const code of ['VER', 'NOR', 'HAM']) {
+    expect(rowForDriver(code).querySelector('.live-leaderboard__penalty-indicator')).toBeNull()
+  }
+})
+
+test('shows the penalty indicator across all metric modes', () => {
+  const sidecar = buildPenaltySidecar('VER', 10_000)
+  render(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 10_000 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Interval' }))
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
+  expect(rowForDriver('VER').querySelector('.live-leaderboard__penalty-indicator')).not.toBeNull()
+})
+
+test('positions the penalty indicator at the right edge of the driver cell before the metric cell', () => {
+  const sidecar = buildPenaltySidecar('VER', 10_000)
+  render(<LiveLeaderboard snapshot={snapshot({ sessionTimeMs: 10_000 })} drivers={drivers} penaltySidecar={sidecar} />)
+
+  const driverCell = within(rowForDriver('VER')).getByRole('rowheader')
+  const indicator = driverCell.querySelector('.live-leaderboard__penalty-indicator')
+  expect(indicator).not.toBeNull()
+  expect(driverCell.lastElementChild).toBe(indicator)
+  expect(driverCell.nextElementSibling!.className).toContain('live-leaderboard__gap')
+})
+
+function buildPenaltySidecar(driverId: string, sessionTimeMs: number): PenaltySidecar {
+  return {
+    contractVersion: 'v1',
+    fixtureId: 'test',
+    penaltyIssuances: [
+      { driverId, sessionTimeMs, penaltyType: 'time', reason: 'Causing a collision', rawMessage: 'FIA STEWARDS: 10 SECOND TIME PENALTY' },
+    ],
+  }
+}
+
 function sectorSnapshot(sessionTimeMs = 200_000): ReplaySnapshot {
   const driver = (position: number, gapToLeaderMs: number) => ({
     x: null, y: null, trackDistanceMeters: null, speed: null, throttle: null, brake: null,
@@ -463,7 +536,7 @@ function buildSectorSidecar(): LapSectorSidecar {
 }
 
 function rowForDriver(code: string): HTMLElement {
-  const row = screen.getAllByRole('row').slice(1).find((candidate) => within(candidate).getByRole('rowheader').textContent === code)
+  const row = screen.getAllByRole('row').slice(1).find((candidate) => within(candidate).getByRole('rowheader').querySelector('button')?.textContent === code)
   if (row === undefined) throw new Error(`Missing leaderboard row for ${code}`)
   return row
 }

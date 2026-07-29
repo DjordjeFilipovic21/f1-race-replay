@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar",
+  "title": "Browser issued-penalty sidecar",
+  "description": "Optional penalty issuance data for browser replay. An issuance is not evidence that a penalty remains active or has been served.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "penaltyIssuances"
+  ],
+  "$defs": {
+    "driverCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "sessionTimeMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lapNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "penaltyIssuance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "driverId",
+        "sessionTimeMs",
+        "penaltyType",
+        "reason",
+        "rawMessage"
+      ],
+      "properties": {
+        "driverId": {
+          "$ref": "#/$defs/driverCode"
+        },
+        "sessionTimeMs": {
+          "$ref": "#/$defs/sessionTimeMs"
+        },
+        "penaltyType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rawMessage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lapNumber": {
+          "$ref": "#/$defs/lapNumber"
+        }
+      }
+    },
+    "penaltySidecarFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "penalty-sidecar.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "penaltyIssuances": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/penaltyIssuance"
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserLapSectorSidecar,
     BrowserManifest,
     BrowserLapStart,
+    BrowserPenaltySidecar,
     BrowserPitLossModel,
     BrowserStintSummary,
     BrowserTimelineInterval,
@@ -30,6 +31,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
 from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
+from f1_replay_pipeline.delivery.browser.browser_penalty_sidecar import build_penalty_sidecar
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import build_pit_loss_timeline
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
     extract_eligible_pit_loss_observations,
@@ -104,6 +106,7 @@ class BrowserDeliveryBuild:
     lap_sector_sidecar: BrowserLapSectorSidecar | None = None
     stint_summary: BrowserStintSummary | None = None
     pit_loss_model: BrowserPitLossModel | None = None
+    penalty_sidecar: BrowserPenaltySidecar | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -118,6 +121,8 @@ class BrowserDeliveryBuild:
             raise TypeError("stint_summary must be a BrowserStintSummary or None")
         if self.pit_loss_model is not None and not isinstance(self.pit_loss_model, BrowserPitLossModel):
             raise TypeError("pit_loss_model must be a BrowserPitLossModel or None")
+        if self.penalty_sidecar is not None and not isinstance(self.penalty_sidecar, BrowserPenaltySidecar):
+            raise TypeError("penalty_sidecar must be a BrowserPenaltySidecar or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -185,6 +190,10 @@ def build_browser_delivery(
         )
         timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
         lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
+        parsed_penalty_sidecar = build_penalty_sidecar(snapshot)
+        penalty_sidecar = (
+            parsed_penalty_sidecar if parsed_penalty_sidecar.penalty_issuances else None
+        )
         stint_summary = build_stint_summary(snapshot)
         observations = extract_eligible_pit_loss_observations(
             stint_summary=stint_summary,
@@ -203,12 +212,13 @@ def build_browser_delivery(
             lap_starts,
             stint_summary=None,
             pit_loss_model=None,
+            penalty_sidecar=None,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
-        stint_summary, pit_loss_model,
+        stint_summary, pit_loss_model, penalty_sidecar,
     )
 
 
