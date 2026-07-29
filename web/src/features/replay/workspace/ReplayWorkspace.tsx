@@ -56,6 +56,7 @@ interface PanelManagerProps {
 
 interface WorkspaceLayoutSummaryProps {
   readonly isDefaultLayout: boolean
+  readonly isLocked: boolean
   readonly pinnedPanelCount: number
   readonly panelCount: number
   readonly onResetLayout: () => void
@@ -226,10 +227,14 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   }
 
   const resetLayout = () => {
+    if (workspaceMode === 'locked') return
+    const shouldAnimate = !prefersReducedMotion()
     cancelFlipAnimations()
+    if (shouldAnimate) captureFlipPositions()
     setEntryPanelIds(new Set())
     setExitSnapshots([])
     setLayout(createDefaultReplayPanelLayout(panelIds))
+    if (shouldAnimate) setFlipRevision((revision) => revision + 1)
   }
 
   const closePanelManager = () => {
@@ -405,7 +410,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   return (
     <>
       <div ref={panelManagerRef} className="replay-workspace__manager">
-        <WorkspaceLayoutSummary isDefaultLayout={isDefaultLayout} pinnedPanelCount={pinnedPanelCount} panelCount={layout.length} onResetLayout={resetLayout} />
+        <WorkspaceLayoutSummary isDefaultLayout={isDefaultLayout} isLocked={workspaceMode === 'locked'} pinnedPanelCount={pinnedPanelCount} panelCount={layout.length} onResetLayout={resetLayout} />
         <div className="replay-workspace__actions">
           <button ref={panelManagerToggleRef} className="replay-panel-manager-toggle" type="button" aria-expanded={isPanelManagerOpen} aria-controls="replay-panel-manager" onClick={() => setPanelManagerOpen((current) => !current)}>
             Panel Manager
@@ -649,14 +654,14 @@ function ReplayPanelExitSnapshot({ snapshot, onComplete }: { readonly snapshot: 
   return <div ref={snapshotRef} className="replay-panel-exit-snapshot" style={style} aria-hidden="true" inert />
 }
 
-function WorkspaceLayoutSummary({ isDefaultLayout, pinnedPanelCount, panelCount, onResetLayout }: WorkspaceLayoutSummaryProps) {
+function WorkspaceLayoutSummary({ isDefaultLayout, isLocked, pinnedPanelCount, panelCount, onResetLayout }: WorkspaceLayoutSummaryProps) {
   return <section className="replay-workspace__layout-summary" aria-label="Workspace layout">
     <div className="replay-workspace__layout-details">
       <span className="replay-workspace__layout-label">Layout</span>
       <strong>{isDefaultLayout ? 'Default' : 'Custom'}</strong>
       <span className="replay-workspace__panel-count">{pinnedPanelCount}/{panelCount} panels</span>
     </div>
-    <button className="replay-panel-manager-action" type="button" disabled={isDefaultLayout} onClick={onResetLayout}>Reset layout</button>
+    <button className="replay-panel-manager-action" type="button" disabled={isDefaultLayout || isLocked} onClick={onResetLayout}>Reset layout</button>
   </section>
 }
 
