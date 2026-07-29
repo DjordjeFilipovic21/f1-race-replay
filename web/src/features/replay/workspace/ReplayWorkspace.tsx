@@ -7,6 +7,7 @@ import { ReplayErrorBoundary } from '../shell/ReplayErrorBoundary'
 import {
   commitReplayPanelDrag,
   createDefaultReplayPanelLayout,
+  defaultReplayPanelColumn,
   isDefaultReplayPanelLayout,
   isSameReplayPanelLayout,
   isReplayPanelId,
@@ -17,7 +18,7 @@ import {
 } from './replay-panel-layout'
 import { loadReplayWorkspacePreferences, saveReplayWorkspacePreferences, type ReplayWorkspaceMode, type ReplayWorkspaceStorage } from './replay-workspace-preferences'
 import { LOCKED_WORKSPACE_GAP_PX, MASONRY_ROW_HEIGHT_PX, REPLAY_WORKSPACE_GAP_PX, masonryRowSpan } from './replay-workspace-masonry'
-import { columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount, type MasonryPlacementItem, type PanelVerticalGeometry } from './replay-workspace-placement'
+import { canonicalDesktopColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount, type MasonryPlacementItem, type PanelVerticalGeometry } from './replay-workspace-placement'
 
 export type { ReplayPanelId, ReplayPanelLayoutItem } from './replay-panel-layout'
 
@@ -48,12 +49,17 @@ interface DragMoveState {
 interface PanelManagerProps {
   readonly panels: readonly ReplayWorkspacePanel[]
   readonly layout: readonly ReplayPanelLayoutItem[]
-  readonly isDefaultLayout: boolean
   readonly isLocked: boolean
   readonly closeButtonRef: (element: HTMLButtonElement | null) => void
   readonly onTogglePinning: (id: ReplayPanelId) => void
-  readonly onResetLayout: () => void
   readonly onClose: () => void
+}
+
+interface WorkspaceLayoutSummaryProps {
+  readonly isDefaultLayout: boolean
+  readonly pinnedPanelCount: number
+  readonly panelCount: number
+  readonly onResetLayout: () => void
 }
 
 interface ReplayDropPreview extends DragMoveState {
@@ -148,6 +154,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const panelManagerToggleRef = useRef<HTMLButtonElement | null>(null)
   const panelManagerCloseRef = useRef<HTMLButtonElement | null>(null)
   const dragMoveRef = useRef<DragMoveState | null>(null)
+  const dragOriginRectRef = useRef<ReplayPanelRect | null>(null)
   const dropPreviewRef = useRef<ReplayDropPreview | null>(null)
   const panelElementsRef = useRef(new Map<ReplayPanelId, HTMLElement>())
   const exitSnapshotSequenceRef = useRef(0)
@@ -317,6 +324,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     return panel === undefined ? [] : [{ panel, layout: item }]
   })
   const isDefaultLayout = isDefaultReplayPanelLayout(panelIds, layout)
+  const pinnedPanelCount = layout.filter((item) => item.pinned).length
 
   useLayoutEffect(() => {
     const firstRects = flipFirstRectsRef.current
@@ -368,7 +376,8 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
     const nextColumnStart = columnStartFromDropCenter(move.centerX, workspaceBounds.left, workspaceBounds.width, nextColumnCount, panel.columns)
     if (nextColumnStart === null) return null
     const committedColumnStart = layout.find((item) => item.id === move.id)?.desktopColumnStart ?? null
-    const desktopColumnStart = columnStartWithHysteresis(dropPreviewRef.current?.id === move.id ? dropPreviewRef.current.desktopColumnStart : committedColumnStart, nextColumnStart, move.centerX, workspaceBounds.left, workspaceBounds.width, nextColumnCount, panel.columns)
+    const responsiveDesktopColumnStart = columnStartWithHysteresis(dropPreviewRef.current?.id === move.id ? dropPreviewRef.current.desktopColumnStart : committedColumnStart, nextColumnStart, move.centerX, workspaceBounds.left, workspaceBounds.width, nextColumnCount, panel.columns)
+    const desktopColumnStart = canonicalDesktopColumnStart(responsiveDesktopColumnStart, defaultReplayPanelColumn(move.id), panel.columns, nextColumnCount)
     const columns: 1 | 2 = panel.columns === 2 && nextColumnCount > 1 ? 2 : 1
     const columnStart = responsiveColumnStart(desktopColumnStart, panel.columns, nextColumnCount)
     const rowSpan = rowSpans[move.id] ?? 1
@@ -406,19 +415,22 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   return (
     <>
       <div ref={panelManagerRef} className="replay-workspace__manager">
-        <button ref={panelManagerToggleRef} className="replay-panel-manager-toggle" type="button" aria-expanded={isPanelManagerOpen} aria-controls="replay-panel-manager" onClick={() => setPanelManagerOpen((current) => !current)}>
-          Panel Manager
-        </button>
-        <button className="replay-workspace-mode-toggle" type="button" aria-pressed={workspaceMode === 'locked'} aria-label={workspaceMode === 'locked' ? 'Unlock workspace' : 'Lock workspace'} title={workspaceMode === 'locked' ? 'Unlock workspace' : 'Lock workspace'} onClick={toggleWorkspaceMode}>
-          <WorkspaceModeIcon locked={workspaceMode === 'locked'} />
-          <span>{workspaceMode === 'locked' ? 'Locked' : 'Unlocked'}</span>
-        </button>
-        <button className="replay-workspace-fullscreen-toggle" type="button" disabled={!document.fullscreenEnabled || isFullscreen} aria-label="Enter fullscreen" title="Enter fullscreen" onClick={handleEnterFullscreen}>
-          <FullscreenIcon />
-          <span>Fullscreen</span>
-        </button>
+        <WorkspaceLayoutSummary isDefaultLayout={isDefaultLayout} pinnedPanelCount={pinnedPanelCount} panelCount={layout.length} onResetLayout={resetLayout} />
+        <div className="replay-workspace__actions">
+          <button ref={panelManagerToggleRef} className="replay-panel-manager-toggle" type="button" aria-expanded={isPanelManagerOpen} aria-controls="replay-panel-manager" onClick={() => setPanelManagerOpen((current) => !current)}>
+            Panel Manager
+          </button>
+          <button className="replay-workspace-mode-toggle" type="button" aria-pressed={workspaceMode === 'locked'} aria-label={workspaceMode === 'locked' ? 'Unlock workspace' : 'Lock workspace'} title={workspaceMode === 'locked' ? 'Unlock workspace' : 'Lock workspace'} onClick={toggleWorkspaceMode}>
+            <WorkspaceModeIcon locked={workspaceMode === 'locked'} />
+            <span>{workspaceMode === 'locked' ? 'Locked' : 'Unlocked'}</span>
+          </button>
+          <button className="replay-workspace-fullscreen-toggle" type="button" disabled={!document.fullscreenEnabled || isFullscreen} aria-label="Enter fullscreen" title="Enter fullscreen" onClick={handleEnterFullscreen}>
+            <FullscreenIcon />
+            <span>Fullscreen</span>
+          </button>
+        </div>
         {fullscreenError !== null && <p className="replay-workspace-fullscreen-error" role="alert">{fullscreenError}</p>}
-        {isPanelManagerOpen && <PanelManager panels={panels} layout={layout} isDefaultLayout={isDefaultLayout} isLocked={workspaceMode === 'locked'} closeButtonRef={(element) => { panelManagerCloseRef.current = element }} onTogglePinning={togglePanelPinning} onResetLayout={resetLayout} onClose={closePanelManager} />}
+        {isPanelManagerOpen && <PanelManager panels={panels} layout={layout} isLocked={workspaceMode === 'locked'} closeButtonRef={(element) => { panelManagerCloseRef.current = element }} onTogglePinning={togglePanelPinning} onClose={closePanelManager} />}
       </div>
       <DragDropProvider
         sensors={(defaults) => [
@@ -433,7 +445,10 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') return
           dragMoveRef.current = null
           updateDropPreview(null)
-          setActivePanelId(panelIdFromSortableId(event.operation.source?.id))
+          const id = panelIdFromSortableId(event.operation.source?.id)
+          const sourceElement = id === null ? undefined : panelElementsRef.current.get(id)
+          dragOriginRectRef.current = sourceElement === undefined ? null : readReplayPanelRect(sourceElement)
+          setActivePanelId(id)
         }}
         onDragMove={(event) => {
           if (workspaceMode === 'locked') {
@@ -463,11 +478,14 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') {
             setActivePanelId(null)
             dragMoveRef.current = null
+            dragOriginRectRef.current = null
             updateDropPreview(null)
             return
           }
           setActivePanelId(null)
           dragMoveRef.current = null
+          const dragOriginRect = dragOriginRectRef.current
+          dragOriginRectRef.current = null
           const source = event.operation.source
           if (event.canceled || !isSortable(source)) {
             updateDropPreview(null)
@@ -479,6 +497,10 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
             return
           }
           const center = event.operation.shape?.current.center
+          if (center !== undefined && dragOriginRect !== null && isPointInsideReplayPanelRect(center.x, center.y, dragOriginRect)) {
+            updateDropPreview(null)
+            return
+          }
           const destination = dropPreviewRef.current?.id === id
             ? dropPreviewRef.current
             : center === undefined
@@ -571,6 +593,10 @@ function isSameReplayPanelRect(left: ReplayPanelRect, right: ReplayPanelRect): b
   return left.left === right.left && left.top === right.top && left.width === right.width && left.height === right.height
 }
 
+function isPointInsideReplayPanelRect(x: number, y: number, rect: ReplayPanelRect): boolean {
+  return Number.isFinite(x) && Number.isFinite(y) && x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height
+}
+
 function EmptyReplayWorkspace({ onOpenPanelManager }: { readonly onOpenPanelManager: () => void }) {
   return <div className="replay-workspace__empty" role="status">
     <h2>No panels pinned</h2>
@@ -623,17 +649,24 @@ function ReplayPanelExitSnapshot({ snapshot, onComplete }: { readonly snapshot: 
   return <div ref={snapshotRef} className="replay-panel-exit-snapshot" style={style} aria-hidden="true" inert />
 }
 
-function PanelManager({ panels, layout, isDefaultLayout, isLocked, closeButtonRef, onTogglePinning, onResetLayout, onClose }: PanelManagerProps) {
+function WorkspaceLayoutSummary({ isDefaultLayout, pinnedPanelCount, panelCount, onResetLayout }: WorkspaceLayoutSummaryProps) {
+  return <section className="replay-workspace__layout-summary" aria-label="Workspace layout">
+    <div className="replay-workspace__layout-details">
+      <span className="replay-workspace__layout-label">Layout</span>
+      <strong>{isDefaultLayout ? 'Default' : 'Custom'}</strong>
+      <span className="replay-workspace__panel-count">{pinnedPanelCount}/{panelCount} panels</span>
+    </div>
+    <button className="replay-panel-manager-action" type="button" disabled={isDefaultLayout} onClick={onResetLayout}>Reset layout</button>
+  </section>
+}
+
+function PanelManager({ panels, layout, isLocked, closeButtonRef, onTogglePinning, onClose }: PanelManagerProps) {
   return <div id="replay-panel-manager" className="replay-panel-manager" role="dialog" aria-labelledby="replay-panel-manager-title">
     <div className="replay-panel-manager__header">
       <h2 id="replay-panel-manager-title">Panel Manager</h2>
       <button ref={closeButtonRef} className="replay-panel-manager__close" type="button" aria-label="Close Panel Manager" onClick={onClose}>×</button>
     </div>
     <p className="replay-panel-manager__description">Choose which replay panels appear in the workspace.</p>
-    <div className="replay-panel-manager__layout-status">
-      <p>Layout: <strong>{isDefaultLayout ? 'Default' : 'Custom'}</strong></p>
-      <button className="replay-panel-manager-action" type="button" disabled={isDefaultLayout} onClick={onResetLayout}>Reset to default</button>
-    </div>
     <ul className="replay-panel-manager__list">
       {panels.map((panel) => {
         const item = layout.find((candidate) => candidate.id === panel.id)
