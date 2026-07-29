@@ -139,7 +139,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const [layout, setLayout] = useState<readonly ReplayPanelLayoutItem[]>(initialPreferences.layout)
   const [workspaceMode, setWorkspaceMode] = useState<ReplayWorkspaceMode>(initialPreferences.mode)
   const [activePanelId, setActivePanelId] = useState<ReplayPanelId | null>(null)
-  const [rowSpans, setRowSpans] = useState<Readonly<Record<ReplayPanelId, number>>>({ player: 1, 'track-map': 1, leaderboard: 1, 'race-control': 1, driver: 1, telemetry: 1, 'lap-analysis': 1, strategy: 1 })
+  const [rowSpans, setRowSpans] = useState<Readonly<Record<ReplayPanelId, number>>>({ player: 1, 'track-map': 1, leaderboard: 1, 'race-control': 1, driver: 1, telemetry: 1, 'lap-analysis': 1, strategy: 1, 'pit-loss-position': 1 })
   const [columnCount, setColumnCount] = useState(() => workspaceColumnCount(typeof window === 'undefined' ? 1 : window.innerWidth))
   const [dropPreview, setDropPreview] = useState<ReplayDropPreview | null>(null)
   const [measuredGhostSlot, setMeasuredGhostSlot] = useState<GhostSlot | null>(null)

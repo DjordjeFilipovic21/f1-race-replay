@@ -8,6 +8,7 @@ import { LiveLeaderboardPanel } from '../panels/LiveLeaderboardPanel'
 import { LiveTrackMap } from '../panels/LiveTrackMap'
 import { RaceControlPanel, RACE_CONTROL_MESSAGE_DURATION_MS, RACE_CONTROL_MESSAGE_EXIT_DURATION_MS } from '../panels/RaceControlPanel'
 import { LiveTyreStrategyPanel } from '../panels/LiveTyreStrategyPanel'
+import { LivePitLossPositionPanel } from '../panels/LivePitLossPositionPanel'
 import { selectLapSectorData } from '../selectors/lap-sector-selectors'
 import { selectSectorColours } from '../selectors/sector-colour-selectors'
 import { PlaybackControls } from '../playback/PlaybackControls'
@@ -180,7 +181,13 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       id: 'strategy',
       label: 'Strategy',
       columns: 2,
-      element: <LiveTyreStrategyPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} stintSummary={stintSummary} pitLossModel={pitLossModel} totalLaps={totalLaps} />,
+      element: <LiveTyreStrategyPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} stintSummary={stintSummary} totalLaps={totalLaps} />,
+    },
+    {
+      id: 'pit-loss-position',
+      label: 'Pit loss position',
+      columns: 1,
+      element: <LivePitLossPositionPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} pitLossModel={pitLossModel} />,
     },
   ]
 

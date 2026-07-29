@@ -31,11 +31,13 @@ test('validates sortable IDs against the registered panel IDs', () => {
   expect(isReplayPanelId('race-control')).toBe(true)
   expect(isReplayPanelId('lap-analysis')).toBe(true)
   expect(isReplayPanelId('strategy')).toBe(true)
+  expect(isReplayPanelId('pit-loss-position')).toBe(true)
 })
 
 test('registers the analysis panels with their correct column widths', () => {
   expect(replayPanelColumns('lap-analysis')).toBe(1)
   expect(replayPanelColumns('strategy')).toBe(2)
+  expect(replayPanelColumns('pit-loss-position')).toBe(1)
 })
 
 test('updates the dragged panel column while retaining canonical sortable order', () => {
@@ -46,7 +48,7 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy')]).toEqual([4, 2, 1, 1, 4, 2, 4, 2])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy'), defaultReplayPanelColumn('pit-loss-position')]).toEqual([4, 2, 1, 1, 4, 2, 4, 2, 4])
 })
 
 test('defines a stable default layout independently of panel registry order', () => {
@@ -56,7 +58,7 @@ test('defines a stable default layout independently of panel registry order', ()
     { id: 'strategy', pinned: true, desktopColumnStart: 2 },
   ])
   expect(REPLAY_PANEL_DEFAULT_LAYOUT.map(({ id }) => id)).toEqual([
-    'race-control', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy',
+    'race-control', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy', 'pit-loss-position',
   ])
 })
 

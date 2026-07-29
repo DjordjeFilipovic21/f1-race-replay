@@ -606,7 +606,7 @@ test('collapses only locked drag chrome while retaining semantic panel content',
 })
 
 test('swaps drag chrome for internal gradient headers across workspace modes', () => {
-  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header)'
+  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header)'
   const unlockedHeaderScope = ":is(.replay-workspace, .replay-panel-drag-snapshot)[data-workspace-mode='unlocked']"
 
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)

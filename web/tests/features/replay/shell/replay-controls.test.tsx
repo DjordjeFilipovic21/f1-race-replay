@@ -165,6 +165,7 @@ test('renders persistent workspace headers in canonical order with definition-dr
     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
+    'replay-panel-frame',
   ])
   const playerUnpin = screen.getByRole('button', { name: 'Unpin Player panel' })
   expect(playerUnpin.classList.contains('replay-panel-unpin')).toBe(true)
@@ -173,8 +174,8 @@ test('renders persistent workspace headers in canonical order with definition-dr
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('Track map')
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '1', '2', '2'])
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '4', '4', '2', '2'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '1', '2', '2', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '4', '4', '2', '2', '4'])
 })
 
 test('unpins and restores timestamp and lap navigation with the Player panel', () => {
@@ -197,7 +198,7 @@ test('removes an unpinned panel frame and restores it with its drag handle from 
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
 
-  expect(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).toHaveLength(7)
+  expect(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).toHaveLength(8)
   expect(screen.queryByRole('button', { name: 'Move Track map panel' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
   expect(screen.getByRole('button', { name: 'Pin Track map panel' }).getAttribute('aria-pressed')).toBe('false')
@@ -220,7 +221,7 @@ test('unpins and restores panels while cleaning up and remounting specialized su
   const trackMapUnpin = within(screen.getByRole('region', { name: 'Track map' })).getByRole('button', { name: 'Unpin Track map panel' })
   expect(trackMapUnpin.classList.contains('replay-panel-unpin')).toBe(true)
   expect(trackMapUnpin.hasAttribute('aria-pressed')).toBe(false)
-  expect(controller.subscribe).toHaveBeenCalledTimes(5)
+  expect(controller.subscribe).toHaveBeenCalledTimes(6)
 
   fireEvent.click(screen.getByRole('button', { name: 'Close Panel Manager' }))
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Leaderboard panel' }))
@@ -230,7 +231,7 @@ test('unpins and restores panels while cleaning up and remounting specialized su
   fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
   fireEvent.click(screen.getByRole('button', { name: 'Pin Leaderboard panel' }))
   expect(screen.getByRole('table')).toBeTruthy()
-  expect(controller.subscribe).toHaveBeenCalledTimes(6)
+  expect(controller.subscribe).toHaveBeenCalledTimes(7)
 })
 
 test('shows the latest crossed race-control message and clears it on rewind', () => {
@@ -623,8 +624,8 @@ test('unsubscribes when the adapter unmounts', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
   const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
   unmount()
-  expect(controller.subscribe).toHaveBeenCalledTimes(4)
-  expect(getUnsubscribeCalls()).toBe(4)
+  expect(controller.subscribe).toHaveBeenCalledTimes(5)
+  expect(getUnsubscribeCalls()).toBe(5)
 })
 
 function timeFieldValues(): string[] {
