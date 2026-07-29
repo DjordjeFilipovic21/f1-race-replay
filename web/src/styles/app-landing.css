@@ -1,0 +1,428 @@
+/* Landing Page - Race Library Browser
+   Uses .library-* and .landing-* selectors
+   All accent colors derive from var(--accent) via color-mix()
+*/
+
+.landing-shell {
+  align-items: start;
+  display: grid;
+  gap: 2rem;
+  justify-items: center;
+  min-height: 100vh;
+  padding: 1.5rem 1rem;
+  width: 100%;
+}
+
+.landing-header {
+  display: grid;
+  gap: 1rem;
+  justify-items: center;
+  text-align: center;
+  width: 100%;
+}
+
+.landing-header__title {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.landing-header__subtitle {
+  color: var(--text-muted);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.library-container {
+  background: linear-gradient(145deg, rgb(31 38 45 / 92%), var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 24%);
+  display: grid;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  position: relative;
+  width: min(100%, 90rem);
+}
+
+.library-container::before {
+  background: linear-gradient(90deg, var(--accent), color-mix(in oklch, var(--accent) 60%, var(--focus)), transparent);
+  content: '';
+  height: 2px;
+  left: 1rem;
+  position: absolute;
+  right: 1rem;
+  top: -1px;
+}
+
+.library-container__header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+}
+
+.library-container__title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.library-container__count {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.library-races {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.library-race-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.library-race-card:hover {
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--border));
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+}
+
+.library-race-card:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.library-race-card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0.5rem 1.5rem rgb(0 0 0 / 20%);
+}
+
+.library-race-card__header {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.library-race-card__title {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.library-race-card__round {
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, transparent);
+  border-radius: 0.375rem;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.25rem 0.625rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.library-race-card__meta {
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.library-race-card__meta-item {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.375rem;
+}
+
+.library-race-card__meta-item svg {
+  color: color-mix(in oklch, var(--accent) 70%, var(--text-muted));
+  display: block;
+  flex: 0 0 1rem;
+  height: 1rem;
+  width: 1rem;
+}
+
+.library-race-card__sessions {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+}
+
+.library-session-button {
+  align-items: center;
+  background: var(--interactive);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: #f4f5f6;
+  cursor: pointer;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  transition: background-color 160ms ease, border-color 160ms ease;
+  width: 100%;
+}
+
+.library-session-button:hover {
+  background: var(--interactive-hover);
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border));
+}
+
+.library-session-button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.library-session-button__info {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.library-session-button__name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.library-session-button__status {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.library-session-button__action {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  border-radius: 0.375rem;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.375rem 0.75rem;
+  text-transform: uppercase;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.library-session-button:hover .library-session-button__action {
+  background: color-mix(in oklch, var(--accent) 30%, transparent);
+  border-color: color-mix(in oklch, var(--accent) 50%, transparent);
+}
+
+.library-session-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.library-session-button[disabled]:hover {
+  background: var(--interactive);
+  border-color: var(--border);
+}
+
+.library-session-button[disabled]:hover .library-session-button__action {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
+}
+
+.library-empty {
+  align-items: center;
+  background: linear-gradient(180deg, rgb(255 255 255 / 1%), transparent 5rem);
+  border: 1px dashed var(--border-strong);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  min-height: 16rem;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.library-empty__title {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.library-empty__message {
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+  margin: 0;
+  max-width: 32rem;
+}
+
+.library-error {
+  align-content: center;
+  background: rgb(255 81 88 / 7%);
+  border: 1px solid rgb(255 180 160 / 35%);
+  border-radius: 0.5rem;
+  color: var(--danger);
+  display: grid;
+  gap: 0.75rem;
+  min-height: 12rem;
+  padding: 1.5rem;
+}
+
+.library-error__title {
+  color: #f4f5f6;
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.library-error__message {
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+.library-error__action {
+  background: var(--interactive);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: #f4f5f6;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  justify-self: start;
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.library-error__action:hover {
+  background: var(--interactive-hover);
+  border-color: var(--border-strong);
+}
+
+.library-error__action:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.library-race-card__trigger {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.library-race-card__trigger:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.library-session-button[aria-checked='true'] {
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface-raised));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.library-details__actions {
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 1rem;
+}
+
+.library-open-action {
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  color: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  min-height: 44px;
+  padding: 0.625rem 1.5rem;
+  text-transform: uppercase;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.library-open-action:hover {
+  background: color-mix(in oklch, var(--accent) 85%, white);
+  box-shadow: 0 0.5rem 1.5rem color-mix(in oklch, var(--accent) 30%, transparent);
+}
+
+.library-open-action:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.library-open-action[disabled] {
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  border-color: color-mix(in oklch, var(--accent) 10%, transparent);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.library-open-action[disabled]:hover {
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  box-shadow: none;
+}
+
+.library-loading {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  min-height: 16rem;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.library-loading__title {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.library-loading__message {
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+  margin: 0;
+  max-width: 32rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .library-race-card,
+  .library-race-card__trigger,
+  .library-session-button,
+  .library-session-button__action,
+  .library-error__action,
+  .library-open-action {
+    transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+  }
+}
