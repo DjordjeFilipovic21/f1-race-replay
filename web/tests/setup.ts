@@ -1,7 +1,20 @@
+import { afterEach, beforeEach } from 'vitest'
+
 class ResizeObserverStub implements ResizeObserver {
   disconnect(): void {}
   observe(): void {}
   unobserve(): void {}
+}
+
+beforeEach(clearBrowserStorage)
+afterEach(clearBrowserStorage)
+
+function clearBrowserStorage(): void {
+  try {
+    window.localStorage?.clear()
+  } catch {
+    // Storage can be unavailable in local jsdom or restricted browser contexts.
+  }
 }
 
 if (globalThis.ResizeObserver === undefined) {
