@@ -62,7 +62,14 @@ class FastF1ScheduleProvider:
         )
         records = getattr(schedule, "to_dict")("records")
         return tuple(
-            ScheduledRace(int(record["RoundNumber"]), str(record["EventName"]), _event_completed(record, self.clock()))
+            ScheduledRace(
+                int(record["RoundNumber"]),
+                str(record["EventName"]),
+                _event_completed(record, self.clock()),
+                _optional_text(record.get("Country")),
+                _optional_text(record.get("Location")),
+                _event_date_text(record.get("EventDate")),
+            )
             for record in records if int(record.get("RoundNumber", 0)) > 0
         )
 
@@ -76,6 +83,19 @@ def _event_completed(record: Mapping[str, object], now: datetime) -> bool:
     if not isinstance(value, datetime):
         return False
     return value.astimezone(UTC) <= now.astimezone(UTC)
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _event_date_text(value: object) -> str | None:
+    converter = getattr(value, "to_pydatetime", None)
+    if callable(converter):
+        value = converter()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return _optional_text(value)
 
 
 _SUPPORTED_SESSION_IDENTIFIERS = frozenset(

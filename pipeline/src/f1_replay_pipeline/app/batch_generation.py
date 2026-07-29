@@ -14,7 +14,7 @@ import re
 import stat
 import unicodedata
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
@@ -35,6 +35,22 @@ from f1_replay_pipeline.storage.generation_publication import (
     resolve_current_generation,
     verify_regular_file_identity,
 )
+from f1_replay_pipeline.app.catalog_v2_schema import (
+    CATALOG_SCHEMA_VERSION,
+    CatalogV2Payload,
+    CatalogV2RaceRecord,
+    CatalogV2SessionRecord,
+    session_code_from_generation_id,
+)
+from f1_replay_pipeline.app.session_pointer_publication import (
+    browser_session_pointer_path,
+    canonical_session_pointer_path,
+    promote_session_canonical_pointer,
+    read_session_browser_pointer,
+    read_session_canonical_pointer,
+    write_session_browser_pointer,
+    write_session_canonical_pointer,
+)
 from f1_replay_pipeline.app.orchestration import PipelineRequest, PipelineResult, RaceSelection
 
 if TYPE_CHECKING:
@@ -49,12 +65,18 @@ class ScheduledRace:
     round_number: int
     event_name: str
     completed: bool
+    country: str | None = None
+    location: str | None = None
+    event_date: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.round_number) is not int or self.round_number < 1:
             raise ValueError("round_number must be a positive integer")
         if not isinstance(self.event_name, str) or not self.event_name.strip():
             raise ValueError("event_name must be non-blank")
+        for value, label in ((self.country, "country"), (self.location, "location"), (self.event_date, "event_date")):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{label} must be non-blank when provided")
 
 
 class ScheduleProvider(Protocol):
@@ -134,6 +156,12 @@ class BatchRaceResult:
     generation_id: str | None = None
     delivery_version: str | None = None
     detail: str | None = None
+    session_code: str | None = None
+    session_name: str | None = None
+    event_name: str | None = None
+    country: str | None = None
+    location: str | None = None
+    event_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -211,17 +239,20 @@ def _select_races(request: BatchRequest, schedule: tuple[ScheduledRace, ...]) ->
 
 def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int, pipeline_service: PipelineService, browser_service: BrowserService, emit: ProgressCallback) -> BatchRaceResult:
     race_id = _race_folder_id(request, race)
+    session_code = _session_code(request)
+    session_name = _session_name(session_code)
     stage_total = 9 if _supports_granular_progress(browser_service) else 2
     last_stage = 0
 
+    def result(outcome: str, generation_id: str | None = None, delivery_version: str | None = None, detail: str | None = None) -> BatchRaceResult:
+        return BatchRaceResult(
+            race_id, race.round_number, outcome, generation_id, delivery_version, detail,
+            session_code, session_name, race.event_name, race.country, race.location, race.event_date,
+        )
+
     def event(
-        phase: str,
-        stage_index: int | None = None,
-        *,
-        detail: str | None = None,
-        outcome: str | None = None,
-        phase_completed: int | None = None,
-        phase_total: int | None = None,
+        phase: str, stage_index: int | None = None, *, detail: str | None = None,
+        outcome: str | None = None, phase_completed: int | None = None, phase_total: int | None = None,
     ) -> None:
         nonlocal last_stage
         if stage_index is not None:
@@ -234,49 +265,43 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
 
     event("race_queued", detail=race.event_name)
     if not race.completed:
-        event(
-            "race_succeeded",
-            stage_total,
-            detail="scheduled race is not completed; skipped safely",
-            outcome="skipped_unavailable",
-        )
-        return BatchRaceResult(race_id, race.round_number, "skipped_unavailable", detail="scheduled race is not completed")
+        event("race_succeeded", stage_total, detail="scheduled race is not completed; skipped safely", outcome="skipped_unavailable")
+        return result("skipped_unavailable", detail="scheduled race is not completed")
     canonical = request.canonical_root / race_id
     browser = request.browser_root / race_id
-    canonical_state = _canonical_state(canonical) if request.resume and not request.force else None
+
+    # Resume is indexed by the requested session, never by the race alias.
+    canonical_state = _session_canonical_state(canonical, session_code) if request.resume and not request.force else None
     if canonical_state is not None:
-        if _browser_output_valid(canonical_state, browser):
-            event("race_succeeded", stage_total, detail="validated existing artifacts", outcome="skipped_valid")
-            return BatchRaceResult(
-                race_id, race.round_number, "skipped_valid", canonical_state.generation_path.name,
-            )
+        if _session_outputs_valid(canonical, browser, session_code):
+            delivery = read_session_browser_pointer(browser, session_code).delivery_version
+            event("race_succeeded", stage_total, detail="validated existing session artifacts", outcome="skipped_valid")
+            return result("skipped_valid", canonical_state.generation_path.name, delivery)
         try:
+            promote_session_canonical_pointer(canonical, session_code)
+            _write_session_canonical_reference(canonical, session_code, canonical_state.generation_path.name)
             delivery_version = _browser_delivery_version(browser, canonical_state.generation_path.name)
             browser_result = _publish_browser(
-                browser_service,
-                BrowserPublishRequest(canonical, browser, delivery_version, request.schema_root),
-                event,
-                detail="reusing validated canonical generation",
+                browser_service, BrowserPublishRequest(canonical, browser, delivery_version, request.schema_root),
+                event, detail="reusing validated canonical session generation",
             )
+            _write_session_references(canonical, browser, session_code, canonical_state.generation_path.name, browser_result.delivery_version)
         except Exception as error:
             browser_outcome = _committed_browser_outcome(error)
             if browser_outcome is not None:
                 outcome, delivery_version, detail = browser_outcome
+                try:
+                    _write_session_browser_reference(browser, session_code, delivery_version)
+                except Exception:
+                    pass
                 event("race_succeeded", stage_total, detail=detail, outcome=outcome)
-                return BatchRaceResult(
-                    race_id, race.round_number, outcome, canonical_state.generation_path.name,
-                    delivery_version, detail,
-                )
+                return result(outcome, canonical_state.generation_path.name, delivery_version, detail)
             detail = _error_detail(error)
             event("race_failed", detail=detail, outcome="failed")
-            return BatchRaceResult(
-                race_id, race.round_number, "failed", canonical_state.generation_path.name, detail=detail,
-            )
+            return result("failed", canonical_state.generation_path.name, detail=detail)
         event("race_succeeded", stage_total, outcome="generated")
-        return BatchRaceResult(
-            race_id, race.round_number, "generated", canonical_state.generation_path.name,
-            browser_result.delivery_version,
-        )
+        return result("generated", canonical_state.generation_path.name, browser_result.delivery_version)
+
     generation_id = _generation_id(request, canonical, browser, race.round_number)
     try:
         event("canonical_generating", 1)
@@ -289,74 +314,57 @@ def _run_race(request: BatchRequest, race: ScheduledRace, index: int, total: int
         canonical_state = _canonical_state(canonical) if committed_publication is not None else None
         if canonical_state is not None and canonical_state.generation_path.name == generation_id:
             canonical_warning = isinstance(committed_publication, PublicationDurabilityUncertainError)
-            canonical_detail = (
-                "canonical committed with uncertain durability"
-                if canonical_warning else "canonical committed durably"
-            )
+            canonical_detail = "canonical committed with uncertain durability" if canonical_warning else "canonical committed durably"
             try:
+                _write_session_canonical_reference(canonical, session_code, generation_id)
                 browser_result = _publish_browser(
-                    browser_service,
-                    BrowserPublishRequest(canonical, browser, generation_id, request.schema_root),
-                    event,
-                    detail=canonical_detail,
+                    browser_service, BrowserPublishRequest(canonical, browser, generation_id, request.schema_root),
+                    event, detail=canonical_detail,
                 )
+                _write_session_references(canonical, browser, session_code, generation_id, browser_result.delivery_version)
             except Exception as browser_error:
                 browser_outcome = _committed_browser_outcome(browser_error)
                 if browser_outcome is not None:
                     browser_outcome_name, delivery_version, browser_detail = browser_outcome
-                    outcome = (
-                        "committed_with_durability_warning"
-                        if canonical_warning or browser_outcome_name == "committed_with_durability_warning"
-                        else "generated"
-                    )
+                    try:
+                        _write_session_browser_reference(browser, session_code, delivery_version)
+                    except Exception:
+                        pass
+                    outcome = "committed_with_durability_warning" if canonical_warning or browser_outcome_name == "committed_with_durability_warning" else "generated"
                     detail = f"{canonical_detail}; browser: {browser_detail}"
                     event("race_succeeded", stage_total, detail=detail, outcome=outcome)
-                    return BatchRaceResult(
-                        race_id, race.round_number, outcome,
-                        generation_id, delivery_version, detail,
-                    )
+                    return result(outcome, generation_id, delivery_version, detail)
                 detail = _error_detail(browser_error)
                 event("race_failed", detail=detail, outcome="failed")
-                return BatchRaceResult(
-                    race_id, race.round_number, "failed", generation_id,
-                    detail=f"{canonical_detail}; browser failed: {detail}",
-                )
-            if canonical_warning:
-                event("race_succeeded", stage_total, detail=str(committed_publication), outcome="committed_with_durability_warning")
-                return BatchRaceResult(
-                    race_id, race.round_number, "committed_with_durability_warning",
-                    generation_id, browser_result.delivery_version, str(committed_publication),
-                )
-            event("race_succeeded", stage_total, detail=str(committed_publication), outcome="generated")
-            return BatchRaceResult(
-                race_id, race.round_number, "generated",
-                generation_id, browser_result.delivery_version, str(committed_publication),
-            )
+                return result("failed", generation_id, detail=f"{canonical_detail}; browser failed: {detail}")
+            outcome = "committed_with_durability_warning" if canonical_warning else "generated"
+            event("race_succeeded", stage_total, detail=str(committed_publication), outcome=outcome)
+            return result(outcome, generation_id, browser_result.delivery_version, str(committed_publication))
         detail = _error_detail(error)
         event("race_failed", detail=detail, outcome="failed")
-        return BatchRaceResult(race_id, race.round_number, "failed", detail=detail)
+        return result("failed", detail=detail)
+
     try:
+        _write_session_canonical_reference(canonical, session_code, generation_id)
         browser_result = _publish_browser(
-            browser_service,
-            BrowserPublishRequest(canonical, browser, generation_id, request.schema_root),
-            event,
+            browser_service, BrowserPublishRequest(canonical, browser, generation_id, request.schema_root), event,
         )
+        _write_session_references(canonical, browser, session_code, canonical_result.generation_id, browser_result.delivery_version)
     except Exception as error:
         browser_outcome = _committed_browser_outcome(error)
         if browser_outcome is not None:
             outcome, delivery_version, detail = browser_outcome
+            try:
+                _write_session_browser_reference(browser, session_code, delivery_version)
+            except Exception:
+                pass
             event("race_succeeded", stage_total, detail=detail, outcome=outcome)
-            return BatchRaceResult(
-                race_id, race.round_number, outcome, canonical_result.generation_id,
-                delivery_version, detail,
-            )
+            return result(outcome, canonical_result.generation_id, delivery_version, detail)
         detail = _error_detail(error)
         event("race_failed", detail=detail, outcome="failed")
-        return BatchRaceResult(
-            race_id, race.round_number, "failed", canonical_result.generation_id, detail=detail,
-        )
+        return result("failed", canonical_result.generation_id, detail=detail)
     event("race_succeeded", stage_total, outcome="generated")
-    return BatchRaceResult(race_id, race.round_number, "generated", canonical_result.generation_id, browser_result.delivery_version)
+    return result("generated", canonical_result.generation_id, browser_result.delivery_version)
 
 
 def _race_folder_id(request: BatchRequest, race: ScheduledRace) -> str:
@@ -471,6 +479,68 @@ def _outputs_valid(canonical: Path, browser: Path) -> bool:
     return canonical_state is not None and _browser_output_valid(canonical_state, browser)
 
 
+def _session_code(request: BatchRequest) -> str:
+    return request.session.strip().casefold()
+
+
+def _session_name(session_code: str) -> str:
+    names = {
+        "fp1": "Practice 1", "fp2": "Practice 2", "fp3": "Practice 3",
+        "q": "Qualifying", "qualifying": "Qualifying", "s": "Sprint", "sprint": "Sprint",
+        "ss": "Sprint Shootout",
+        "sq": "Sprint Qualifying", "r": "Race",
+        "race": "Race",
+    }
+    return names.get(session_code, session_code.upper())
+
+
+def _session_canonical_state(canonical: Path, session_code: str) -> GenerationPublicationResult | None:
+    try:
+        return read_session_canonical_pointer(canonical, session_code)
+    except Exception:
+        return None
+
+
+def _session_outputs_valid(canonical: Path, browser: Path, session_code: str) -> bool:
+    canonical_state = _session_canonical_state(canonical, session_code)
+    return canonical_state is not None and _browser_output_valid(
+        canonical_state, browser, pointer_path=browser_session_pointer_path(browser, session_code),
+    )
+
+
+def _write_session_references(
+    canonical: Path, browser: Path, session_code: str, generation_id: str, delivery_version: str | None,
+) -> None:
+    """Snapshot both race-level pointers after their publication commits."""
+    _write_session_canonical_reference(canonical, session_code, generation_id)
+    _write_session_browser_reference(browser, session_code, delivery_version)
+
+
+def _write_session_canonical_reference(canonical: Path, session_code: str, generation_id: str) -> None:
+    if not (canonical / "current.json").is_file():
+        return
+    canonical_state = _canonical_state(canonical)
+    if canonical_state is None or canonical_state.generation_path.name != generation_id:
+        return
+    write_session_canonical_pointer(canonical, session_code, generation_id, canonical_state.manifest_sha256)
+
+
+def _write_session_browser_reference(browser: Path, session_code: str, delivery_version: str | None) -> None:
+    if delivery_version is None or not (browser / "browser-current.json").is_file():
+        return
+    browser_pointer = browser / "browser-current.json"
+    guarded = read_regular_file_no_follow(browser_pointer, "browser current pointer")
+    pointer = json.loads(guarded.data)
+    version = validate_browser_delivery_pointer(pointer)
+    if version != delivery_version:
+        raise ValueError("published browser delivery version disagrees with result")
+    manifest_path = browser / "generations" / version / "manifest.json"
+    manifest_file = read_regular_file_no_follow(manifest_path, "browser manifest")
+    manifest_sha256 = _sha256(manifest_file.data)
+    verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
+    write_session_browser_pointer(browser, session_code, delivery_version, manifest_sha256)
+
+
 def _canonical_state(canonical: Path) -> GenerationPublicationResult | None:
     try:
         return resolve_current_generation(canonical)
@@ -504,12 +574,14 @@ def _shallow_canonical_state(canonical: Path) -> GenerationPublicationResult | N
         return None
 
 
-def _browser_output_valid(canonical: GenerationPublicationResult, browser: Path) -> bool:
+def _browser_output_valid(
+    canonical: GenerationPublicationResult, browser: Path, *, pointer_path: Path | None = None,
+) -> bool:
     """Validate browser artifacts from guarded bytes bound to canonical state."""
     try:
         _require_no_follow_directory(browser, "browser root")
-        pointer_path = browser / "browser-current.json"
-        pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
+        selected_pointer_path = pointer_path or (browser / "browser-current.json")
+        pointer_file = read_regular_file_no_follow(selected_pointer_path, "browser current pointer")
         pointer = json.loads(pointer_file.data)
         version = validate_browser_delivery_pointer(pointer)
         manifest_path = _browser_file(browser, ("generations", version, "manifest.json"), "browser manifest")
@@ -530,18 +602,20 @@ def _browser_output_valid(canonical: GenerationPublicationResult, browser: Path)
         if not all(_browser_reference_valid(manifest_path.parent, reference) for reference in references):
             return False
         verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
-        verify_regular_file_identity(pointer_path, pointer_file, "browser current pointer")
+        verify_regular_file_identity(selected_pointer_path, pointer_file, "browser current pointer")
         return True
     except Exception:
         return False
 
 
-def _shallow_browser_output_valid(canonical: GenerationPublicationResult, browser: Path) -> bool:
+def _shallow_browser_output_valid(
+    canonical: GenerationPublicationResult, browser: Path, *, pointer_path: Path | None = None,
+) -> bool:
     """Check pointer, manifest, safe references, and provenance without reading payloads."""
     try:
         _require_no_follow_directory(browser, "browser root")
-        pointer_path = browser / "browser-current.json"
-        pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
+        selected_pointer_path = pointer_path or (browser / "browser-current.json")
+        pointer_file = read_regular_file_no_follow(selected_pointer_path, "browser current pointer")
         pointer = json.loads(pointer_file.data)
         version = validate_browser_delivery_pointer(pointer)
         manifest_path = _browser_file(browser, ("generations", version, "manifest.json"), "browser manifest")
@@ -564,7 +638,7 @@ def _shallow_browser_output_valid(canonical: GenerationPublicationResult, browse
             if not _is_sha256(reference.get("sha256")):
                 return False
         verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
-        verify_regular_file_identity(pointer_path, pointer_file, "browser current pointer")
+        verify_regular_file_identity(selected_pointer_path, pointer_file, "browser current pointer")
         return True
     except Exception:
         return False
@@ -695,24 +769,52 @@ def publish_catalog(
     *,
     progress: Callable[[str], None] | None = None,
 ) -> Path:
-    """Atomically publish deeply checked current races and shallowly retained references."""
+    """Atomically publish a complete v2 catalog with independently merged sessions."""
     root = result.request.canonical_root.parent
     root.mkdir(parents=True, exist_ok=True)
     records = _retained_catalog_records(root, result.request)
     for race in result.races:
-        valid = race.outcome in {"generated", "skipped_valid", "committed_with_durability_warning"} and _outputs_valid(
-            result.request.canonical_root / race.race_id, result.request.browser_root / race.race_id,
+        code = race.session_code or _session_code(result.request)
+        if race.session_code is None and race.generation_id is not None:
+            try:
+                code = session_code_from_generation_id(race.generation_id, race.race_id)
+            except ValueError:
+                code = _session_code(result.request)
+        valid = race.outcome in {"generated", "skipped_valid", "committed_with_durability_warning"} and _session_outputs_valid(
+            result.request.canonical_root / race.race_id, result.request.browser_root / race.race_id, code,
         )
-        record = {**asdict(race), "validated": valid}
-        if valid:
-            record["canonical"] = f"canonical/{race.race_id}/current.json"
-            record["browser"] = f"browser/{race.race_id}/browser-current.json"
+        canonical_pointer = f"canonical/{race.race_id}/sessions/{code}/current.json" if valid else None
+        browser_pointer = f"browser/{race.race_id}/sessions/{code}/browser-current.json" if valid else None
+        session = CatalogV2SessionRecord(
+            code, race.session_name or _session_name(code), race.generation_id, race.delivery_version,
+            race.outcome, valid, canonical_pointer, browser_pointer,
+        )
+        prior = records.get(race.race_id)
+        prior_sessions = prior.get("sessions", []) if isinstance(prior, dict) else []
+        if not isinstance(prior_sessions, list):
+            prior_sessions = []
+        sessions = {
+            item["session_code"]: item
+            for item in prior_sessions
+            if isinstance(item, dict) and isinstance(item.get("session_code"), str)
+        }
+        sessions[code] = session.to_dict()
+        record: dict[str, object] = {
+            "race_id": race.race_id,
+            "round_number": race.round_number,
+            "event_name": race.event_name or (prior.get("event_name", race.race_id) if prior else race.race_id),
+            "sessions": [sessions[key] for key in sorted(sessions)],
+        }
+        for name, value in (("country", race.country), ("location", race.location), ("event_date", race.event_date)):
+            if value is not None:
+                record[name] = value
+            elif prior and name in prior:
+                record[name] = prior[name]
         records[race.race_id] = record
-    payload = {
-        "year": result.request.year,
-        "atomicAcrossRaces": False,
-        "races": [records[race_id] for race_id in sorted(records)],
-    }
+    payload = CatalogV2Payload(
+        result.request.year,
+        tuple(_race_model(record) for record in records.values()),
+    ).to_dict()
     emit = progress or (lambda _phase: None)
     emit("catalog_publishing")
     path = root / "catalog.json"
@@ -725,16 +827,20 @@ def verify_catalog(
     *,
     progress: Callable[[str, str], None] | None = None,
 ) -> tuple[BatchRaceResult, ...]:
-    """Deeply verify every catalog-referenced race without schedule or network access."""
+    """Deeply verify every catalog-referenced session without schedule access."""
     root = request.canonical_root.parent
     try:
         _require_no_follow_directory(root, "season catalog root")
         catalog_file = read_regular_file_no_follow(root / "catalog.json", "season catalog")
         catalog = json.loads(catalog_file.data)
+        if catalog.get("schemaVersion") != CATALOG_SCHEMA_VERSION:
+            raise ValueError("season catalog must use schemaVersion 2; migrate the v1 catalog first")
         if catalog.get("year") != request.year or not isinstance(catalog.get("races"), list):
-            raise ValueError("season catalog is malformed")
+            raise ValueError("season catalog is malformed v2")
         records = tuple(sorted(catalog["races"], key=_catalog_record_sort_key))
         verify_regular_file_identity(root / "catalog.json", catalog_file, "season catalog")
+    except ValueError:
+        raise
     except Exception as error:
         raise ValueError("season catalog cannot be verified") from error
     emit = progress or (lambda _race_id, _phase: None)
@@ -742,25 +848,34 @@ def verify_catalog(
     for record in records:
         race_id = record.get("race_id") if isinstance(record, dict) else None
         display_id = race_id if isinstance(race_id, str) else "invalid"
-        emit(display_id, "catalog_deep_verifying")
-        try:
-            if not _retained_record_valid(record, request):
-                raise ValueError("catalog reference failed shallow integrity checks")
-            canonical = _canonical_state(request.canonical_root / display_id)
-            if canonical is None:
-                raise ValueError("canonical generation failed deep validation")
-            from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_complete_browser_delivery
-
-            validate_complete_browser_delivery(
-                request.browser_root / display_id,
-                expected_generation_id=canonical.generation_path.name,
-                expected_manifest_sha256=canonical.manifest_sha256,
-                schema_root=request.schema_root,
-            )
-        except Exception as error:
-            results.append(BatchRaceResult(display_id, _record_round_number(record), "invalid", detail=_error_detail(error)))
-        else:
-            results.append(BatchRaceResult(display_id, _record_round_number(record), "valid", canonical.generation_path.name))
+        sessions = record.get("sessions") if isinstance(record, dict) else None
+        if not isinstance(sessions, list) or not sessions:
+            raise ValueError(f"catalog race {display_id} has no sessions")
+        for session in sorted(sessions, key=lambda value: str(value.get("session_code", "")) if isinstance(value, dict) else ""):
+            code = session.get("session_code") if isinstance(session, dict) else None
+            emit(display_id, "catalog_deep_verifying")
+            try:
+                if not isinstance(code, str) or not _retained_session_valid(record, session, request):
+                    raise ValueError("catalog session reference failed shallow integrity checks")
+                canonical = read_session_canonical_pointer(request.canonical_root / display_id, code)
+                from f1_replay_pipeline.storage.canonical_generation_validation import validate_complete_canonical_generation
+                validate_complete_canonical_generation(
+                    canonical.generation_path,
+                    expected_generation_id=canonical.generation_path.name,
+                    expected_manifest_sha256=canonical.manifest_sha256,
+                )
+                from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_complete_browser_delivery
+                validate_complete_browser_delivery(
+                    request.browser_root / display_id,
+                    expected_generation_id=canonical.generation_path.name,
+                    expected_manifest_sha256=canonical.manifest_sha256,
+                    schema_root=request.schema_root,
+                    pointer_path=browser_session_pointer_path(request.browser_root / display_id, code),
+                )
+            except Exception as error:
+                results.append(BatchRaceResult(display_id, _record_round_number(record), "invalid", detail=_error_detail(error), session_code=code if isinstance(code, str) else None, session_name=session.get("session_name") if isinstance(session, dict) else None))
+            else:
+                results.append(BatchRaceResult(display_id, _record_round_number(record), "valid", canonical.generation_path.name, session.get("delivery_version") if isinstance(session, dict) else None, session_code=code, session_name=session.get("session_name") if isinstance(session, dict) else None))
     return tuple(results)
 
 
@@ -783,13 +898,13 @@ def _retained_catalog_records(root: Path, request: BatchRequest) -> dict[str, di
         _require_no_follow_directory(root, "season catalog root")
         catalog_file = read_regular_file_no_follow(path, "season catalog")
         catalog = json.loads(catalog_file.data)
-        if catalog.get("year") != request.year or not isinstance(catalog.get("races"), list):
+        if catalog.get("schemaVersion") != CATALOG_SCHEMA_VERSION or catalog.get("year") != request.year or not isinstance(catalog.get("races"), list):
             return {}
-        records = {
-            record["race_id"]: record
-            for record in catalog["races"]
-            if _retained_record_valid(record, request)
-        }
+        records = {}
+        for record in catalog["races"]:
+            retained = _retained_record_with_valid_sessions(record, request)
+            if retained is not None:
+                records[retained["race_id"]] = retained
         verify_regular_file_identity(path, catalog_file, "season catalog")
         return records
     except Exception:
@@ -797,20 +912,78 @@ def _retained_catalog_records(root: Path, request: BatchRequest) -> dict[str, di
 
 
 def _retained_record_valid(record: object, request: BatchRequest) -> bool:
-    if not isinstance(record, dict) or record.get("validated") is not True:
-        return False
+    return _retained_record_with_valid_sessions(record, request) is not None
+
+
+def _retained_record_with_valid_sessions(record: object, request: BatchRequest) -> dict[str, object] | None:
+    if not isinstance(record, dict) or not isinstance(record.get("sessions"), list):
+        return None
     race_id = record.get("race_id")
-    if not isinstance(race_id, str):
-        return False
+    if (
+        not isinstance(race_id, str)
+        or type(record.get("round_number")) is not int
+        or cast(int, record.get("round_number")) < 1
+        or not isinstance(record.get("event_name"), str)
+    ):
+        return None
     try:
         _safe_component(race_id, "catalog race_id")
     except ValueError:
+        return None
+    sessions = [session for session in record["sessions"] if _retained_session_valid(record, session, request)]
+    if not sessions:
+        return None
+    retained = {key: value for key, value in record.items() if key not in {"sessions"}}
+    retained["sessions"] = sorted(sessions, key=lambda value: value["session_code"])
+    return retained
+
+
+def _retained_session_valid(record: object, session: object, request: BatchRequest) -> bool:
+    if not isinstance(record, dict) or not isinstance(session, dict) or session.get("validated") is not True:
         return False
-    return (
-        record.get("canonical") == f"canonical/{race_id}/current.json"
-        and record.get("browser") == f"browser/{race_id}/browser-current.json"
-        and (canonical := _shallow_canonical_state(request.canonical_root / race_id)) is not None
-        and _shallow_browser_output_valid(canonical, request.browser_root / race_id)
+    race_id = record.get("race_id")
+    code = session.get("session_code")
+    generation_id = session.get("generation_id")
+    if (
+        not isinstance(race_id, str) or not isinstance(code, str)
+        or not isinstance(generation_id, str)
+        or not isinstance(session.get("session_name"), str)
+        or not isinstance(session.get("outcome"), str)
+    ):
+        return False
+    expected_canonical = f"canonical/{race_id}/sessions/{code}/current.json"
+    expected_browser = f"browser/{race_id}/sessions/{code}/browser-current.json"
+    if session.get("canonical_pointer") != expected_canonical or session.get("browser_pointer") != expected_browser:
+        return False
+    try:
+        if session_code_from_generation_id(generation_id, race_id) != code:
+            return False
+        canonical = read_session_canonical_pointer(request.canonical_root / race_id, code)
+        if canonical.generation_path.name != generation_id:
+            return False
+        browser_pointer = read_session_browser_pointer(request.browser_root / race_id, code)
+        if session.get("delivery_version") != browser_pointer.delivery_version:
+            return False
+        return _shallow_browser_output_valid(
+            canonical, request.browser_root / race_id,
+            pointer_path=browser_session_pointer_path(request.browser_root / race_id, code),
+        )
+    except Exception:
+        return False
+
+
+def _race_model(record: dict[str, object]) -> CatalogV2RaceRecord:
+    raw_sessions = record.get("sessions", ())
+    sessions = tuple(
+        CatalogV2SessionRecord(**session)
+        for session in raw_sessions
+        if isinstance(session, dict)
+    ) if isinstance(raw_sessions, list) else ()
+    return CatalogV2RaceRecord(
+        cast(str, record["race_id"]), cast(int, record["round_number"]),
+        cast(str, record["event_name"]), sessions,
+        cast(str | None, record.get("country")), cast(str | None, record.get("location")),
+        cast(str | None, record.get("event_date")),
     )
 
 
