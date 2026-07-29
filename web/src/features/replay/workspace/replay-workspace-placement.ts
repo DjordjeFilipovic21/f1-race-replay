@@ -16,6 +16,10 @@ export interface MasonryPreview extends MasonryPlacementItem {
   readonly index: number
 }
 
+export interface ResolvedMasonryPlacement extends MasonryPlacementItem {
+  readonly rowStart: number
+}
+
 export interface PanelVerticalGeometry {
   readonly top: number
   readonly bottom: number
@@ -111,18 +115,35 @@ export function previewMasonryRow(items: readonly MasonryPlacementItem[], previe
   const withoutPreview = items.filter((item) => item.id !== preview.id)
   const index = Math.min(Math.max(preview.index, 0), withoutPreview.length)
   const prospective = [...withoutPreview.slice(0, index), preview, ...withoutPreview.slice(index)]
-  const occupied: boolean[][] = []
-  let previewRow = 1
+  return resolveMasonryLayout(prospective, columnCount).find(({ id }) => id === preview.id)?.rowStart ?? 1
+}
 
-  prospective.forEach((item) => {
+/** Produces a deterministic visual fingerprint matching dense CSS grid placement. */
+export function resolveMasonryLayout(items: readonly MasonryPlacementItem[], columnCount: number): readonly ResolvedMasonryPlacement[] {
+  const occupied: boolean[][] = []
+  return items.map((item) => {
     const span: 1 | 2 = item.columns === 2 && columnCount > 1 ? 2 : 1
     const columnStart = clampColumnStart(item.columnStart, columnCount, span)
     const rowSpan = Number.isInteger(item.rowSpan) && item.rowSpan > 0 ? item.rowSpan : 1
-    const row = firstAvailableRow(occupied, columnStart, span, rowSpan)
-    occupy(occupied, row, columnStart, span, rowSpan)
-    if (item.id === preview.id) previewRow = row
+    const rowStart = firstAvailableRow(occupied, columnStart, span, rowSpan)
+    occupy(occupied, rowStart, columnStart, span, rowSpan)
+    return { id: item.id, columnStart, columns: span, rowSpan, rowStart }
   })
-  return previewRow
+}
+
+export function isSameMasonryLayout(left: readonly ResolvedMasonryPlacement[], right: readonly ResolvedMasonryPlacement[]): boolean {
+  if (left.length !== right.length) return false
+  const leftIds = new Set(left.map(({ id }) => id))
+  const rightById = new Map(right.map((item) => [item.id, item]))
+  if (leftIds.size !== left.length || rightById.size !== right.length) return false
+  return left.every((item) => {
+    const candidate = rightById.get(item.id)
+    return candidate !== undefined
+      && item.columnStart === candidate.columnStart
+      && item.columns === candidate.columns
+      && item.rowStart === candidate.rowStart
+      && item.rowSpan === candidate.rowSpan
+  })
 }
 
 function firstAvailableRow(occupied: readonly boolean[][], columnStart: number, columns: 1 | 2, rowSpan: number): number {

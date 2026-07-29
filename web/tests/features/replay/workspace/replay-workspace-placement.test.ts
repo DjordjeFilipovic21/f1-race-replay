@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { canonicalDesktopColumnStart, clampColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, previewMasonryRow, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount } from '../../../../src/features/replay/workspace/replay-workspace-placement'
+import { canonicalDesktopColumnStart, clampColumnStart, columnStartFromDropCenter, columnStartWithHysteresis, isSameMasonryLayout, previewMasonryRow, resolveMasonryLayout, resolveVerticalInsertionIndex, responsiveColumnStart, workspaceColumnCount } from '../../../../src/features/replay/workspace/replay-workspace-placement'
 import { commitReplayPanelDrag, createDefaultReplayPanelLayout, isDefaultReplayPanelLayout } from '../../../../src/features/replay/workspace/replay-panel-layout'
 
 test('maps a dropped shape center to its legal desktop column', () => {
@@ -69,6 +69,36 @@ test('packs a preview into empty lanes and below occupied Track map or Leaderboa
   ]
   expect(previewMasonryRow(occupied, { id: 'driver', index: 1, columnStart: 2, columns: 1, rowSpan: 2 }, 4)).toBe(6)
   expect(previewMasonryRow(occupied, { id: 'driver', index: 2, columnStart: 4, columns: 1, rowSpan: 2 }, 4)).toBe(5)
+})
+
+test('compares visual masonry fingerprints independently of canonical item order', () => {
+  const defaultItems = [
+    { id: 'left', columnStart: 1, columns: 1 as const, rowSpan: 4 },
+    { id: 'right', columnStart: 4, columns: 1 as const, rowSpan: 3 },
+  ]
+  const visuallyEquivalent = [...defaultItems].reverse()
+  const visuallySwapped = [
+    { ...defaultItems[0], columnStart: 4 },
+    { ...defaultItems[1], columnStart: 1 },
+  ]
+
+  const defaultFingerprint = resolveMasonryLayout(defaultItems, 4)
+  expect(isSameMasonryLayout(defaultFingerprint, resolveMasonryLayout(visuallyEquivalent, 4))).toBe(true)
+  expect(isSameMasonryLayout(defaultFingerprint, resolveMasonryLayout(visuallySwapped, 4))).toBe(false)
+})
+
+test('rejects ambiguous masonry fingerprints with duplicate panel IDs', () => {
+  const unique = resolveMasonryLayout([
+    { id: 'left', columnStart: 1, columns: 1, rowSpan: 2 },
+    { id: 'right', columnStart: 2, columns: 1, rowSpan: 2 },
+  ], 4)
+  const duplicate = resolveMasonryLayout([
+    { id: 'left', columnStart: 1, columns: 1, rowSpan: 2 },
+    { id: 'left', columnStart: 2, columns: 1, rowSpan: 2 },
+  ], 4)
+
+  expect(isSameMasonryLayout(unique, duplicate)).toBe(false)
+  expect(isSameMasonryLayout(duplicate, duplicate)).toBe(false)
 })
 
 test('clamps a two-column preview to the final legal desktop lane', () => {

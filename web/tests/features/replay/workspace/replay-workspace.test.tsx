@@ -189,7 +189,7 @@ test('cancels prior FLIP animations before replacing them on a rapid unpin', () 
   }
 })
 
-test('renders prospective cross-column order, restores invalid previews, and commits the exact displayed destination', () => {
+test('renders prospective cross-column order and normalizes a visually equivalent commit to default', () => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     bottom: 200, height: 100, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
   })
@@ -221,8 +221,9 @@ test('renders prospective cross-column order, restores invalid previews, and com
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.cssText).toContain('height: 160px')
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
-   expect(workspacePanelLabels()).toEqual(['Track map', 'Telemetry', 'Player', 'Leaderboard', 'Driver'])
+   expect(workspacePanelLabels()).toEqual(['Track map', 'Player', 'Leaderboard', 'Driver', 'Telemetry'])
    expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+  expect(screen.getByText('Default')).toBeTruthy()
 })
 
 test('shows a static panel snapshot and blurs the source while dragging', () => {
