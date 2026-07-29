@@ -154,7 +154,6 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
   const panelManagerToggleRef = useRef<HTMLButtonElement | null>(null)
   const panelManagerCloseRef = useRef<HTMLButtonElement | null>(null)
   const dragMoveRef = useRef<DragMoveState | null>(null)
-  const dragOriginRectRef = useRef<ReplayPanelRect | null>(null)
   const dropPreviewRef = useRef<ReplayDropPreview | null>(null)
   const panelElementsRef = useRef(new Map<ReplayPanelId, HTMLElement>())
   const exitSnapshotSequenceRef = useRef(0)
@@ -445,10 +444,7 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') return
           dragMoveRef.current = null
           updateDropPreview(null)
-          const id = panelIdFromSortableId(event.operation.source?.id)
-          const sourceElement = id === null ? undefined : panelElementsRef.current.get(id)
-          dragOriginRectRef.current = sourceElement === undefined ? null : readReplayPanelRect(sourceElement)
-          setActivePanelId(id)
+          setActivePanelId(panelIdFromSortableId(event.operation.source?.id))
         }}
         onDragMove={(event) => {
           if (workspaceMode === 'locked') {
@@ -478,16 +474,14 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
           if (workspaceMode === 'locked') {
             setActivePanelId(null)
             dragMoveRef.current = null
-            dragOriginRectRef.current = null
             updateDropPreview(null)
             return
           }
           setActivePanelId(null)
+          const hadDragMove = dragMoveRef.current !== null
           dragMoveRef.current = null
-          const dragOriginRect = dragOriginRectRef.current
-          dragOriginRectRef.current = null
           const source = event.operation.source
-          if (event.canceled || !isSortable(source)) {
+          if (event.canceled || !isSortable(source) || !hadDragMove) {
             updateDropPreview(null)
             return
           }
@@ -497,21 +491,20 @@ export function ReplayWorkspace({ panels, storage }: ReplayWorkspaceProps) {
             return
           }
           const center = event.operation.shape?.current.center
-          if (center !== undefined && dragOriginRect !== null && isPointInsideReplayPanelRect(center.x, center.y, dragOriginRect)) {
-            updateDropPreview(null)
-            return
-          }
           const destination = dropPreviewRef.current?.id === id
             ? dropPreviewRef.current
             : center === undefined
             ? null
             : createDropPreview({ id, index: source.index, centerX: center.x, centerY: center.y }, columnCount)
           updateDropPreview(null)
-          setLayout((current) => commitReplayPanelDrag(current, {
-            id,
-            index: destination?.index ?? source.index,
-            desktopColumnStart: destination?.desktopColumnStart ?? null,
-          }))
+          setLayout((current) => {
+            const next = commitReplayPanelDrag(current, {
+              id,
+              index: destination?.index ?? source.index,
+              desktopColumnStart: destination?.desktopColumnStart ?? null,
+            })
+            return isSameReplayPanelLayout(current, next) ? current : next
+          })
         }}
       >
         <div ref={workspaceRef} className={`replay-workspace replay-workspace--${workspaceMode}`} data-workspace-mode={workspaceMode} style={workspaceStyle}>
@@ -591,10 +584,6 @@ function readReplayPanelRect(element: HTMLElement): ReplayPanelRect {
 
 function isSameReplayPanelRect(left: ReplayPanelRect, right: ReplayPanelRect): boolean {
   return left.left === right.left && left.top === right.top && left.width === right.width && left.height === right.height
-}
-
-function isPointInsideReplayPanelRect(x: number, y: number, rect: ReplayPanelRect): boolean {
-  return Number.isFinite(x) && Number.isFinite(y) && x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height
 }
 
 function EmptyReplayWorkspace({ onOpenPanelManager }: { readonly onOpenPanelManager: () => void }) {

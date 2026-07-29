@@ -46,6 +46,7 @@ vi.mock('@dnd-kit/react', () => ({
     <button type="button" onClick={() => onDragMove?.(trackLaneDragEvent)}>Preview Track lane</button>
     <button type="button" onClick={() => onDragMove?.({ ...dragEvent, operation: { ...dragEvent.operation, source: null } })}>Invalidate preview</button>
     <button type="button" onClick={() => { onDragEnd?.(dragEvent); mockDragSource = null }}>Commit drop</button>
+    <button type="button" onClick={() => { onDragEnd?.({ ...dragEvent, canceled: true }); mockDragSource = null }}>Cancel drag</button>
   </div>,
   DragOverlay: ({ children }: { readonly children: ReactNode | ((source: { readonly id: string; readonly index: number }) => ReactNode) }) => <>{typeof children === 'function' && mockDragSource !== null ? children(mockDragSource) : typeof children === 'function' ? null : children}</>,
 }))
@@ -242,10 +243,7 @@ test('shows a static panel snapshot and blurs the source while dragging', () => 
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
 })
 
-test('keeps the default layout when a panel is released inside its original slot', () => {
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-    bottom: 400, height: 400, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
-  })
+test('keeps the default layout when a panel is released without a drag move', () => {
   render(<ReplayWorkspace panels={panels} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
@@ -253,6 +251,45 @@ test('keeps the default layout when a panel is released inside its original slot
 
   expect(screen.getByText('Default')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
+})
+
+test('keeps the default layout when a drag is canceled', () => {
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel drag' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
+})
+
+test('commits a valid preview even when its center overlaps the source slot geometry', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 400, height: 400, left: 0, right: 400, toJSON: () => ({}), top: 0, width: 400, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Custom')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+})
+
+test('keeps the default layout when zero-sized geometry cannot resolve a destination', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    bottom: 0, height: 0, left: 0, right: 0, toJSON: () => ({}), top: 0, width: 0, x: 0, y: 0,
+  })
+  render(<ReplayWorkspace panels={panels} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start drag' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+
+  expect(screen.getByText('Default')).toBeTruthy()
+  expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
 })
 
 test('unpins a panel immediately and restores it from Panel Manager', () => {
@@ -391,6 +428,9 @@ test('passes lock state to every sortable panel and clears active drag state wit
   expect(document.querySelector('.replay-panel-drag-snapshot')).toBeNull()
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
+  expect(screen.getByText('Default')).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Unlock workspace' }))
   expectLatestSortableDisabled(false)
