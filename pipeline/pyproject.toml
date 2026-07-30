@@ -9,6 +9,7 @@ description = "Canonical Formula 1 replay data pipeline foundation"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "boto3>=1.35,<2",
     "fastf1>=3.8,<3.9",
     "jsonschema>=4.23,<5",
     "jsonschema-rs>=0.48,<0.49",
