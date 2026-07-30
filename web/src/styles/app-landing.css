@@ -125,7 +125,7 @@
   font-family: var(--font-display);
   font-size: clamp(1.6rem, 3vw, 2.5rem);
   letter-spacing: -0.025em;
-  margin: 0.55rem 0 0;
+  margin: 0;
   text-transform: uppercase;
 }
 

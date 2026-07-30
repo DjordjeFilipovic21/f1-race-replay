@@ -3,7 +3,7 @@
 .live-track-map__status { align-items: center; background: #1a2025; border: 1px solid var(--border); color: var(--text-muted); display: inline-flex; font-family: var(--font-display); font-size: .65rem; font-weight: 800; left: .5rem; letter-spacing: .07em; margin: 0; min-height: 1.75rem; padding: .3rem .5rem; pointer-events: none; position: absolute; text-transform: uppercase; top: .5rem; width: fit-content; z-index: 1; }
 .live-track-map__status--yellow { background: rgb(240 188 83 / 14%); border-color: rgb(240 188 83 / 55%); color: #f0bc53; }
 .live-track-map__status--red { background: rgb(255 49 56 / 15%); border-color: rgb(255 49 56 / 60%); color: #ff8589; }
-.live-track-map__svg { background: radial-gradient(circle at 50% 45%, #1b2329, #101417 72%); border: 1px solid var(--border); box-shadow: inset 0 0 2rem rgb(0 0 0 / 24%); display: block; height: auto; min-height: 16rem; width: 100%; }
+.live-track-map__svg { background: radial-gradient(ellipse at 50% 44%, rgb(27 35 41 / 48%), rgb(27 35 41 / 0%) 68%); border: 1px solid var(--border); box-shadow: inset 0 0 1.25rem rgb(0 0 0 / 12%); display: block; height: auto; min-height: 16rem; width: 100%; }
 .live-track-map__boundary { fill: none; stroke: var(--border); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .live-track-map__boundary--yellow { stroke: #f0bc53; }
 .live-track-map__boundary--red { stroke: #ff3138; }

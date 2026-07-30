@@ -1,0 +1,56 @@
+::view-transition-old(root),
+::view-transition-new(root) {
+  mix-blend-mode: normal;
+}
+
+:root[data-page-transition-direction='forward']::view-transition-old(root) {
+  animation: page-forward-out 180ms ease-in both;
+}
+
+:root[data-page-transition-direction='forward']::view-transition-new(root) {
+  animation: page-forward-in 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+:root[data-page-transition-direction='backward']::view-transition-old(root) {
+  animation: page-backward-out 180ms ease-in both;
+}
+
+:root[data-page-transition-direction='backward']::view-transition-new(root) {
+  animation: page-backward-in 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes page-forward-out {
+  to { opacity: 0; transform: translateX(-.75rem); }
+}
+
+@keyframes page-forward-in {
+  from { opacity: 0; transform: translateX(.75rem); }
+}
+
+@keyframes page-backward-out {
+  to { opacity: 0; transform: translateX(.75rem); }
+}
+
+@keyframes page-backward-in {
+  from { opacity: 0; transform: translateX(-.75rem); }
+}
+
+@keyframes page-fallback-in {
+  from { opacity: 0; transform: translateY(.4rem); }
+}
+
+@supports not (view-transition-name: root) {
+  @media (prefers-reduced-motion: no-preference) {
+    .page-transition-surface {
+      animation: page-fallback-in 220ms cubic-bezier(.22, 1, .36, 1) both;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  .page-transition-surface {
+    animation: none !important;
+  }
+}

@@ -87,6 +87,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  Reflect.deleteProperty(document, 'startViewTransition')
+  delete document.documentElement.dataset.pageTransitionDirection
   window.history.replaceState(null, '', '/')
 })
 
@@ -113,6 +115,39 @@ test('keeps landing selection local until Open Workspace writes the complete URL
     source: expect.anything(),
     pointerPath: 'sessions/r/browser-current.json',
   })
+})
+
+test('uses directional transitions between the library, race details, and workspace', async () => {
+  const directions: string[] = []
+  Object.defineProperty(document, 'startViewTransition', {
+    configurable: true,
+    value: (update: () => void) => {
+      directions.push(document.documentElement.dataset.pageTransitionDirection ?? '')
+      update()
+      return {
+        finished: Promise.resolve(),
+        ready: Promise.resolve(),
+        skipTransition: vi.fn(),
+        types: new Set<string>(),
+        updateCallbackDone: Promise.resolve(),
+      } as unknown as ViewTransition
+    },
+  })
+  render(<App />)
+  await screen.findByRole('button', { name: /Bahrain Grand Prix/ })
+
+  fireEvent.click(screen.getByRole('button', { name: /Bahrain Grand Prix/ }))
+  expect(screen.getByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'All races' }))
+  expect(screen.getByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: /Bahrain Grand Prix/ }))
+  fireEvent.click(screen.getByRole('radio', { name: /Race/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open replay workspace' }))
+  expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Change session' }))
+
+  expect(directions).toEqual(['forward', 'backward', 'forward', 'forward', 'backward'])
 })
 
 test('shows an actionable message for an invalid URL and never loads its pointer', async () => {
@@ -158,14 +193,14 @@ test('loads a valid year-only URL without showing a selection error', async () =
   expect(window.location.search).toBe('?trajectory=linear&year=2024')
 })
 
-test('change race returns to the library, preserves unrelated query values, and disposes replay', async () => {
+test('change session returns to the selected race, preserves unrelated query values, and disposes replay', async () => {
   window.history.replaceState(null, '', '/?trajectory=linear&year=2024&race=race-1&session=r')
   const controller = createController()
   vi.mocked(createReplayController).mockReturnValue(controller)
   render(<App />)
 
   await screen.findByRole('group', { name: 'Race status timeline' })
-  fireEvent.click(screen.getByRole('button', { name: 'Change race' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Change session' }))
 
   expect(await screen.findByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
   expect(window.location.search).toBe('?trajectory=linear')

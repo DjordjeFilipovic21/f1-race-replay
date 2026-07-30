@@ -17,7 +17,7 @@ afterEach(() => {
 const entryProps = {
   browserBaseUrl: '/replay-data/browser/example/',
   browserPointerPath: 'sessions/race/browser-current.json',
-  onChangeRace: vi.fn(),
+  onChangeSession: vi.fn(),
 }
 
 test('owns the loading state and change-race action', () => {
@@ -27,8 +27,9 @@ test('owns the loading state and change-race action', () => {
   render(<ReplayEntry {...entryProps} />)
 
   expect(screen.getByRole('status', { name: 'Replay loading' })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Change race' }))
-  expect(entryProps.onChangeRace).toHaveBeenCalledOnce()
+  expect(document.querySelector('.app-shell__grid')?.getAttribute('aria-hidden')).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'Change session' }))
+  expect(entryProps.onChangeSession).toHaveBeenCalledOnce()
   expect(screen.queryByRole('button', { name: 'Retry loading' })).toBeNull()
 })
 
@@ -50,5 +51,5 @@ test('composes ready replay controls inside the replay error boundary', () => {
   render(<ReplayEntry {...entryProps} />)
 
   expect(screen.getByText('Replay controls')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Change race' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Change session' })).toBeTruthy()
 })

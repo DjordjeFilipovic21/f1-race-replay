@@ -71,7 +71,7 @@ export function RaceLibraryPage({
   const activeYear = selectedYear ?? catalog?.year ?? years[0]
 
   return (
-    <main className="landing-shell">
+    <main className="landing-shell page-transition-surface">
       <div className="landing-shell__grid" aria-hidden="true" />
       <header className="landing-header">
         <span className="landing-header__eyebrow">Formula One archive experience</span>
@@ -86,8 +86,7 @@ export function RaceLibraryPage({
       <section className="library-container" aria-label="Race library">
         <header className="library-container__header">
           <div>
-            <span className="library-container__step">01 / Select a season</span>
-            <h2 className="library-container__title">Choose your race</h2>
+            <h2 className="library-container__title">Choose your race weekend</h2>
           </div>
           <label className="library-year-selector">
             <span>Season</span>

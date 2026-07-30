@@ -31,7 +31,7 @@ export function RacePresentation({
   const nextRace = raceIndex >= 0 && raceIndex < races.length - 1 ? races[raceIndex + 1] : null
 
   return (
-    <main className="race-presentation">
+    <main className="race-presentation page-transition-surface">
       <nav className="race-presentation__nav" aria-label="Race library navigation">
         <button type="button" className="race-presentation__back" onClick={onShowAllRaces}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">

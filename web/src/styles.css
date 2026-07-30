@@ -2,6 +2,7 @@
 @import './styles/base.css';
 @import './styles/app-workspace.css';
 @import './styles/app-landing.css';
+@import './styles/page-transitions.css';
 @import './styles/playback.css';
 @import './styles/leaderboard.css';
 @import './styles/track-map.css';

@@ -1,6 +1,6 @@
-.replay-panel__eyebrow { color: var(--accent); font-family: var(--font-display); font-size: .68rem; font-weight: 700; letter-spacing: .14em; margin: 0 0 .2rem; text-transform: uppercase; }
-.replay-panel__header h1 { font-family: var(--font-display); font-size: clamp(1.5rem, 4vw, 2.15rem); font-weight: 700; letter-spacing: .025em; line-height: 1; text-transform: uppercase; }
-.replay-panel__status { align-items: center; background: rgb(240 188 83 / 10%); border: 1px solid rgb(240 188 83 / 35%); color: var(--focus); display: inline-flex; font-family: var(--font-display); font-size: .6rem; font-weight: 700; letter-spacing: .1em; margin: 0; min-height: 2rem; padding: .35rem .5rem; text-align: center; text-transform: uppercase; }
+.replay-panel__eyebrow { color: var(--accent); font-family: var(--font-display); font-size: .65rem; font-weight: 700; letter-spacing: .18em; margin: 0 0 .35rem; text-transform: uppercase; }
+.replay-panel__header h1 { font-family: var(--font-display); font-size: clamp(1.75rem, 3vw, 2.75rem); font-weight: 700; letter-spacing: -.045em; line-height: .88; text-transform: uppercase; }
+.replay-panel__header h1 span { color: transparent; -webkit-text-stroke: 1px rgb(244 241 234 / 55%); }
 .eyebrow { color: var(--accent); font-size: .78rem; font-weight: 700; letter-spacing: .08em; margin: 0 0 .25rem; text-transform: uppercase; }
 h1, h2, p { margin: 0; }
 h1 { font-size: 1.35rem; }

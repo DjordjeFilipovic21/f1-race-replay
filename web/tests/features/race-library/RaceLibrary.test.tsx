@@ -130,7 +130,7 @@ describe('RaceLibraryPage', () => {
       />
     )
 
-    expect(screen.getByRole('heading', { name: 'Choose your race' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Choose your race weekend' })).toBeTruthy()
     expect((screen.getByRole('combobox', { name: 'Season year' }) as HTMLSelectElement).value).toBe('2024')
     expect(screen.getByText('1 event')).toBeTruthy()
   })

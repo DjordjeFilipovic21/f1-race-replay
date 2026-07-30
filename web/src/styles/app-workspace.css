@@ -1,10 +1,18 @@
-.app-shell { align-items: start; display: grid; justify-items: center; min-height: 100vh; padding: 1rem; }
-.replay-panel, .app-diagnostic { background: linear-gradient(145deg, rgb(31 38 45 / 92%), var(--surface)); border: 1px solid var(--border); box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 24%); padding: 1rem; }
-.replay-panel { display: grid; gap: 1rem; position: relative; width: min(100%, 96rem); }
-.replay-panel::before { background: linear-gradient(90deg, var(--accent), var(--focus), transparent); content: ''; height: 2px; left: 1rem; position: absolute; right: 1rem; top: -1px; }
+.app-shell { align-items: start; background: #07090c; display: grid; justify-items: center; min-height: 100vh; padding: 1rem; position: relative; }
+.app-shell::before, .app-shell::after { border: 1px solid rgb(214 255 0 / 20%); content: ''; height: 5rem; pointer-events: none; position: absolute; width: 5rem; z-index: 1; }
+.app-shell::before { border-bottom: 0; border-right: 0; left: 1.25rem; top: 1.25rem; }
+.app-shell::after { border-left: 0; border-top: 0; bottom: 1.25rem; right: 1.25rem; }
+.app-shell__grid { background-image: linear-gradient(rgb(255 255 255 / 2%) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 2%) 1px, transparent 1px); background-size: 4rem 4rem; inset: 0; mask-image: linear-gradient(to bottom, black, transparent 82%); pointer-events: none; position: absolute; }
+.replay-shell__nav, .replay-panel, .app-diagnostic { position: relative; width: min(100%, 96rem); }
+.replay-shell__nav { align-items: center; display: flex; justify-content: space-between; margin-bottom: .75rem; min-height: 2.75rem; z-index: 2; }
+.replay-shell__back { position: relative; z-index: 2; }
+.replay-shell__context { color: var(--text-muted); font-family: var(--font-display); font-size: .62rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.replay-panel, .app-diagnostic { background: rgb(13 17 21 / 96%); border: 1px solid var(--border); box-shadow: 0 2rem 6rem rgb(0 0 0 / 34%); padding: 1rem; z-index: 1; }
+.replay-panel { display: grid; gap: 1rem; }
+.replay-panel::before { background: var(--accent); content: ''; height: 3px; left: -1px; position: absolute; top: -1px; width: clamp(5rem, 18vw, 14rem); }
 .app-diagnostic { width: min(100%, 72rem); }
 .replay-panel__header, .replay-controls, .replay-workspace, .replay-control-area, .replay-navigation { display: grid; gap: .75rem; }
-.replay-workspace__manager { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; position: relative; }
+.replay-workspace__manager { align-items: center; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; padding: .25rem 0 1rem; position: relative; }
 .replay-workspace__layout-summary { align-items: center; display: flex; flex: 1 1 24rem; gap: .75rem; min-height: 44px; min-width: 0; }
 .replay-workspace__layout-details { align-items: baseline; display: flex; gap: .45rem; min-width: 0; }
 .replay-workspace__layout-label { color: var(--text-muted); font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -19,7 +27,7 @@
 .replay-panel-manager-toggle { font-size: .68rem; font-weight: 800; letter-spacing: .06em; min-height: 44px; padding: .45rem .7rem; text-transform: uppercase; }
 .replay-panel-manager-toggle:hover, .replay-panel-manager-action:hover, .replay-panel-manager__item:hover, .replay-panel-manager__close:hover { background: var(--interactive-hover); border-color: var(--border-strong); color: #f4f5f6; }
 .replay-panel-manager-toggle[aria-expanded='true'] { background: var(--accent); border-color: var(--accent); color: #17110e; }
-.replay-workspace-mode-toggle { align-items: center; background: var(--interactive); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; display: inline-flex; font-size: .68rem; font-weight: 800; gap: .35rem; letter-spacing: .06em; min-height: 44px; padding: .45rem .7rem; text-transform: uppercase; }
+.replay-workspace-mode-toggle { align-items: center; background: var(--interactive); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; display: inline-flex; font-size: .68rem; font-weight: 800; gap: .35rem; inline-size: 7.65rem; justify-content: flex-start; letter-spacing: .06em; min-height: 44px; padding: .45rem .7rem; text-transform: uppercase; }
 .replay-workspace-mode-toggle:hover { background: var(--interactive-hover); border-color: var(--border-strong); color: #f4f5f6; }
 .replay-workspace-mode-toggle[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #17110e; }
 .replay-workspace-mode-toggle svg { display: block; flex: 0 0 1rem; height: 1rem; width: 1rem; }
@@ -66,7 +74,7 @@
 .replay-workspace--locked .replay-panel-frame__body { background-color: #101316; background-image: linear-gradient(180deg, rgb(255 255 255 / 0%), rgb(255 255 255 / 0%) 5rem); }
 .replay-workspace--locked .replay-panel-frame:not([data-panel-id='player']) .replay-panel-frame__body { background-color: #101316; padding: .5rem; }
 .replay-workspace--locked .replay-panel-frame:not([data-panel-id='player']) .replay-panel-frame__body > :not(.replay-error-boundary) { background: transparent !important; border: 0 !important; box-shadow: none !important; }
-.replay-workspace--locked .replay-panel-frame[data-panel-id='track-map'] .live-track-map__svg { border: 0; }
+.replay-workspace--locked .replay-panel-frame[data-panel-id='track-map'] .live-track-map__svg { border: 0; box-shadow: none; }
 .replay-panel-drag-handle svg, .replay-panel-unpin svg { display: block; flex: 0 0 1rem; height: 1rem; width: 1rem; }
 .replay-panel-drag-handle svg path, .replay-panel-unpin svg path:first-child, .replay-panel-manager__item svg path:first-child { fill: currentColor; }
 @media (pointer: coarse) {
@@ -89,8 +97,9 @@
 .replay-panel-drag-snapshot > .replay-panel-frame { background: var(--surface); height: 100%; width: 100%; }
 .replay-panel-exit-snapshot { animation: replay-panel-frame-exit 120ms ease-in forwards; pointer-events: none; position: absolute; transform-origin: center top; z-index: 4; }
 .replay-panel-exit-snapshot > .replay-panel-frame { background: var(--surface); height: 100%; width: 100%; }
-.replay-panel__header { align-items: end; border-bottom: 1px solid var(--border); display: flex; gap: 1rem; justify-content: space-between; padding: .25rem 0 1rem; }
+.replay-panel__header { align-items: end; block-size: 5.5rem; border-bottom: 1px solid var(--border); contain: layout paint; display: flex; gap: 2rem; justify-content: space-between; overflow: hidden; padding: .45rem .25rem .65rem; }
 .replay-panel__title-block { min-width: 0; }
+.replay-panel__index { color: var(--text-muted); flex: 0 0 auto; font-family: var(--font-display); font-size: .62rem; font-weight: 700; letter-spacing: .14em; padding-bottom: .15rem; text-transform: uppercase; }
 
 @keyframes replay-panel-frame-enter {
   from { opacity: 0; transform: translateY(-6px) scale(.98); }
@@ -104,7 +113,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .replay-workspace, .replay-panel-frame, .replay-panel-frame__body, .replay-workspace__empty { transition: background-color 420ms ease, background-image 420ms ease, border-color 420ms ease, box-shadow 420ms ease; }
-  .replay-panel-frame__header, :is(.replay-workspace, .replay-panel-drag-snapshot) :is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header) { transition: max-height 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease, padding-block 420ms cubic-bezier(0.22, 1, 0.36, 1), transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .replay-panel-frame__header, :is(.replay-workspace, .replay-panel-drag-snapshot) :is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header) { transition: opacity 180ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1); }
 }
 
 .replay-workspace:fullscreen { background: #101316; height: 100vh; overflow: auto; padding: 1rem; scrollbar-color: #2a3036 #101316; width: 100vw; }

@@ -6,6 +6,7 @@ import { useSeasonCatalog } from '../features/race-library/useSeasonCatalog'
 import { ReplayEntry } from '../features/replay/entry/ReplayEntry'
 import { useUrlSelection } from '../url/useUrlSelection'
 import type { UrlSelection } from '../url/adapter'
+import { runPageTransition } from './page-transition'
 
 const DEFAULT_YEAR = 2024
 const DEFAULT_AVAILABLE_YEARS = [DEFAULT_YEAR] as const
@@ -41,7 +42,13 @@ export default function App() {
   }, [urlSelection])
 
   function handleSelectRace(raceId: string | null): void {
-    setLocalSelection((current) => ({ ...current, race: raceId, session: null }))
+    const updateSelection = () => setLocalSelection((current) => ({ ...current, race: raceId, session: null }))
+    const changesPage = (localSelection.race === null) !== (raceId === null)
+    if (!changesPage) {
+      updateSelection()
+      return
+    }
+    runPageTransition(raceId === null ? 'backward' : 'forward', updateSelection)
   }
 
   function handleSelectYear(year: number): void {
@@ -54,16 +61,20 @@ export default function App() {
 
   function handleOpenWorkspace(): void {
     if (localReplayTarget === null) return
-    setUrlSelection({
-      year: catalog?.year ?? localSelection.year,
-      race: localReplayTarget.selection.race.race_id,
-      session: localReplayTarget.selection.session.session_code,
+    runPageTransition('forward', () => {
+      setUrlSelection({
+        year: catalog?.year ?? localSelection.year,
+        race: localReplayTarget.selection.race.race_id,
+        session: localReplayTarget.selection.session.session_code,
+      })
     })
   }
 
-  function handleChangeRace(): void {
-    if (urlSelection !== null) setLocalSelection(toLocalSelection(urlSelection))
-    setUrlSelection(null)
+  function handleChangeSession(): void {
+    runPageTransition('backward', () => {
+      if (urlSelection !== null) setLocalSelection(toLocalSelection(urlSelection))
+      setUrlSelection(null)
+    })
   }
 
   if (urlReplayTarget !== null) {
@@ -71,7 +82,7 @@ export default function App() {
       <ReplayEntry
         browserBaseUrl={urlReplayTarget.browserBaseUrl}
         browserPointerPath={urlReplayTarget.browserPointerPath}
-        onChangeRace={handleChangeRace}
+        onChangeSession={handleChangeSession}
       />
     )
   }
