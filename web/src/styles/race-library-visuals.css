@@ -1,0 +1,292 @@
+/* Race Library Visuals — Globe & Circuit Preview
+   Scope: .library-details__visuals, .race-globe*, .circuit-preview*
+   Accent tints derive from var(--accent) via color-mix() — no hardcoded hues.
+   Globe rotation is JS-driven (requestAnimationFrame); this file styles only
+   the static presentation and the one-time circuit draw animation.
+*/
+
+/* ---------------------------------------------------------------------------
+ * Two-panel preview container (globe + circuit side-by-side at larger widths,
+ * stacked on small screens via responsive.css).
+ * --------------------------------------------------------------------------- */
+
+.library-details__visuals {
+  align-items: stretch;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+  padding: 1rem;
+  position: relative;
+  width: 100%;
+}
+
+.library-details__visuals::before {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--accent) 55%, transparent),
+    transparent 70%
+  );
+  content: '';
+  height: 1px;
+  inset: 0 0 auto 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* ---------------------------------------------------------------------------
+ * Race Globe
+ * Static presentation only. Rotation is driven by RaceGlobe.tsx via rAF;
+ * this CSS never rotates the globe.
+ * --------------------------------------------------------------------------- */
+
+.race-globe {
+  align-items: center;
+  aspect-ratio: 1 / 1;
+  background:
+    radial-gradient(
+      circle at 30% 30%,
+      color-mix(in oklch, var(--accent) 10%, var(--surface-raised)),
+      var(--surface) 75%
+    );
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--border));
+  border-radius: 50%;
+  display: grid;
+  justify-items: center;
+  justify-self: center;
+  max-width: 38rem;
+  overflow: hidden;
+  padding: 0.5rem;
+  position: relative;
+  width: 100%;
+}
+
+.race-globe__map,
+.race-globe__canvas {
+  block-size: 100%;
+  display: block;
+  grid-area: 1 / 1;
+  inline-size: 100%;
+  max-block-size: 100%;
+  max-inline-size: 100%;
+}
+
+.race-globe__map {
+  z-index: 1;
+}
+
+.race-globe__canvas {
+  z-index: 2;
+}
+
+.race-globe__sphere {
+  fill: none;
+  stroke: color-mix(in oklch, var(--accent) 28%, var(--border-strong));
+  stroke-width: 1;
+}
+
+.race-globe__graticule {
+  fill: none;
+  stroke: color-mix(in oklch, var(--accent) 14%, transparent);
+  stroke-width: 0.5;
+}
+
+.race-globe__country {
+  fill: #182027;
+  stroke: #44505a;
+  stroke-linejoin: round;
+  stroke-width: 0.75;
+}
+
+.race-globe__marker {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 7px rgb(214 255 0 / 85%));
+  opacity: 1;
+  stroke: #f4f1ea;
+  stroke-width: 1.5;
+  transform: scale(1);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 300ms ease-out,
+    transform 300ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.race-globe--animating .race-globe__marker {
+  opacity: 0;
+  transform: scale(0);
+  transition-timing-function: ease-in;
+}
+
+.race-globe__journey {
+  fill: none;
+  filter:
+    drop-shadow(0 0 3px rgb(214 255 0 / 80%))
+    drop-shadow(0 0 7px rgb(214 255 0 / 30%));
+  stroke: var(--accent);
+  stroke-dasharray: 1;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.race-globe--placeholder,
+.race-globe--error {
+  background: color-mix(in oklch, var(--accent) 5%, var(--surface));
+  border-color: color-mix(in oklch, var(--accent) 14%, var(--border));
+}
+
+.race-globe__placeholder-message,
+.race-globe__error-message {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  margin: 0;
+  max-inline-size: 16rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.race-globe__error-message {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------------------
+ * Circuit Preview
+ * --------------------------------------------------------------------------- */
+
+.circuit-preview {
+  align-items: center;
+  aspect-ratio: 16 / 10;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  justify-items: center;
+  max-width: 100%;
+  min-height: 12rem;
+  overflow: hidden;
+  padding: 1.25rem 1.5rem;
+  position: relative;
+  width: 100%;
+}
+
+.circuit-preview__canvas {
+  block-size: 100%;
+  display: block;
+  inline-size: 100%;
+  max-block-size: 100%;
+  max-inline-size: 100%;
+  overflow: hidden;
+  transform: perspective(35rem) rotateX(50deg) translateY(-6%) scale(0.88);
+  transform-origin: 50% 75%;
+}
+
+.circuit-preview__glow,
+.circuit-preview__path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.circuit-preview__glow {
+  animation:
+    race-library-circuit-draw 60s cubic-bezier(.16, .58, .2, 1) forwards,
+    race-library-circuit-glow 3.4s ease-in-out infinite;
+  filter: none;
+  opacity: 0.2;
+  stroke-width: 8;
+}
+
+.circuit-preview__path {
+  animation: race-library-circuit-draw 40s cubic-bezier(.16, .58, .2, 1) forwards;
+  filter: drop-shadow(0 0 3px rgb(214 255 0 / 55%));
+  stroke-width: 3;
+}
+
+.circuit-preview__message {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  margin: 0;
+  max-inline-size: 20rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.circuit-preview--temporary::after {
+  bottom: 0.5rem;
+  color: var(--text-muted);
+  content: 'Concept preview';
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  position: absolute;
+  right: 0.75rem;
+  text-transform: uppercase;
+}
+
+.circuit-preview--idle,
+.circuit-preview--error {
+  background: color-mix(in oklch, var(--accent) 4%, var(--surface));
+  border-style: dashed;
+}
+
+.circuit-preview--error .circuit-preview__message {
+  color: var(--danger);
+}
+
+.circuit-preview--loading .circuit-preview__message {
+  color: color-mix(in oklch, var(--accent) 65%, var(--text-muted));
+}
+
+/* ---------------------------------------------------------------------------
+ * Circuit draw keyframes — one-time, purposeful, stops on completion.
+ * --------------------------------------------------------------------------- */
+
+@keyframes race-library-circuit-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes race-library-circuit-glow {
+  0%,
+  100% {
+    opacity: 0.18;
+    stroke-width: 7;
+  }
+
+  50% {
+    opacity: 0.4;
+    stroke-width: 10;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion
+ * The globe has no CSS animation (rotation is JS-controlled and the component
+ * already snaps under reduced motion). We only need to neutralise the circuit
+ * draw and any future additive motion.
+ * --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .circuit-preview__glow,
+  .circuit-preview__path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .race-globe__marker {
+    transition: none;
+  }
+}

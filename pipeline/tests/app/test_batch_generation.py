@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,20 @@ from typing import cast
 
 import pytest
 
-from f1_replay_pipeline.app.batch_generation import BatchRequest, BatchResult, ScheduledRace, _browser_output_valid, _shallow_browser_output_valid, publish_catalog, run_batch, verify_catalog
+from f1_replay_pipeline.app.batch_generation import (
+    BatchRaceResult,
+    BatchRequest,
+    BatchResult,
+    ScheduledRace,
+    _atomic_write_json,
+    _browser_output_valid,
+    _retained_catalog_records,
+    _run_race,
+    _shallow_browser_output_valid,
+    publish_catalog,
+    run_batch,
+    verify_catalog,
+)
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryCleanupError,
     BrowserDeliveryCommittedError,
@@ -100,8 +114,12 @@ def test_fail_fast_and_continue_on_error_have_truthful_final_outcomes(tmp_path: 
 def test_resume_skips_only_validated_outputs_and_force_regenerates(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
     canonical = SimpleNamespace(generation_path=tmp_path / "generation", manifest_sha256="a" * 64)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._canonical_state", lambda *_paths: canonical)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._browser_output_valid", lambda *_paths: True)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: True)
+    monkeypatch.setattr(
+        "f1_replay_pipeline.app.batch_generation.read_session_browser_pointer",
+        lambda *_paths: SimpleNamespace(delivery_version="existing-delivery"),
+    )
     resumed = run_batch(_request(tmp_path, resume=True), schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),), pipeline_service=pipeline, browser_service=browser)
     forced = run_batch(_request(tmp_path, resume=True, force=True), schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),), pipeline_service=pipeline, browser_service=browser)
 
@@ -246,6 +264,70 @@ def test_generate_uses_season_output_defaults_and_formats_a_real_progress_bar(
     assert "canonical_generating" in captured.err
 
 
+def test_atomic_json_write_keeps_replacement_in_open_directory_during_directory_swap(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root = tmp_path / "catalog"
+    outside = tmp_path / "outside"
+    original_root = tmp_path / "catalog-original"
+    root.mkdir()
+    outside.mkdir()
+    destination = root / "catalog.json"
+    destination.write_text("old", encoding="utf-8")
+    outside_destination = outside / "catalog.json"
+    outside_destination.write_text("sentinel", encoding="utf-8")
+    real_replace = os.replace
+
+    def swap_before_replace(source, target, *, src_dir_fd=None, dst_dir_fd=None):
+        root.rename(original_root)
+        root.symlink_to(outside, target_is_directory=True)
+        return real_replace(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "replace", swap_before_replace)
+
+    _atomic_write_json(destination, {"safe": True})
+
+    assert json.loads((original_root / "catalog.json").read_text(encoding="utf-8")) == {"safe": True}
+    assert outside_destination.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_atomic_json_write_cleans_temporary_file_by_open_directory_after_swap(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root = tmp_path / "catalog"
+    outside = tmp_path / "outside"
+    original_root = tmp_path / "catalog-original"
+    root.mkdir()
+    outside.mkdir()
+    destination = root / "catalog.json"
+    destination.write_text("old", encoding="utf-8")
+
+    def fail_after_swap(_source, _target, *, src_dir_fd=None, dst_dir_fd=None):
+        root.rename(original_root)
+        root.symlink_to(outside, target_is_directory=True)
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(os, "replace", fail_after_swap)
+
+    with pytest.raises(OSError, match="simulated replacement failure"):
+        _atomic_write_json(destination, {"safe": True})
+
+    assert list(original_root.glob(".catalog-*.tmp")) == []
+    assert list(outside.glob(".catalog-*.tmp")) == []
+
+
+def test_atomic_json_write_rejects_symlinked_directory_without_touching_target(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "catalog"
+    root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        _atomic_write_json(root / "catalog.json", {"safe": True})
+
+    assert list(outside.iterdir()) == []
+
+
 def _valid_browser_artifacts(tmp_path: Path, *, source_generation_id: str = "generation", source_manifest_sha256: str = "a" * 64, reference_path: str = "track-assets.json") -> tuple[GenerationPublicationResult, Path]:
     browser = tmp_path / "browser"
     generation = browser / "generations" / "delivery"
@@ -347,8 +429,9 @@ def test_browser_resume_validation_requires_current_canonical_source_identity(tm
 def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
     canonical = SimpleNamespace(generation_path=tmp_path / "existing", manifest_sha256="a" * 64)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._canonical_state", lambda *_paths: canonical)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._browser_output_valid", lambda *_paths: False)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: False)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation.promote_session_canonical_pointer", lambda *_paths: None)
 
     result = run_batch(
         _request(tmp_path, resume=True),
@@ -359,6 +442,7 @@ def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_p
 
     assert calls == []
     assert result.races[0].generation_id == "existing"
+    assert result.races[0].session_code == "r"
 
 
 def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_successor(
@@ -375,8 +459,9 @@ def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_succes
         browser_calls.append(request)
         return BrowserPublishResult(request, request.delivery_version, object())
 
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._canonical_state", lambda *_paths: canonical)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._browser_output_valid", lambda *_paths: False)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: False)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation.promote_session_canonical_pointer", lambda *_paths: None)
     _calls, pipeline, _browser = _services()
 
     result = run_batch(
@@ -529,25 +614,42 @@ def test_missing_explicit_schedule_round_fails_actionably_and_cli_returns_nonzer
 
 
 def test_catalog_merges_prior_validated_races_atomically(tmp_path: Path, monkeypatch) -> None:
-    deep_calls = []
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._outputs_valid", lambda *paths: deep_calls.append(paths) or True)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._shallow_canonical_state", lambda path: SimpleNamespace(generation_path=path / "generations" / "g", manifest_sha256="a" * 64))
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._shallow_browser_output_valid", lambda *_paths: True)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: True)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_session_valid", lambda *_args: True)
     calls, pipeline, browser = _services()
     schedule = lambda *_args, **_kwargs: (ScheduledRace(1, "One", True), ScheduledRace(2, "Two", True))
     run_batch(_request(tmp_path, rounds=(1,)), schedule_provider=schedule, pipeline_service=pipeline, browser_service=browser)
     run_batch(_request(tmp_path, rounds=(2,)), schedule_provider=schedule, pipeline_service=pipeline, browser_service=browser)
 
     catalog = json.loads((tmp_path / "catalog.json").read_text(encoding="utf-8"))
+    assert catalog["schemaVersion"] == 2
     assert [record["race_id"] for record in catalog["races"]] == ["2024-round-01-one", "2024-round-02-two"]
-    assert len(deep_calls) == 2
+    for record in catalog["races"]:
+        assert len(record["sessions"]) == 1
+        assert not any(field in record for field in ("generation_id", "delivery_version", "canonical", "browser"))
 
 
 def test_catalog_drops_malformed_prior_references_without_deep_validation(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "canonical").mkdir()
     (tmp_path / "catalog.json").write_text(json.dumps({
+        "schemaVersion": 2,
         "year": 2024,
-        "races": [{"race_id": "../outside", "validated": True, "canonical": "canonical/../outside/current.json", "browser": "browser/../outside/browser-current.json"}],
+        "atomicAcrossRaces": False,
+        "races": [{
+            "race_id": "../outside",
+            "round_number": 1,
+            "event_name": "Unsafe",
+            "sessions": [{
+                "session_code": "r",
+                "session_name": "Race",
+                "generation_id": "2024-round-01-r",
+                "delivery_version": "2024-round-01-r",
+                "outcome": "generated",
+                "validated": True,
+                "canonical_pointer": "canonical/../outside/current.json",
+                "browser_pointer": "browser/../outside/browser-current.json",
+            }],
+        }],
     }), encoding="utf-8")
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._outputs_valid", lambda *_paths: pytest.fail("retained output was deeply validated"))
 
@@ -559,19 +661,44 @@ def test_catalog_drops_malformed_prior_references_without_deep_validation(tmp_pa
 def test_verify_catalog_deeply_validates_each_catalog_reference(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "canonical").mkdir()
     (tmp_path / "catalog.json").write_text(json.dumps({
+        "schemaVersion": 2,
         "year": 2024,
-        "races": [{"race_id": "2024-round-01-one", "round_number": 1, "validated": True, "canonical": "canonical/2024-round-01-one/current.json", "browser": "browser/2024-round-01-one/browser-current.json"}],
+        "atomicAcrossRaces": False,
+        "races": [{
+            "race_id": "2024-round-01-one", "round_number": 1, "event_name": "One",
+            "sessions": [{
+                "session_code": "r", "session_name": "Race",
+                "generation_id": "2024-round-01-r", "delivery_version": "2024-round-01-r",
+                "outcome": "generated", "validated": True,
+                "canonical_pointer": "canonical/2024-round-01-one/sessions/r/current.json",
+                "browser_pointer": "browser/2024-round-01-one/sessions/r/browser-current.json",
+            }],
+        }],
     }), encoding="utf-8")
     canonical = GenerationPublicationResult(tmp_path / "canonical" / "2024-round-01-one" / "generations" / "g", tmp_path / "manifest.json", tmp_path / "current.json", "a" * 64)
     calls = []
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_record_valid", lambda *_args: True)
-    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._canonical_state", lambda *_args: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_session_valid", lambda record, session, request: session["session_code"] == "r")
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation.read_session_canonical_pointer", lambda *_args: canonical)
+    monkeypatch.setattr(
+        "f1_replay_pipeline.storage.canonical_generation_validation.validate_complete_canonical_generation",
+        lambda *args, **kwargs: calls.append(("canonical", args, kwargs)),
+    )
     monkeypatch.setattr("f1_replay_pipeline.delivery.browser.browser_delivery_publication.validate_complete_browser_delivery", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     results = verify_catalog(_request(tmp_path))
 
     assert [result.outcome for result in results] == ["valid"]
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert calls[0][0] == "canonical"
+    assert calls[1][1]["pointer_path"].name == "browser-current.json"
+
+
+def test_verify_catalog_rejects_v1_with_migration_message(tmp_path: Path) -> None:
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "catalog.json").write_text(json.dumps({"year": 2024, "races": []}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schemaVersion 2.*migrate"):
+        verify_catalog(_request(tmp_path))
 
 
 def test_verify_cli_reports_stable_results_and_nonzero_invalid_status(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -585,3 +712,157 @@ def test_verify_cli_reports_stable_results_and_nonzero_invalid_status(tmp_path: 
 
     assert status == 1
     assert captured.out.splitlines() == ["race_id=2024-round-01-one outcome=valid", "race_id=2024-round-02-two outcome=invalid"]
+
+
+def test_publish_catalog_emits_only_v2_and_merges_sessions_for_one_readable_race(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *args: True)
+    request = _request(tmp_path)
+    race_id = "2024-round-08-monaco-grand-prix"
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(race_id, 8, "generated", "2024-round-08-r", "2024-round-08-r", session_code="r", session_name="Race", event_name="Monaco Grand Prix"),
+    )))
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_session_valid", lambda *_args: True)
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(race_id, 8, "generated", "2024-round-08-q", "2024-round-08-q", session_code="q", session_name="Qualifying", event_name="Monaco Grand Prix"),
+    )))
+
+    catalog = json.loads((tmp_path / "catalog.json").read_bytes())
+    race = catalog["races"][0]
+    assert catalog["schemaVersion"] == 2
+    assert {session["session_code"] for session in race["sessions"]} == {"q", "r"}
+    assert not any(field in race for field in ("generation_id", "delivery_version", "canonical", "browser"))
+
+
+def test_failed_catalog_session_has_no_unproven_pointer_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *args: False)
+    request = _request(tmp_path)
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult("2024-round-01", 1, "failed", "2024-round-01-r", detail="failure", session_code="r", session_name="Race"),
+    )))
+
+    session = json.loads((tmp_path / "catalog.json").read_bytes())["races"][0]["sessions"][0]
+    assert session["validated"] is False
+    assert session["canonical_pointer"] is None
+    assert session["browser_pointer"] is None
+
+
+def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    race_id = "2024-round-01-bahrain-grand-prix"
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(
+            race_id, 1, "generated", "2024-round-01-r-good", "delivery-good",
+            session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
+        ),
+    )))
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_session_valid", lambda *_args: True)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: False)
+
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(
+            race_id, 1, "failed", "2024-round-01-r-failed", detail="offline failure",
+            session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
+        ),
+    )))
+
+    session = json.loads((tmp_path / "catalog.json").read_bytes())["races"][0]["sessions"][0]
+    assert session["generation_id"] == "2024-round-01-r-good"
+    assert session["delivery_version"] == "delivery-good"
+    assert session["outcome"] == "generated"
+    assert session["validated"] is True
+    assert session["canonical_pointer"] is None
+    assert session["browser_pointer"] == f"browser/{race_id}/sessions/r/browser-current.json"
+
+
+def test_catalog_read_failure_preserves_existing_catalog(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps({
+        "schemaVersion": 2, "year": 2024, "atomicAcrossRaces": False, "races": [],
+    }), encoding="utf-8")
+    original_catalog = catalog_path.read_bytes()
+
+    def fail_catalog_read(*_args) -> None:
+        raise PermissionError("catalog temporarily unreadable")
+
+    monkeypatch.setattr(
+        "f1_replay_pipeline.app.batch_generation.read_regular_file_no_follow",
+        fail_catalog_read,
+    )
+
+    with pytest.raises(PermissionError, match="temporarily unreadable"):
+        publish_catalog(BatchResult(request, ()))
+
+    assert catalog_path.read_bytes() == original_catalog
+
+
+def test_malformed_existing_catalog_is_not_replaced_by_partial_publication(tmp_path: Path) -> None:
+    request = _request(tmp_path)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        publish_catalog(BatchResult(request, (
+            BatchRaceResult(
+                "2024-round-01", 1, "failed", detail="offline failure",
+                session_code="r", session_name="Race",
+            ),
+        )))
+
+    assert catalog_path.read_text(encoding="utf-8") == "{not-json"
+
+
+def test_resume_selects_requested_session_pointer_for_readable_race_folder(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path, session="Q", resume=True)
+    canonical = SimpleNamespace(generation_path=tmp_path / "canonical-generation", manifest_sha256="a" * 64)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_args: canonical)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
+    monkeypatch.setattr(
+        "f1_replay_pipeline.app.batch_generation.read_session_browser_pointer",
+        lambda *_args: SimpleNamespace(delivery_version="q-delivery"),
+    )
+
+    result = _run_race(
+        request,
+        ScheduledRace(8, "Monaco Grand Prix", True),
+        1,
+        1,
+        lambda request: pytest.fail("resume must not invoke canonical generation"),
+        lambda request: pytest.fail("validated session must not republish browser output"),
+        lambda _event: None,
+    )
+
+    assert result.outcome == "skipped_valid"
+    assert result.session_code == "q"
+    assert result.race_id == "2024-round-08-monaco-grand-prix"
+
+
+def test_retention_filters_sessions_independently(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    (tmp_path / "catalog.json").write_text(json.dumps({
+        "schemaVersion": 2,
+        "year": 2024,
+        "atomicAcrossRaces": False,
+        "races": [{
+            "race_id": "2024-round-08-monaco-grand-prix",
+            "round_number": 8,
+            "event_name": "Monaco Grand Prix",
+            "sessions": [
+                {"session_code": "r", "session_name": "Race", "generation_id": "2024-round-08-r", "delivery_version": "r", "outcome": "generated", "validated": True, "canonical_pointer": "canonical/x", "browser_pointer": "browser/x"},
+                {"session_code": "q", "session_name": "Qualifying", "generation_id": "2024-round-08-q", "delivery_version": "q", "outcome": "generated", "validated": True, "canonical_pointer": "canonical/x", "browser_pointer": "browser/x"},
+            ],
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        "f1_replay_pipeline.app.batch_generation._retained_session_valid",
+        lambda _record, session, _request: session["session_code"] == "q",
+    )
+
+    retained = _retained_catalog_records(tmp_path, request)
+
+    record = cast(dict[str, object], retained["2024-round-08-monaco-grand-prix"])
+    sessions = cast(list[dict[str, object]], record["sessions"])
+    assert [session["session_code"] for session in sessions] == ["q"]

@@ -21,13 +21,21 @@ npm run ci
 ## Replay-data boundary
 
 `src/data/replay/` accepts an injected asynchronous byte source. Production
-code can use `createFetchSource(import.meta.env.VITE_REPLAY_DATA_BASE_URL ?? '/replay-data/')`;
-tests use the committed fixture under `../contracts/` directly. The loader
-validates v1 identities, safe relative paths, column alignment, chunk ownership
-and overlap, and SHA-256 digests whenever a pointer or artifact reference
-supplies one. Returned public values are read-only frozen values.
+builds read `VITE_REPLAY_SEASONS_BASE_URL`; the checked-in production default
+is `https://data.f1racereplay.app/seasons/`. Tests use the committed fixture
+under `../contracts/` directly. The loader validates v1 identities, safe
+relative paths, column alignment, chunk ownership and overlap, and SHA-256
+digests whenever a pointer or artifact reference supplies one. Returned public
+values are read-only frozen values.
+
+The public season catalog is browser-delivery only. A validated session needs
+an immutable browser generation and a `browser_pointer`; `canonical_pointer`
+is retained as a nullable catalog-v2 compatibility field and is `null` in
+public catalogs.
 
 Generated replay artifacts must remain outside `web/src` and `web/public`.
+See [`../docs/r2-production-publishing.md`](../docs/r2-production-publishing.md)
+for the production object layout and safe publication order.
 
 ## Architecture and data flow
 

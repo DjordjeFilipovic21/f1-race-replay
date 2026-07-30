@@ -15,7 +15,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173',
-    env: { VITE_REPLAY_DATA_BASE_URL: '/replay-data/' },
+    env: { VITE_REPLAY_SEASONS_BASE_URL: '/replay-data/seasons/' },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     url: 'http://127.0.0.1:4173',

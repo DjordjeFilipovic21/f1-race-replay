@@ -167,14 +167,15 @@ def validate_complete_browser_delivery(
     expected_generation_id: str,
     expected_manifest_sha256: str,
     schema_root: Path,
+    pointer_path: Path | None = None,
     progress: ProgressCallback | None = None,
 ) -> None:
     """Deeply validate the pointer-selected browser delivery and all payloads."""
     emit = progress or (lambda _stage: None)
     try:
         _require_safe_directory(browser_parent, "browser delivery root")
-        pointer_path = browser_parent / "browser-current.json"
-        pointer_file = read_regular_file_no_follow(pointer_path, "browser current pointer")
+        selected_pointer_path = pointer_path or (browser_parent / "browser-current.json")
+        pointer_file = read_regular_file_no_follow(selected_pointer_path, "browser current pointer")
         pointer = json.loads(pointer_file.data)
         version = validate_browser_delivery_pointer(pointer)
         generation = browser_parent / "generations" / version
@@ -220,7 +221,7 @@ def validate_complete_browser_delivery(
         schemas, registry = _load_contract_schemas(schema_root)
         _validate_stored_delivery_payloads(payloads, _contract_validators(schemas, registry), emit)
         verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
-        verify_regular_file_identity(pointer_path, pointer_file, "browser current pointer")
+        verify_regular_file_identity(selected_pointer_path, pointer_file, "browser current pointer")
     except (GenerationPublicationError, BrowserDeliveryPublicationError, OSError, TypeError, ValueError, KeyError, AttributeError, json.JSONDecodeError) as error:
         raise BrowserDeliveryPublicationError("browser delivery validation failed") from error
 

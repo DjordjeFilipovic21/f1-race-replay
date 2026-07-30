@@ -272,9 +272,14 @@ def test_happy_path_publishes_canonical_browser_and_valid_catalog(
     assert len(catalog["races"]) == 1
     catalog_race = catalog["races"][0]
     assert catalog_race["race_id"] == race.race_id
-    assert catalog_race["validated"] is True
-    assert catalog_race["outcome"] == "generated"
-    assert catalog_race["generation_id"] == race.generation_id
+    assert catalog["schemaVersion"] == 2
+    assert catalog_race["event_name"] == "Australian Grand Prix"
+    assert len(catalog_race["sessions"]) == 1
+    catalog_session = catalog_race["sessions"][0]
+    assert catalog_session["validated"] is True
+    assert catalog_session["outcome"] == "generated"
+    assert catalog_session["generation_id"] == race.generation_id
+    assert catalog_session["session_code"] == "r"
 
     # -- verify_catalog deep-validates every catalog reference --
     verify_results = verify_catalog(request)
@@ -404,8 +409,9 @@ def test_resume_after_browser_failure_reuses_committed_canonical_generation(
     assert catalog["year"] == 2026
     catalog_race = catalog["races"][0]
     assert catalog_race["race_id"] == race_id
-    assert catalog_race["validated"] is True
-    assert catalog_race["generation_id"] == generation_id
+    assert catalog["schemaVersion"] == 2
+    assert catalog_race["sessions"][0]["validated"] is True
+    assert catalog_race["sessions"][0]["generation_id"] == generation_id
 
     # -- verify_catalog deep-validates the completed race --
     verify_results = verify_catalog(request)

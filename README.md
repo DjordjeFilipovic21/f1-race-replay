@@ -38,6 +38,8 @@ Pipeline and web tests mirror these boundaries beneath `pipeline/tests/` and
 ## Setup and validation
 
 - Modern Python checks and test commands: [`docs/Testing.md`](docs/Testing.md).
+- Production browser-delivery publication:
+  [`docs/r2-production-publishing.md`](docs/r2-production-publishing.md).
 - Legacy desktop setup and usage: [`legacy/README.md`](legacy/README.md).
 - Launch the legacy application from the repository root with:
   `.venv/bin/python legacy/main.py`.

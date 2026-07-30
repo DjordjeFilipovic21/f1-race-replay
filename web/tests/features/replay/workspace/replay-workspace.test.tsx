@@ -64,6 +64,7 @@ import type { ReplayWorkspaceStorage } from '../../../../src/features/replay/wor
 
 const appWorkspaceStyles = readFileSync(resolve(process.cwd(), 'src/styles/app-workspace.css'), 'utf8')
 const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8')
+const trackMapStyles = readFileSync(resolve(process.cwd(), 'src/styles/track-map.css'), 'utf8')
 
 const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'player', label: 'Player', columns: 1, element: <p>Player content</p> },
@@ -519,14 +520,25 @@ test('switches the shared workspace gap metric with lock mode', () => {
   expect(workspace.dataset.workspaceMode).toBe('unlocked')
 })
 
+test('separates the toolbar from the workspace surface', () => {
+  const managerRule = appWorkspaceStyles.match(/\.replay-workspace__manager\s*\{([^}]*)\}/)?.[1] ?? ''
+
+  expect(managerRule).toContain('border-bottom: 1px solid var(--border)')
+  expect(managerRule).toContain('padding: .25rem 0 1rem')
+})
+
 test('animates panel geometry when switching workspace mode', () => {
   const previousAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
-  const animate = vi.fn(() => ({
+  const animatedRowSpans: string[] = []
+  const animate = vi.fn(function (this: HTMLElement) {
+    animatedRowSpans.push(this.style.getPropertyValue('--replay-panel-row-span'))
+    return {
     addEventListener: vi.fn(),
     cancel: vi.fn(),
     finished: new Promise<never>(() => undefined),
     removeEventListener: vi.fn(),
-  }) as unknown as Animation)
+    } as unknown as Animation
+  })
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const index = panels.findIndex((panel) => panel.label === this.getAttribute('aria-label'))
@@ -541,15 +553,17 @@ test('animates panel geometry when switching workspace mode', () => {
 
     expect(animate).toHaveBeenCalled()
     expect(animate).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ duration: 420 }))
+    expect(animatedRowSpans.every((rowSpan) => rowSpan === '10')).toBe(true)
   } finally {
     restorePrototypeDescriptor(HTMLElement.prototype, 'animate', previousAnimateDescriptor)
   }
 })
 
-test('remeasures panel row spans when the mode changes the grid gap', () => {
-  // Arrange - make panel measurement deterministic and notify observers synchronously.
+test('recalculates panel row spans atomically when the mode changes the grid gap', () => {
+  // Arrange - measure each panel once so a mode change cannot rely on a later observer callback.
   const previousResizeObserver = globalThis.ResizeObserver
   const previousScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+  let observeCalls = 0
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     bottom: 28, height: 28, left: 0, right: 100, toJSON: () => ({}), top: 0, width: 100, x: 0, y: 0,
   } as DOMRect)
@@ -560,6 +574,7 @@ test('remeasures panel row spans when the mode changes the grid gap', () => {
     disconnect(): void {}
 
     observe(): void {
+      observeCalls += 1
       this.callback([], this)
     }
 
@@ -572,12 +587,14 @@ test('remeasures panel row spans when the mode changes the grid gap', () => {
     const telemetryRegion = screen.getByRole('region', { name: 'Telemetry' })
 
     // Act - switch to zero-gap locked mode, then return to the normal gap.
+    expect(observeCalls).toBe(panels.length)
     expect(telemetryRegion.style.getPropertyValue('--replay-panel-row-span')).toBe('3')
     fireEvent.click(screen.getByRole('button', { name: 'Lock workspace' }))
     expect(telemetryRegion.style.getPropertyValue('--replay-panel-row-span')).toBe('6')
     fireEvent.click(screen.getByRole('button', { name: 'Unlock workspace' }))
 
-    // Assert - each transition reuses the measured height with the active mode's metric.
+    // Assert - each transition synchronously reuses the measured height with the active mode's metric.
+    expect(observeCalls).toBe(panels.length)
     expect(telemetryRegion.style.getPropertyValue('--replay-panel-row-span')).toBe('3')
   } finally {
     restorePrototypeDescriptor(HTMLElement.prototype, 'scrollHeight', previousScrollHeight)
@@ -612,6 +629,8 @@ test('swaps drag chrome for internal gradient headers across workspace modes', (
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} .race-control-panel { padding-top: .75rem; }`)
   expect(appWorkspaceStyles).toContain(`:is(.replay-workspace, .replay-panel-drag-snapshot) ${gradientHeaders} { max-height: 6rem; opacity: 1;`)
+  expect(appWorkspaceStyles).not.toContain('transition: max-height')
+  expect(appWorkspaceStyles).not.toContain('padding-block 420ms')
 })
 
 test('marks each panel frame with a stable id and scopes locked surface merging away from Player', () => {
@@ -627,6 +646,8 @@ test('marks each panel frame with a stable id and scopes locked surface merging 
   expect(nonPlayerBodyRule).toContain('background-color: #101316')
   expect(nonPlayerBodyRule).toContain('padding: .5rem')
   expect(lockedTrackMapRule).toContain('border: 0')
+  expect(lockedTrackMapRule).toContain('box-shadow: none')
+  expect(trackMapStyles).toContain('rgb(27 35 41 / 0%) 68%')
   expect(nonPlayerContentRule).toContain('background: transparent !important')
   expect(nonPlayerContentRule).toContain('border: 0 !important')
   expect(nonPlayerContentRule).toContain('box-shadow: none !important')
