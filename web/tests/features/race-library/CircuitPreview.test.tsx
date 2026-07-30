@@ -244,7 +244,7 @@ describe('CircuitPreview', () => {
       const path = document.querySelector('path.circuit-preview__path')
       expect(path).toBeTruthy()
       expect(path?.classList.contains('circuit-preview__path')).toBe(true)
-      expect(path?.getAttribute('pathLength')).toBe('1')
+      expect(path?.getAttribute('pathLength')).toBeNull()
     })
 
     test('renders a separate animated glow path beneath the circuit line', async () => {
@@ -260,7 +260,7 @@ describe('CircuitPreview', () => {
 
       const glow = document.querySelector('path.circuit-preview__glow')
       expect(glow?.getAttribute('d')).toBe('M 0 0 L 100 0 L 100 100 L 0 100 Z')
-      expect(glow?.getAttribute('pathLength')).toBe('1')
+      expect(glow?.getAttribute('pathLength')).toBeNull()
       expect(glow?.getAttribute('aria-hidden')).toBe('true')
     })
   })

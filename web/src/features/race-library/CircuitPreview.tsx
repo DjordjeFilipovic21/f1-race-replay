@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReplaySource } from '../../data/replay/types'
 import { loadCircuitPreview, type CircuitPreviewSuccess } from '../../geo/circuit-preview'
 
@@ -52,6 +52,8 @@ export const CircuitPreview = memo(function CircuitPreview({
 }: CircuitPreviewProps) {
   const [state, setState] = useState<CircuitPreviewState>(deriveInitialState(previewPointer))
   const requestIdRef = useRef(0)
+  const glowPathRef = useRef<SVGPathElement>(null)
+  const circuitPathRef = useRef<SVGPathElement>(null)
 
   useEffect(() => {
     const thisRequest = ++requestIdRef.current
@@ -79,6 +81,12 @@ export const CircuitPreview = memo(function CircuitPreview({
     }
   }, [source, previewPointer])
 
+  useLayoutEffect(() => {
+    if (state.phase !== 'resolved') return
+    setMeasuredPathLength(glowPathRef.current)
+    setMeasuredPathLength(circuitPathRef.current)
+  }, [state])
+
   return (
     <div
       className={`circuit-preview circuit-preview--${state.phase}`}
@@ -97,15 +105,15 @@ export const CircuitPreview = memo(function CircuitPreview({
           <title>{`${circuitName} circuit preview`}</title>
           <g className="circuit-preview__geometry">
             <path
+              ref={glowPathRef}
               className="circuit-preview__glow"
               d={state.result.pathData}
-              pathLength={1}
               aria-hidden="true"
             />
             <path
+              ref={circuitPathRef}
               className="circuit-preview__path"
               d={state.result.pathData}
-              pathLength={1}
             />
           </g>
         </svg>
@@ -143,4 +151,12 @@ function addViewBoxPadding(viewBox: string): string {
     width + (horizontalPadding * 2),
     height + (verticalPadding * 2),
   ].join(' ')
+}
+
+function setMeasuredPathLength(path: SVGPathElement | null): void {
+  if (path === null || typeof path.getTotalLength !== 'function') return
+  const length = path.getTotalLength()
+  if (Number.isFinite(length) && length > 0) {
+    path.style.setProperty('--circuit-path-length', String(length))
+  }
 }

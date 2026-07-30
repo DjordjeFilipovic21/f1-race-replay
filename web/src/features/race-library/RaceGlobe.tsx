@@ -306,10 +306,8 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
             d={createJourneyPath(projection, journeySource, {
               latitude: visual.latitude,
               longitude: visual.longitude,
-            })}
-            pathLength={1}
+            }, 0, 0)}
             clipPath="url(#race-globe-sphere-clip)"
-            style={{ strokeDashoffset: 1 }}
           />
         )}
         {markerPosition !== null && (
@@ -348,8 +346,9 @@ function updateGlobeGeometry(
   drawGlobeMap(rotation, canvas)
   const projection = createProjectionAtRotation(rotation, DEFAULT_GLOBE_SIZE)
   if (journey === null) return
-  journey.setAttribute('d', createJourneyPath(projection, source, target))
-  journey.style.strokeDashoffset = String(1 - (2 * progress))
+  const windowStart = progress <= 0.5 ? 0 : (progress - 0.5) * 2
+  const windowEnd = progress <= 0.5 ? progress * 2 : 1
+  journey.setAttribute('d', createJourneyPath(projection, source, target, windowStart, windowEnd))
 }
 
 function drawGlobeMap(rotation: GlobeRotation, canvas: HTMLCanvasElement | null): void {
@@ -387,6 +386,8 @@ function createJourneyPath(
   projection: GeoProjection,
   source: GlobeCoordinate,
   target: GlobeCoordinate,
+  startProgress = 0,
+  endProgress = 1,
 ): string {
   const start = projection([source.longitude, source.latitude])
   const end = projection([target.longitude, target.latitude])
@@ -405,7 +406,33 @@ function createJourneyPath(
   const controlX = midpointX + (normalX * curveDistance)
   const controlY = midpointY + (normalY * curveDistance)
 
-  return `M ${start[0]} ${start[1]} Q ${controlX} ${controlY} ${end[0]} ${end[1]}`
+  const segmentStart = quadraticPoint(start, [controlX, controlY], end, startProgress)
+  if (startProgress === endProgress) return `M ${segmentStart[0]} ${segmentStart[1]}`
+
+  const segmentEnd = quadraticPoint(start, [controlX, controlY], end, endProgress)
+  const progressSpan = endProgress - startProgress
+  const tangentX = ((1 - startProgress) * (controlX - start[0]))
+    + (startProgress * (end[0] - controlX))
+  const tangentY = ((1 - startProgress) * (controlY - start[1]))
+    + (startProgress * (end[1] - controlY))
+  const segmentControl = [
+    segmentStart[0] + (progressSpan * tangentX),
+    segmentStart[1] + (progressSpan * tangentY),
+  ]
+  return `M ${segmentStart[0]} ${segmentStart[1]} Q ${segmentControl[0]} ${segmentControl[1]} ${segmentEnd[0]} ${segmentEnd[1]}`
+}
+
+function quadraticPoint(
+  start: readonly [number, number],
+  control: readonly [number, number],
+  end: readonly [number, number],
+  progress: number,
+): readonly [number, number] {
+  const inverse = 1 - progress
+  return [
+    (inverse * inverse * start[0]) + (2 * inverse * progress * control[0]) + (progress * progress * end[0]),
+    (inverse * inverse * start[1]) + (2 * inverse * progress * control[1]) + (progress * progress * end[1]),
+  ]
 }
 
 function easeInOutCubic(t: number): number {

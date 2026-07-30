@@ -12,8 +12,9 @@ From this directory:
 python -m pip install .
 ```
 
-The package requires Python 3.11+ and installs FastF1 3.8.x, Polars 1.x, and
-the local browser-publication schema engine `jsonschema-rs` 0.48.x.
+The package requires Python 3.11+ and installs FastF1 3.8.x, Polars 1.x,
+the local browser-publication schema engine `jsonschema-rs` 0.48.x, and
+`boto3` for opt-in Cloudflare R2 publication.
 
 ## Foundation scope
 
@@ -125,6 +126,9 @@ f1-replay-pipeline browser \
   --output artifacts/browser-bahrain-2024 \
   --delivery-version 2024-bahrain-race-v1 \
   --schema-root ../contracts/replay-data/v1/schemas
+
+f1-replay-pipeline generate \
+  --year 2024 --round 3 --session R --resume --publish-r2
 ```
 
 ### Selectors and backends
@@ -143,6 +147,9 @@ f1-replay-pipeline browser \
 - `browser` requires a canonical parent selected by its validated `current.json`,
   a separate output parent, one safe delivery version, and a local v1 schema
   directory. It performs no FastF1 or network loading.
+- `generate` accepts one or more `--round` values or `--all`. It generates the
+  canonical and browser forms, atomically refreshes the local season catalog,
+  and remains local-only unless `--publish-r2` is supplied.
 
 The default resolver imports FastF1 lazily, resolves one session, and loads it
 once with laps, telemetry, weather, and messages enabled. This is a real
@@ -188,8 +195,53 @@ Exit behavior:
 - `2`: argparse usage or validation failure (including missing, abbreviated, or
   unknown options); argparse writes its error to stderr.
 
-The CLI remains non-interactive and does not provide GUI/legacy integration,
-CDN upload, or a second command framework.
+The CLI remains non-interactive and does not provide GUI/legacy integration or
+a second command framework. R2 publication is an explicit post-validation
+boundary; normal generation and every other command remain network-independent
+apart from their documented data sources.
+
+### Publish validated browser data to R2
+
+Store the R2 S3 credentials in a dedicated AWS profile, then set the endpoint,
+bucket, and profile before using the opt-in flag:
+
+```bash
+aws configure --profile f1-r2
+chmod 600 ~/.aws/credentials ~/.aws/config
+
+export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
+export R2_BUCKET=f1-race-replay-data
+export AWS_PROFILE=f1-r2
+
+f1-replay-pipeline generate \
+  --year 2024 --round 3 --session R --resume --publish-r2
+```
+
+Do not put R2 access keys in the repository, local `.env` files, command
+arguments, or shell history. Use an R2 token with Object Read & Write access
+scoped only to the publication bucket.
+
+The uploader rebuilds a browser-only public catalog from locally validated
+sessions. It deep-validates each referenced browser delivery, uploads immutable
+generation objects first, then visuals and session pointers, and commits
+`seasons/<year>/catalog.json` last. Existing immutable objects are reused only
+when their content and HTTP metadata agree. Upload errors return status `1`
+without changing local artifacts.
+
+R2 validation and publication progress is written to stderr. Interactive
+terminals receive a live line; redirected logs are throttled to phase changes,
+10% increments, and phase completion:
+
+```text
+r2 040% | immutable 441/1101 | up=40 reuse=401 | 01:12
+r2 100% | completed 1106/1106 | up=5 reuse=1101 | 01:44
+```
+
+The local season catalog is authoritative. Keep existing production artifacts
+under the same season root so incremental runs retain their validated catalog
+records. See
+[`../docs/r2-production-publishing.md`](../docs/r2-production-publishing.md)
+for the object layout, caching policy, and manual recovery commands.
 
 ## Publish a canonical generation
 

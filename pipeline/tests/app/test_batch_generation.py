@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import sys
@@ -37,7 +38,12 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_request import (
     BrowserDeliveryServiceError,
     BrowserPublishResult,
 )
-from f1_replay_pipeline.app.cli import main
+from f1_replay_pipeline.app.cli import _R2ProgressRenderer, main
+from f1_replay_pipeline.app.r2_publication import (
+    R2PublicationError,
+    R2PublicationResult,
+    R2ProgressEvent,
+)
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
     PublicationCommittedError,
@@ -147,6 +153,142 @@ def test_generate_keeps_results_on_stdout_and_progress_on_stderr(tmp_path: Path,
     assert status == 0
     assert captured.out == "race_id=2024-round-01-one outcome=generated generation_id=2024-round-01-r delivery_version=2024-round-01-r\n"
     assert "canonical_generating" in captured.err
+
+
+def test_generate_publish_r2_flag_runs_after_local_catalog_publication(
+    tmp_path: Path, capsys,
+) -> None:
+    _calls, pipeline, browser = _services()
+    received = []
+
+    def r2_publisher(source):
+        received.append(source)
+        assert (source.season_root / "catalog.json").is_file()
+        return R2PublicationResult(4, 2, "seasons/2024/catalog.json")
+
+    status = main(
+        [
+            "generate", "--year", "2024", "--round", "1",
+            "--output", str(tmp_path / "canonical"),
+            "--browser-output", str(tmp_path / "browser"),
+            "--publish-r2",
+        ],
+        service=pipeline,
+        browser_service=browser,
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        r2_publisher=r2_publisher,
+    )
+
+    assert status == 0
+    assert len(received) == 1
+    assert received[0].year == 2024
+    assert capsys.readouterr().out.endswith(
+        "r2_catalog=seasons/2024/catalog.json uploaded=4 reused=2\n"
+    )
+
+
+def test_generate_publish_r2_failure_is_visible_and_returns_nonzero(
+    tmp_path: Path, capsys,
+) -> None:
+    _calls, pipeline, browser = _services()
+
+    def r2_publisher(_source):
+        raise R2PublicationError("R2 credentials are unavailable")
+
+    status = main(
+        [
+            "generate", "--year", "2024", "--round", "1",
+            "--output", str(tmp_path / "canonical"),
+            "--browser-output", str(tmp_path / "browser"),
+            "--publish-r2",
+        ],
+        service=pipeline,
+        browser_service=browser,
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        r2_publisher=r2_publisher,
+    )
+
+    assert status == 1
+    assert "error: R2 credentials are unavailable" in capsys.readouterr().err
+
+
+def test_generate_renders_granular_r2_progress_to_stderr(
+    tmp_path: Path, capsys,
+) -> None:
+    _calls, pipeline, browser = _services()
+
+    class GranularR2Publisher:
+        def __call__(self, _source):
+            raise AssertionError("granular R2 publication must be preferred")
+
+        def publish_with_progress(self, _source, progress):
+            progress(R2ProgressEvent("r2_validating", 0, 1))
+            progress(R2ProgressEvent(
+                "r2_validating", 1, 1, key="2024-round-01-one/r",
+            ))
+            progress(R2ProgressEvent(
+                "r2_uploading_immutable", 1, 2, uploaded=1,
+                key="seasons/2024/browser/chunk-001.json",
+            ))
+            progress(R2ProgressEvent(
+                "r2_uploading_immutable", 2, 2, uploaded=1, reused=1,
+                key="seasons/2024/browser/chunk-002.json",
+            ))
+            progress(R2ProgressEvent(
+                "r2_completed", 4, 4, uploaded=3, reused=1,
+                key="seasons/2024/catalog.json",
+            ))
+            return R2PublicationResult(3, 1, "seasons/2024/catalog.json")
+
+    status = main(
+        [
+            "generate", "--year", "2024", "--round", "1",
+            "--output", str(tmp_path / "canonical"),
+            "--browser-output", str(tmp_path / "browser"),
+            "--publish-r2",
+        ],
+        service=pipeline,
+        browser_service=browser,
+        schedule_provider=lambda *_args, **_kwargs: (ScheduledRace(1, "One", True),),
+        r2_publisher=GranularR2Publisher(),
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "r2 000% | validating 0/1" in captured.err
+    assert "r2 050% | immutable 1/2" in captured.err
+    assert "r2 100% | completed 4/4" in captured.err
+    assert "seasons/2024/browser/chunk-001.json" not in captured.err
+
+
+def test_interactive_r2_progress_overwrites_one_compact_line(
+    monkeypatch,
+) -> None:
+    class InteractiveStderr(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stderr = InteractiveStderr()
+    monkeypatch.setattr(sys, "stderr", stderr)
+    renderer = _R2ProgressRenderer()
+    long_key = (
+        "seasons/2024/browser/2024-round-04-japanese-grand-prix/"
+        "generations/2024-round-04-r/chunks/cr2-position.json"
+    )
+
+    renderer(R2ProgressEvent(
+        "r2_uploading_immutable", 2348, 2350, uploaded=717, reused=1631, key=long_key,
+    ))
+    renderer(R2ProgressEvent(
+        "r2_uploading_immutable", 2350, 2350, uploaded=719, reused=1631, key=long_key,
+    ))
+
+    output = stderr.getvalue()
+    assert output.count("\r") == 2
+    assert output.endswith("\n")
+    assert "\033" not in output
+    assert long_key not in output
+    assert all(len(refresh) <= 80 for refresh in output.split("\r")[1:])
 
 
 def test_generate_prints_failed_race_detail_after_renderer_closes(

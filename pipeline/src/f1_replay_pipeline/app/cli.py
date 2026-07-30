@@ -36,6 +36,14 @@ from f1_replay_pipeline.app.orchestration import (
     SessionResolutionError,
     TestingSelection,
 )
+from f1_replay_pipeline.app.r2_publication import (
+    R2PublicationError,
+    R2PublicationResult,
+    R2PublicationSource,
+    R2ProgressCallback,
+    R2ProgressEvent,
+    publish_r2_from_environment,
+)
 from f1_replay_pipeline.domain.generation_identity import validate_generation_id
 
 if TYPE_CHECKING:
@@ -53,6 +61,12 @@ class BrowserService(Protocol):
     """Publish browser artifacts without exposing CLI dependencies."""
 
     def __call__(self, request: BrowserPublishRequest) -> BrowserPublishResult: ...
+
+
+class R2Publisher(Protocol):
+    """Publish one locally validated season to its configured R2 bucket."""
+
+    def __call__(self, source: R2PublicationSource) -> R2PublicationResult: ...
 
 
 GenerationIdGenerator = Callable[[], str]
@@ -116,6 +130,21 @@ class DefaultBatchScheduleProvider:
         return FastF1ScheduleProvider()(year, backend=backend)
 
 
+@dataclass(frozen=True)
+class DefaultR2Publisher:
+    """Lazy network composition used only by an explicit --publish-r2 request."""
+
+    def __call__(self, source: R2PublicationSource) -> R2PublicationResult:
+        return publish_r2_from_environment(source)
+
+    def publish_with_progress(
+        self,
+        source: R2PublicationSource,
+        progress: R2ProgressCallback,
+    ) -> R2PublicationResult:
+        return publish_r2_from_environment(source, progress=progress)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the stable parser without reading arguments or initializing FastF1."""
     parser = argparse.ArgumentParser(
@@ -138,6 +167,7 @@ def main(
     service: PipelineService | None = None,
     browser_service: BrowserService | None = None,
     schedule_provider: ScheduleProvider | None = None,
+    r2_publisher: R2Publisher | None = None,
 ) -> int:
     """Parse one non-interactive command and return a conventional exit status."""
     namespace = build_parser().parse_args(argv)
@@ -209,6 +239,32 @@ def main(
             print(f"error: {failure}", file=sys.stderr)
             return 1
         assert batch_result is not None
+        r2_result: R2PublicationResult | None = None
+        r2_failure: R2PublicationError | None = None
+        if namespace.publish_r2:
+            selected_r2_publisher = r2_publisher or DefaultR2Publisher()
+            publish_with_progress = getattr(
+                selected_r2_publisher, "publish_with_progress", None,
+            )
+            r2_renderer = (
+                _R2ProgressRenderer() if callable(publish_with_progress) else None
+            )
+            try:
+                source = R2PublicationSource(
+                    year=request.year,
+                    season_root=request.canonical_root.parent,
+                    schema_root=request.schema_root,
+                )
+                r2_result = (
+                    publish_with_progress(source, r2_renderer)
+                    if callable(publish_with_progress) and r2_renderer is not None
+                    else selected_r2_publisher(source)
+                )
+            except R2PublicationError as error:
+                r2_failure = error
+            finally:
+                if r2_renderer is not None:
+                    r2_renderer.close()
         for race in batch_result.races:
             fields = [f"race_id={race.race_id}", f"outcome={race.outcome}"]
             if race.generation_id is not None:
@@ -219,7 +275,14 @@ def main(
         for race in batch_result.races:
             if race.outcome == "failed" and race.detail:
                 print(f"failure: race_id={race.race_id} detail={race.detail}", file=sys.stderr)
-        return 1 if batch_result.failed else 0
+        if r2_result is not None:
+            print(
+                f"r2_catalog={r2_result.catalog_key} "
+                f"uploaded={r2_result.uploaded} reused={r2_result.reused}"
+            )
+        if r2_failure is not None:
+            print(f"error: {r2_failure}", file=sys.stderr)
+        return 1 if batch_result.failed or r2_failure is not None else 0
     if namespace.mode == "verify":
         season_root = Path("artifacts") / "seasons" / str(namespace.year)
         try:
@@ -302,6 +365,11 @@ def _add_generate_parser(commands: argparse._SubParsersAction[argparse.ArgumentP
     generate.add_argument("--resume", action="store_true", help="Skip only races with validated existing outputs.")
     generate.add_argument("--force", action="store_true", help="Regenerate selected races even when resume would skip them.")
     generate.add_argument("--continue-on-error", action="store_true", help="Continue after a failed race; final status remains nonzero.")
+    generate.add_argument(
+        "--publish-r2",
+        action="store_true",
+        help="Publish validated browser artifacts to R2 after local catalog publication.",
+    )
 
 
 def _add_verify_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -403,6 +471,85 @@ class _TerminalProgressRenderer:
             sys.stderr.flush()
         else:
             print(text, file=sys.stderr)
+
+
+class _R2ProgressRenderer:
+    """Render live R2 counters without flooding redirected logs."""
+
+    def __init__(self) -> None:
+        self._started = monotonic()
+        self._interactive = sys.stderr.isatty()
+        self._phase: str | None = None
+        self._reported_bucket = -1
+        self._line_open = False
+        self._rendered_width = 0
+
+    def __call__(self, event: R2ProgressEvent) -> None:
+        percent = _r2_progress_percent(event)
+        phase_changed = event.phase != self._phase
+        bucket = percent // 10
+        should_render = (
+            self._interactive
+            or phase_changed
+            or event.completed == event.total
+            or bucket > self._reported_bucket
+        )
+        if not should_render:
+            return
+        if phase_changed:
+            self._phase = event.phase
+            self._reported_bucket = -1
+        self._reported_bucket = max(self._reported_bucket, bucket)
+        text = _format_r2_progress(event, monotonic() - self._started)
+        if self._interactive:
+            padding = " " * max(0, self._rendered_width - len(text))
+            sys.stderr.write(f"\r{text}{padding}")
+            sys.stderr.flush()
+            self._rendered_width = len(text)
+            self._line_open = True
+            if event.completed == event.total or event.phase == "r2_completed":
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                self._line_open = False
+                self._rendered_width = 0
+        else:
+            print(text, file=sys.stderr)
+
+    def close(self) -> None:
+        if self._interactive and self._line_open:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+            self._line_open = False
+            self._rendered_width = 0
+
+
+def _r2_progress_percent(event: R2ProgressEvent) -> int:
+    if event.phase == "r2_completed":
+        return 100
+    if event.total == 0:
+        return 100
+    return min(100, int(event.completed * 100 / event.total))
+
+
+def _format_r2_progress(event: R2ProgressEvent, elapsed: float) -> str:
+    minutes, seconds = divmod(int(elapsed), 60)
+    phase = _R2_PROGRESS_PHASE_LABELS.get(event.phase, event.phase.removeprefix("r2_"))
+    return (
+        f"r2 {_r2_progress_percent(event):03d}%"
+        f" | {phase} {event.completed}/{event.total}"
+        f" | up={event.uploaded} reuse={event.reused}"
+        f" | {minutes:02d}:{seconds:02d}"
+    )
+
+
+_R2_PROGRESS_PHASE_LABELS = {
+    "r2_validating": "validating",
+    "r2_uploading_immutable": "immutable",
+    "r2_uploading_visuals": "visuals",
+    "r2_uploading_pointers": "pointers",
+    "r2_committing_catalog": "catalog",
+    "r2_completed": "completed",
+}
 
 
 def _format_progress(

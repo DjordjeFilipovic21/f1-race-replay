@@ -63,6 +63,13 @@ Content-Type: application/json
 Cache-Control: public, max-age=0, must-revalidate
 ```
 
+Circuit previews:
+
+```text
+Content-Type: application/json
+Cache-Control: public, max-age=86400, must-revalidate
+```
+
 Cloudflare already compresses these JSON responses for supported browsers. Do
 not add a decompression Worker and do not upload `.br` side files.
 
@@ -77,10 +84,65 @@ Keep `catalog.json` and `browser-current.json` outside that immutable cache
 rule. The R2 CORS policy must allow `GET` and `HEAD` from
 `https://f1racereplay.app`.
 
-## S3-compatible upload
+## Automated pipeline publication
 
-The uploader needs the account endpoint and bucket name in addition to the
-existing R2 access key:
+The recommended production path is the opt-in `generate --publish-r2` flag.
+Normal generation performs no R2 access.
+
+Store the R2 S3 credentials in a dedicated AWS profile, then configure the
+target and profile:
+
+```bash
+aws configure --profile f1-r2
+chmod 600 ~/.aws/credentials ~/.aws/config
+
+export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
+export R2_BUCKET=f1-race-replay-data
+export AWS_PROFILE=f1-r2
+```
+
+Do not put R2 access keys in the repository, local `.env` files, command
+arguments, or shell history. Use an R2 token with Object Read & Write access
+scoped only to `f1-race-replay-data`.
+
+Generate or resume selected rounds and publish all valid catalog references:
+
+```bash
+f1-replay-pipeline generate \
+  --year 2024 \
+  --round 3 \
+  --session R \
+  --resume \
+  --publish-r2
+```
+
+The uploader:
+
+1. Reads the final local `catalog.json` after batch generation.
+2. Removes unvalidated sessions and races with no valid browser session from
+   the public payload.
+3. Deep-validates every retained browser pointer, manifest, and payload.
+4. Uploads or reuses immutable generation objects.
+5. Uploads visuals and session pointers.
+6. Uploads the filtered public catalog last.
+
+The CLI reports validation and per-phase object counters on stderr, including
+the cumulative `uploaded` and `reused` counts. Interactive output refreshes in
+place; redirected logs are emitted at phase changes and 10% increments.
+
+An existing immutable key is reused only when its bytes and HTTP metadata
+agree. A collision or upload verification failure stops publication before
+later discovery objects are committed. The uploader never uploads canonical
+Parquet and never deletes remote objects.
+
+The local season catalog is authoritative. Incremental runs should reuse the
+same `artifacts/seasons/{year}` root so previously published valid races remain
+present. Use manual recovery only when the automated publication cannot run.
+
+## Manual S3-compatible upload
+
+The manual uploader needs the account endpoint and bucket name in addition to
+the existing R2 access key:
 
 ```bash
 export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
