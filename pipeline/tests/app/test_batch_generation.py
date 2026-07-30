@@ -773,7 +773,7 @@ def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monk
     assert session["delivery_version"] == "delivery-good"
     assert session["outcome"] == "generated"
     assert session["validated"] is True
-    assert session["canonical_pointer"] == f"canonical/{race_id}/sessions/r/current.json"
+    assert session["canonical_pointer"] is None
     assert session["browser_pointer"] == f"browser/{race_id}/sessions/r/browser-current.json"
 
 

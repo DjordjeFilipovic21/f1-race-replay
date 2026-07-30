@@ -88,7 +88,6 @@ export function isSessionReplayReady(value: unknown): value is CatalogV2Session 
   return value.validated === true
     && isSafeComponentValue(value.generation_id)
     && isSafeComponentValue(value.delivery_version)
-    && isSafePointerValue(value.canonical_pointer)
     && isSafePointerValue(value.browser_pointer)
 }
 
@@ -141,9 +140,6 @@ export const resolveSessionBrowserPointer = resolveBrowserPointer
 
 function validateSessionReferences(session: CatalogV2Session, label: string): void {
   const pointers = [session.canonical_pointer, session.browser_pointer]
-  if (pointers.some((pointer) => pointer !== null) && pointers.some((pointer) => pointer === null)) {
-    throw new Error(`${label} canonical_pointer and browser_pointer must be provided together`)
-  }
   if (pointers.some((pointer) => pointer !== null)
     && (session.generation_id === null || session.delivery_version === null)) {
     throw new Error(`${label} pointers require generation_id and delivery_version`)

@@ -41,7 +41,10 @@ def _minimal_session(**overrides: object) -> CatalogV2SessionRecord:
 # ---------------------------------------------------------------------------
 
 def test_catalog_serialization_is_explicit_and_deterministic() -> None:
-    session = CatalogV2SessionRecord("r", "Race", "2024-round-05-r", "2024-round-05-r", "generated", True, "canonical/x", "browser/x")
+    session = CatalogV2SessionRecord(
+        "r", "Race", "2024-round-05-r", "2024-round-05-r",
+        "generated", True, None, "browser/x",
+    )
     payload = CatalogV2Payload(2024, (CatalogV2RaceRecord("2024-round-05", 5, "Race", (session,)),))
     encoded = payload.to_json_bytes()
 
@@ -78,6 +81,11 @@ def test_catalog_models_reject_malformed_boundaries_and_duplicate_sessions() -> 
         CatalogV2RaceRecord("2024-round-08", 8, "Race", (session, session))
     with pytest.raises(ValueError):
         CatalogV2SessionRecord("../r", "Race", None, None, "failed", False, None, None)
+    with pytest.raises(ValueError, match="browser artifact reference"):
+        CatalogV2SessionRecord(
+            "r", "Race", "2024-round-05-r", "2024-round-05-r",
+            "generated", True, "canonical/x", None,
+        )
 
 
 # ---------------------------------------------------------------------------

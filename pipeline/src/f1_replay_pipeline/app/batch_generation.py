@@ -805,11 +805,10 @@ def publish_catalog(
         valid = race.outcome in {"generated", "skipped_valid", "committed_with_durability_warning"} and _session_outputs_valid(
             result.request.canonical_root / race.race_id, result.request.browser_root / race.race_id, code,
         )
-        canonical_pointer = f"canonical/{race.race_id}/sessions/{code}/current.json" if valid else None
         browser_pointer = f"browser/{race.race_id}/sessions/{code}/browser-current.json" if valid else None
         session = CatalogV2SessionRecord(
             code, race.session_name or _session_name(code), race.generation_id, race.delivery_version,
-            race.outcome, valid, canonical_pointer, browser_pointer,
+            race.outcome, valid, None, browser_pointer,
         )
         prior = records.get(race.race_id)
         prior_sessions = prior.get("sessions", []) if isinstance(prior, dict) else []
@@ -1058,7 +1057,11 @@ def _retained_record_with_valid_sessions(record: object, request: BatchRequest) 
         _safe_component(race_id, "catalog race_id")
     except ValueError:
         return None
-    sessions = [session for session in record["sessions"] if _retained_session_valid(record, session, request)]
+    sessions = [
+        {**session, "canonical_pointer": None}
+        for session in record["sessions"]
+        if isinstance(session, dict) and _retained_session_valid(record, session, request)
+    ]
     if not sessions:
         return None
     retained = {key: value for key, value in record.items() if key not in {"sessions"}}
@@ -1081,7 +1084,10 @@ def _retained_session_valid(record: object, session: object, request: BatchReque
         return False
     expected_canonical = f"canonical/{race_id}/sessions/{code}/current.json"
     expected_browser = f"browser/{race_id}/sessions/{code}/browser-current.json"
-    if session.get("canonical_pointer") != expected_canonical or session.get("browser_pointer") != expected_browser:
+    if (
+        session.get("canonical_pointer") not in (None, expected_canonical)
+        or session.get("browser_pointer") != expected_browser
+    ):
         return False
     try:
         if session_code_from_generation_id(generation_id, race_id) != code:

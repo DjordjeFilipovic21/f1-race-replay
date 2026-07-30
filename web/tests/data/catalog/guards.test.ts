@@ -18,7 +18,7 @@ const readySession = {
   delivery_version: '2024-round-05-r',
   outcome: 'generated',
   validated: true,
-  canonical_pointer: 'canonical/2024-round-05/sessions/r/current.json',
+  canonical_pointer: null,
   browser_pointer: 'browser/2024-round-05/sessions/r/browser-current.json',
 }
 
@@ -49,7 +49,7 @@ describe('catalog v2 guards and selection', () => {
     expect(() => parseCatalogV2(catalog({ extra: true }))).toThrow('not allowed')
   })
 
-  test('only validated sessions with complete artifact references are replay-ready', () => {
+  test('only validated sessions with complete browser artifact references are replay-ready', () => {
     const missingPointer = { ...readySession, browser_pointer: null }
     expect(isSessionReplayReady(missingPointer)).toBe(false)
     expect(getReplayReadySessions(parseCatalogV2(catalog({ races: [{

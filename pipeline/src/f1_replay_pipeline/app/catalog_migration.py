@@ -356,8 +356,7 @@ def migrate_catalog_v1_to_v2(
         )
         session = CatalogV2SessionRecord(
             session_code, _session_name(session_code), generation_id, delivery_version,
-            str(source.get("outcome") or "generated"), True,
-            f"canonical/{race_id}/sessions/{session_code}/current.json",
+            str(source.get("outcome") or "generated"), True, None,
             f"browser/{race_id}/sessions/{session_code}/browser-current.json",
         )
         coordinates = resolve_venue_coordinates(

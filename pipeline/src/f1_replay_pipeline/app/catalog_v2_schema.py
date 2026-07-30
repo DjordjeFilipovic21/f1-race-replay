@@ -113,19 +113,19 @@ class CatalogV2SessionRecord:
                 _require_safe_text(value, label)
         pointers = (self.canonical_pointer, self.browser_pointer)
         if any(pointer is not None for pointer in pointers):
-            if not all(pointer is not None for pointer in pointers):
-                raise ValueError("canonical_pointer and browser_pointer must be provided together")
             if self.generation_id is None or self.delivery_version is None:
                 raise ValueError("pointers require generation_id and delivery_version")
-            _require_pointer(self.canonical_pointer, "canonical_pointer")
-            _require_pointer(self.browser_pointer, "browser_pointer")
+            if self.canonical_pointer is not None:
+                _require_pointer(self.canonical_pointer, "canonical_pointer")
+            if self.browser_pointer is not None:
+                _require_pointer(self.browser_pointer, "browser_pointer")
             if not self.validated:
                 raise ValueError("unvalidated sessions must not claim pointer paths")
         if self.validated and (
             self.generation_id is None or self.delivery_version is None
-            or self.canonical_pointer is None or self.browser_pointer is None
+            or self.browser_pointer is None
         ):
-            raise ValueError("validated sessions require complete artifact references")
+            raise ValueError("validated sessions require a complete browser artifact reference")
 
     def to_dict(self) -> dict[str, object]:
         return {
