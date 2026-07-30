@@ -233,3 +233,37 @@ test('switches screens on browser navigation while retaining StrictMode stale-lo
   expect(activeController.dispose).toHaveBeenCalledOnce()
   unmount()
 })
+
+test('uses directional transitions for browser back and forward navigation', async () => {
+  const directions: string[] = []
+  Object.defineProperty(document, 'startViewTransition', {
+    configurable: true,
+    value: (update: () => void) => {
+      directions.push(document.documentElement.dataset.pageTransitionDirection ?? '')
+      update()
+      return {
+        finished: Promise.resolve(),
+        ready: Promise.resolve(),
+        skipTransition: vi.fn(),
+        types: new Set<string>(),
+        updateCallbackDone: Promise.resolve(),
+      } as unknown as ViewTransition
+    },
+  })
+  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=r')
+  render(<App />)
+  expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
+
+  act(() => {
+    window.history.pushState(null, '', '/')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  expect(await screen.findByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
+
+  act(() => {
+    window.history.pushState(null, '', '/?year=2024&race=race-1&session=r')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
+  expect(directions).toEqual(['backward', 'forward'])
+})

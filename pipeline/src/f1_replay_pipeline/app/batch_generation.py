@@ -820,7 +820,8 @@ def publish_catalog(
             for item in prior_sessions
             if isinstance(item, dict) and isinstance(item.get("session_code"), str)
         }
-        sessions[code] = session.to_dict()
+        if valid or code not in sessions:
+            sessions[code] = session.to_dict()
         record: dict[str, object] = {
             "race_id": race.race_id,
             "round_number": race.round_number,
@@ -872,6 +873,10 @@ def _publish_race_visual_metadata(
         "latitude": coordinates.latitude,
         "longitude": coordinates.longitude,
     }
+    prior_visual = prior.get("visual") if prior is not None else None
+    prior_preview = prior_visual.get("circuitPreview") if isinstance(prior_visual, dict) else None
+    if isinstance(prior_preview, str):
+        visual["circuitPreview"] = prior_preview
     if valid:
         preview = _read_circuit_preview_source(request.browser_root / race.race_id, session_code)
         if preview is not None:
@@ -1012,20 +1017,26 @@ def _retained_catalog_records(root: Path, request: BatchRequest) -> dict[str, di
     """
     path = root / "catalog.json"
     try:
-        _require_no_follow_directory(root, "season catalog root")
-        catalog_file = read_regular_file_no_follow(path, "season catalog")
-        catalog = json.loads(catalog_file.data)
-        if catalog.get("schemaVersion") != CATALOG_SCHEMA_VERSION or catalog.get("year") != request.year or not isinstance(catalog.get("races"), list):
-            return {}
-        records = {}
-        for record in catalog["races"]:
-            retained = _retained_record_with_valid_sessions(record, request)
-            if retained is not None:
-                records[retained["race_id"]] = retained
-        verify_regular_file_identity(path, catalog_file, "season catalog")
-        return records
-    except Exception:
+        os.lstat(path)
+    except FileNotFoundError:
         return {}
+    _require_no_follow_directory(root, "season catalog root")
+    catalog_file = read_regular_file_no_follow(path, "season catalog")
+    catalog = json.loads(catalog_file.data)
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("schemaVersion") != CATALOG_SCHEMA_VERSION
+        or catalog.get("year") != request.year
+        or not isinstance(catalog.get("races"), list)
+    ):
+        raise ValueError("existing season catalog is malformed or belongs to another season")
+    records = {}
+    for record in catalog["races"]:
+        retained = _retained_record_with_valid_sessions(record, request)
+        if retained is not None:
+            records[retained["race_id"]] = retained
+    verify_regular_file_identity(path, catalog_file, "season catalog")
+    return records
 
 
 def _retained_record_valid(record: object, request: BatchRequest) -> bool:

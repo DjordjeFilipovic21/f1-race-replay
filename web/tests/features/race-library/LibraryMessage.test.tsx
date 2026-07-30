@@ -56,7 +56,7 @@ describe('LibraryMessage', () => {
 
     const retryButton = screen.getByRole('button', { name: 'Retry' })
     expect(retryButton).toBeTruthy()
-    
+
     fireEvent.click(retryButton)
     expect(onRetry).toHaveBeenCalledOnce()
   })

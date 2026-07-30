@@ -573,6 +573,34 @@ describe('RaceGlobe', () => {
       expect(document.querySelector('.race-globe__marker')).toBeTruthy()
     })
 
+    test('stops an active journey when reduced motion is enabled', () => {
+      const raceA = createRace({
+        race_id: 'race-a',
+        visual: { latitude: 26.0325, longitude: 50.5106 },
+      })
+      const { rerender } = render(<RaceGlobe race={raceA} />)
+      const raceB = createRace({
+        race_id: 'race-b',
+        event_name: 'Monaco Grand Prix',
+        visual: { latitude: 43.7389, longitude: 7.4194 },
+      })
+      act(() => {
+        rerender(<RaceGlobe race={raceB} />)
+      })
+      expect(window.requestAnimationFrame).toHaveBeenCalled()
+
+      act(() => {
+        matchMediaMatches = true
+        for (const listener of matchMediaListeners) {
+          listener({ matches: true } as MediaQueryListEvent)
+        }
+      })
+
+      expect(window.cancelAnimationFrame).toHaveBeenCalled()
+      expect(document.querySelector('.race-globe__marker')).toBeTruthy()
+      expect(document.querySelector('.race-globe__journey')).toBeNull()
+    })
+
     test('resumes animation when reduced motion is disabled mid-lifecycle via change event', () => {
       matchMediaMatches = true
 

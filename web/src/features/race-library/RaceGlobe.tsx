@@ -17,6 +17,8 @@ const DEFAULT_ROTATION: GlobeRotation = [0, 0, 0]
 const GRATICULE_STEP_DEGREES = 15
 
 const HAS_WORLD_GEOMETRY = worldLand.features.length > 0
+const GLOBE_GRATICULE = geoGraticule()
+  .step([GRATICULE_STEP_DEGREES, GRATICULE_STEP_DEGREES])()
 
 interface GlobeCoordinate {
   readonly latitude: number
@@ -56,6 +58,8 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
       : { latitude: 0, longitude: 0 },
   )
   const previousVisualRef = useRef(visual)
+  const targetVisualRef = useRef(visual)
+  targetVisualRef.current = visual
   const animationFrameRef = useRef<number | null>(null)
   const reducedMotionRef = useRef(false)
   const mapCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -71,6 +75,30 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
 
     const handleChange = (event: MediaQueryListEvent): void => {
       reducedMotionRef.current = event.matches
+      if (!event.matches) return
+
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      const targetVisual = targetVisualRef.current
+      if (targetVisual !== null && isValidCoordinate(targetVisual.latitude, targetVisual.longitude)) {
+        currentCoordinateRef.current = {
+          latitude: targetVisual.latitude,
+          longitude: targetVisual.longitude,
+        }
+        currentRotationRef.current = computeRotation(
+          targetVisual.latitude,
+          targetVisual.longitude,
+          currentRotationRef.current,
+        )
+      } else {
+        currentCoordinateRef.current = { latitude: 0, longitude: 0 }
+        currentRotationRef.current = DEFAULT_ROTATION
+      }
+      setJourneySource(null)
+      setIsAnimating(false)
+      requestGeometryRender((version) => version + 1)
     }
 
     mediaQuery.addEventListener('change', handleChange)
@@ -340,7 +368,7 @@ function drawGlobeMap(rotation: GlobeRotation, canvas: HTMLCanvasElement | null)
   context.fill()
 
   context.beginPath()
-  pathGenerator(geoGraticule().step([GRATICULE_STEP_DEGREES, GRATICULE_STEP_DEGREES])())
+  pathGenerator(GLOBE_GRATICULE)
   context.strokeStyle = 'rgb(214 255 0 / 14%)'
   context.lineWidth = 0.5
   context.stroke()

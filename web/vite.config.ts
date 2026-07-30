@@ -17,6 +17,21 @@ export default defineConfig(({ command, mode }) => {
     define: {
       'import.meta.env.VITE_REPLAY_SEASONS_BASE_URL': JSON.stringify(seasonsBaseUrl),
     },
+    build: {
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            minSize: 20_000,
+            maxSize: 450_000,
+            groups: [
+              { name: 'react-vendor', test: /node_modules\/(?:react|react-dom|scheduler)\// },
+              { name: 'geo-vendor', test: /node_modules\/(?:d3-geo|topojson-client|world-atlas)\// },
+              { name: 'dnd-vendor', test: /node_modules\/@dnd-kit\// },
+            ],
+          },
+        },
+      },
+    },
     server: {
       fs: { allow: [workspaceRoot] },
     },

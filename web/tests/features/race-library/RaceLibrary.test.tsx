@@ -91,7 +91,7 @@ describe('RaceLibraryPage', () => {
     expect(screen.getByText('Network timeout')).toBeTruthy()
     const retryButton = screen.getByRole('button', { name: 'Retry' })
     expect(retryButton).toBeTruthy()
-    
+
     fireEvent.click(retryButton)
     expect(onRetry).toHaveBeenCalledOnce()
   })

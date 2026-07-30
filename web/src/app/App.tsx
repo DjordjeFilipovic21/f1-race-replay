@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { resolveSessionBrowserPointer, selectReplaySession } from '../data/catalog/guards'
 import type { CatalogSelection, CatalogV2 } from '../data/catalog/types'
 import { RaceLibraryPage } from '../features/race-library/RaceLibraryPage'
@@ -27,7 +27,10 @@ interface LocalSelection {
 
 export default function App() {
   const seasonsBaseUrl = import.meta.env.VITE_REPLAY_SEASONS_BASE_URL ?? DEFAULT_SEASONS_BASE_URL
-  const [urlSelection, setUrlSelection] = useUrlSelection()
+  const transitionPopState = useCallback((selection: UrlSelection | null, update: () => void) => {
+    runPageTransition(isCompleteSelection(selection) ? 'forward' : 'backward', update)
+  }, [])
+  const [urlSelection, setUrlSelection] = useUrlSelection(transitionPopState)
   const [localSelection, setLocalSelection] = useState<LocalSelection>(() => toLocalSelection(urlSelection))
   const requestedYear = urlSelection?.year ?? localSelection.year
   const availableYears = resolveAvailableYears(import.meta.env.VITE_REPLAY_SEASON_YEARS, requestedYear)

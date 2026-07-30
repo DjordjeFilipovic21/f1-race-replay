@@ -2,16 +2,30 @@ import { useCallback, useEffect, useState } from 'react'
 import { parseSelection, serializeSelection, type SelectionUpdate, type UrlSelection } from './adapter'
 
 export type SetUrlSelection = (selection: SelectionUpdate) => void
+export type UrlPopStateTransition = (
+  selection: UrlSelection | null,
+  update: () => void,
+) => void
 
-export function useUrlSelection(): readonly [UrlSelection | null, SetUrlSelection] {
+export function useUrlSelection(
+  transitionPopState?: UrlPopStateTransition,
+): readonly [UrlSelection | null, SetUrlSelection] {
   const readSelection = useCallback(() => parseSelection(new URLSearchParams(globalThis.location.search)), [])
   const [selection, setSelection] = useState<UrlSelection | null>(readSelection)
 
   useEffect(() => {
-    const handlePopState = () => setSelection(readSelection())
+    const handlePopState = () => {
+      const nextSelection = readSelection()
+      const update = () => setSelection(nextSelection)
+      if (transitionPopState === undefined) {
+        update()
+      } else {
+        transitionPopState(nextSelection, update)
+      }
+    }
     globalThis.addEventListener('popstate', handlePopState)
     return () => globalThis.removeEventListener('popstate', handlePopState)
-  }, [readSelection])
+  }, [readSelection, transitionPopState])
 
   const updateSelection = useCallback((nextSelection: SelectionUpdate) => {
     const search = serializeSelection(nextSelection, globalThis.location.search)

@@ -632,8 +632,24 @@ def test_catalog_merges_prior_validated_races_atomically(tmp_path: Path, monkeyp
 def test_catalog_drops_malformed_prior_references_without_deep_validation(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "canonical").mkdir()
     (tmp_path / "catalog.json").write_text(json.dumps({
+        "schemaVersion": 2,
         "year": 2024,
-        "races": [{"race_id": "../outside", "validated": True, "canonical": "canonical/../outside/current.json", "browser": "browser/../outside/browser-current.json"}],
+        "atomicAcrossRaces": False,
+        "races": [{
+            "race_id": "../outside",
+            "round_number": 1,
+            "event_name": "Unsafe",
+            "sessions": [{
+                "session_code": "r",
+                "session_name": "Race",
+                "generation_id": "2024-round-01-r",
+                "delivery_version": "2024-round-01-r",
+                "outcome": "generated",
+                "validated": True,
+                "canonical_pointer": "canonical/../outside/current.json",
+                "browser_pointer": "browser/../outside/browser-current.json",
+            }],
+        }],
     }), encoding="utf-8")
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._outputs_valid", lambda *_paths: pytest.fail("retained output was deeply validated"))
 
@@ -730,6 +746,73 @@ def test_failed_catalog_session_has_no_unproven_pointer_paths(tmp_path: Path, mo
     assert session["validated"] is False
     assert session["canonical_pointer"] is None
     assert session["browser_pointer"] is None
+
+
+def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    race_id = "2024-round-01-bahrain-grand-prix"
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(
+            race_id, 1, "generated", "2024-round-01-r-good", "delivery-good",
+            session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
+        ),
+    )))
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._retained_session_valid", lambda *_args: True)
+    monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: False)
+
+    publish_catalog(BatchResult(request, (
+        BatchRaceResult(
+            race_id, 1, "failed", "2024-round-01-r-failed", detail="offline failure",
+            session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
+        ),
+    )))
+
+    session = json.loads((tmp_path / "catalog.json").read_bytes())["races"][0]["sessions"][0]
+    assert session["generation_id"] == "2024-round-01-r-good"
+    assert session["delivery_version"] == "delivery-good"
+    assert session["outcome"] == "generated"
+    assert session["validated"] is True
+    assert session["canonical_pointer"] == f"canonical/{race_id}/sessions/r/current.json"
+    assert session["browser_pointer"] == f"browser/{race_id}/sessions/r/browser-current.json"
+
+
+def test_catalog_read_failure_preserves_existing_catalog(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps({
+        "schemaVersion": 2, "year": 2024, "atomicAcrossRaces": False, "races": [],
+    }), encoding="utf-8")
+    original_catalog = catalog_path.read_bytes()
+
+    def fail_catalog_read(*_args) -> None:
+        raise PermissionError("catalog temporarily unreadable")
+
+    monkeypatch.setattr(
+        "f1_replay_pipeline.app.batch_generation.read_regular_file_no_follow",
+        fail_catalog_read,
+    )
+
+    with pytest.raises(PermissionError, match="temporarily unreadable"):
+        publish_catalog(BatchResult(request, ()))
+
+    assert catalog_path.read_bytes() == original_catalog
+
+
+def test_malformed_existing_catalog_is_not_replaced_by_partial_publication(tmp_path: Path) -> None:
+    request = _request(tmp_path)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        publish_catalog(BatchResult(request, (
+            BatchRaceResult(
+                "2024-round-01", 1, "failed", detail="offline failure",
+                session_code="r", session_name="Race",
+            ),
+        )))
+
+    assert catalog_path.read_text(encoding="utf-8") == "{not-json"
 
 
 def test_resume_selects_requested_session_pointer_for_readable_race_folder(tmp_path: Path, monkeypatch) -> None:
