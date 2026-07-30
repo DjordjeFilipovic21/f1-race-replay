@@ -168,7 +168,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     {
       id: 'telemetry',
       label: 'Telemetry',
-      columns: 2,
+      columns: 1,
       element: <DriverTelemetryPanel drivers={drivers} selectedDriverId={selectedDriverId} snapshot={snapshot.replay} />,
     },
     {

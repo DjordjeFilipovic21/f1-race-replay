@@ -35,6 +35,7 @@ test('validates sortable IDs against the registered panel IDs', () => {
 })
 
 test('registers the analysis panels with their correct column widths', () => {
+  expect(replayPanelColumns('telemetry')).toBe(1)
   expect(replayPanelColumns('lap-analysis')).toBe(1)
   expect(replayPanelColumns('strategy')).toBe(2)
   expect(replayPanelColumns('pit-loss-position')).toBe(1)
@@ -101,7 +102,7 @@ test('reconciles a changed registry while retaining known pinning and order', ()
   ])
 })
 
-test('adds the two-column telemetry panel to legacy layouts without changing saved choices', () => {
+test('adds the one-column telemetry panel to legacy layouts without changing saved choices', () => {
   expect(reconcileReplayPanelLayout(['player', 'track-map', 'leaderboard', 'driver', 'telemetry'] as const, layout)).toEqual([
     { id: 'player', pinned: true, desktopColumnStart: 1 },
     { id: 'track-map', pinned: false, desktopColumnStart: 2 },

@@ -12,7 +12,6 @@
   .live-track-map__svg { min-height: 20rem; }
   .replay-workspace { align-items: start; gap: var(--replay-workspace-gap); grid-auto-flow: dense; grid-auto-rows: var(--replay-workspace-row-height); grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
-  .driver-telemetry-panel__layout { grid-template-columns: minmax(9rem, .8fr) minmax(0, 1fr); }
   .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .replay-workspace:fullscreen { padding: 1.5rem; }
 }
@@ -38,7 +37,7 @@
   button, select { transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease; }
   .live-leaderboard__table tbody tr { transition: background-color 160ms ease; }
   .live-leaderboard__table tbody tr:hover { background: var(--surface-muted); }
-  .driver-telemetry-panel__gauge-value { transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
+  .driver-telemetry-panel__speed-value, .driver-telemetry-panel__throttle-value, .driver-telemetry-panel__brake-value { transition: stroke 200ms ease; }
 }
 
 @media (prefers-reduced-motion: reduce) {
