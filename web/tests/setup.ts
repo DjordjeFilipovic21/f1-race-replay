@@ -24,3 +24,11 @@ if (globalThis.ResizeObserver === undefined) {
     writable: true,
   })
 }
+
+if (globalThis.HTMLCanvasElement !== undefined) {
+  Object.defineProperty(globalThis.HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value: () => null,
+    writable: true,
+  })
+}

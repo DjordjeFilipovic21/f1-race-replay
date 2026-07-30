@@ -1,22 +1,22 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { geoInterpolate, geoPath } from 'd3-geo'
+import { memo, useEffect, useRef, useState } from 'react'
+import { geoGraticule, geoInterpolate, geoPath } from 'd3-geo'
 import type { GeoProjection } from 'd3-geo'
 import type { CatalogV2Race } from '../../data/catalog/types'
 import {
-  buildGraticulePath,
   computeRotation,
   createOrthographicProjection,
-  worldCountries,
+  worldLand,
   type GlobeRotation,
 } from '../../geo/globe-projection'
 
 const DEFAULT_GLOBE_SIZE = 400
-const ANIMATION_DURATION_MS = 400
+const CANVAS_PIXEL_RATIO = 2
+const MARKER_EXIT_DURATION_MS = 300
+const TRAVEL_DURATION_MS = 900
 const DEFAULT_ROTATION: GlobeRotation = [0, 0, 0]
 const GRATICULE_STEP_DEGREES = 15
 
-const HAS_WORLD_GEOMETRY = worldCountries.features.length > 0
-const JOURNEY_SAMPLE_COUNT = 32
+const HAS_WORLD_GEOMETRY = worldLand.features.length > 0
 
 interface GlobeCoordinate {
   readonly latitude: number
@@ -30,8 +30,8 @@ export interface RaceGlobeProps {
 /**
  * Accessible orthographic globe that rotates toward the selected race location.
  *
- * - Rotation is animated with requestAnimationFrame (~400ms, ease-out) along the
- *   shortest longitude path when the selected race changes.
+ * - Rotation is animated with requestAnimationFrame along a spherical path
+ *   between race coordinates.
  * - No continuous autoplay; the globe only rotates on selection changes.
  * - Honours prefers-reduced-motion by snapping to the target rotation.
  * - Renders a static placeholder when visual metadata is absent or invalid.
@@ -46,12 +46,20 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     ? computeRotation(visual.latitude, visual.longitude)
     : DEFAULT_ROTATION
 
-  const [displayRotation, setDisplayRotation] = useState<GlobeRotation>(initialRotation)
+  const [, requestGeometryRender] = useState(0)
   const [journeySource, setJourneySource] = useState<GlobeCoordinate | null>(null)
+  const [isAnimating, setIsAnimating] = useState(false)
   const currentRotationRef = useRef<GlobeRotation>(initialRotation)
+  const currentCoordinateRef = useRef<GlobeCoordinate>(
+    hasValidVisual && visual !== null
+      ? { latitude: visual.latitude, longitude: visual.longitude }
+      : { latitude: 0, longitude: 0 },
+  )
   const previousVisualRef = useRef(visual)
   const animationFrameRef = useRef<number | null>(null)
   const reducedMotionRef = useRef(false)
+  const mapCanvasRef = useRef<HTMLCanvasElement>(null)
+  const journeyRef = useRef<SVGPathElement>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -86,14 +94,20 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
 
     if (!hasValidVisual) {
       setJourneySource(null)
+      setIsAnimating(false)
       currentRotationRef.current = DEFAULT_ROTATION
-      setDisplayRotation(DEFAULT_ROTATION)
+      currentCoordinateRef.current = { latitude: 0, longitude: 0 }
+      requestGeometryRender((version) => version + 1)
       return
     }
 
+    const targetCoordinate: GlobeCoordinate = {
+      latitude: visual.latitude,
+      longitude: visual.longitude,
+    }
     const targetRotation = computeRotation(
-      visual.latitude,
-      visual.longitude,
+      targetCoordinate.latitude,
+      targetCoordinate.longitude,
       currentRotationRef.current,
     )
 
@@ -101,47 +115,71 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
       return
     }
 
+    const startCoordinate = currentCoordinateRef.current
     setJourneySource(previousVisual !== null
       && isValidCoordinate(previousVisual.latitude, previousVisual.longitude)
       && (previousVisual.latitude !== visual.latitude || previousVisual.longitude !== visual.longitude)
-      ? { latitude: previousVisual.latitude, longitude: previousVisual.longitude }
+      ? startCoordinate
       : null)
 
     if (rotationEquals(currentRotationRef.current, targetRotation)) {
+      currentCoordinateRef.current = targetCoordinate
+      setJourneySource(null)
+      setIsAnimating(false)
       return
     }
 
     if (reducedMotionRef.current) {
       currentRotationRef.current = targetRotation
-      setDisplayRotation(targetRotation)
+      currentCoordinateRef.current = targetCoordinate
+      requestGeometryRender((version) => version + 1)
+      setJourneySource(null)
+      setIsAnimating(false)
       return
     }
 
-    const startRotation: GlobeRotation = [
-      currentRotationRef.current[0],
-      currentRotationRef.current[1],
-      currentRotationRef.current[2],
-    ]
+    setIsAnimating(true)
+    const interpolateCoordinate = geoInterpolate(
+      [startCoordinate.longitude, startCoordinate.latitude],
+      [targetCoordinate.longitude, targetCoordinate.latitude],
+    )
     const startTime = performance.now()
 
     const animate = (timestamp: number): void => {
       const elapsed = timestamp - startTime
-      const linearProgress = Math.min(elapsed / ANIMATION_DURATION_MS, 1)
-      const easedProgress = easeOutCubic(linearProgress)
+      if (elapsed < MARKER_EXIT_DURATION_MS) {
+        animationFrameRef.current = requestAnimationFrame(animate)
+        return
+      }
 
-      const interpolated: GlobeRotation = [
-        startRotation[0] + (targetRotation[0] - startRotation[0]) * easedProgress,
-        startRotation[1] + (targetRotation[1] - startRotation[1]) * easedProgress,
-        startRotation[2] + (targetRotation[2] - startRotation[2]) * easedProgress,
-      ]
+      const linearProgress = Math.min(
+        (elapsed - MARKER_EXIT_DURATION_MS) / TRAVEL_DURATION_MS,
+        1,
+      )
+      const easedProgress = easeInOutCubic(linearProgress)
+      const [longitude, latitude] = interpolateCoordinate(easedProgress)
+      const interpolatedCoordinate = { latitude, longitude }
+      const interpolated = computeRotation(latitude, longitude, currentRotationRef.current)
 
+      currentCoordinateRef.current = interpolatedCoordinate
       currentRotationRef.current = interpolated
-      setDisplayRotation(interpolated)
+      updateGlobeGeometry(
+        interpolated,
+        startCoordinate,
+        targetCoordinate,
+        mapCanvasRef.current,
+        journeyRef.current,
+        easedProgress,
+      )
 
       if (linearProgress < 1) {
         animationFrameRef.current = requestAnimationFrame(animate)
       } else {
+        currentCoordinateRef.current = targetCoordinate
         currentRotationRef.current = targetRotation
+        requestGeometryRender((version) => version + 1)
+        setIsAnimating(false)
+        setJourneySource(null)
         animationFrameRef.current = null
       }
     }
@@ -156,44 +194,31 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     }
   }, [visual, hasValidVisual])
 
-  const projection = useMemo(
-    () => createProjectionAtRotation(displayRotation, DEFAULT_GLOBE_SIZE),
-    [displayRotation],
-  )
+  useEffect(() => {
+    drawGlobeMap(currentRotationRef.current, mapCanvasRef.current)
+  }, [visual, hasValidVisual, isAnimating])
 
-  const pathGenerator = useMemo(() => geoPath(projection), [projection])
-
-  const graticulePath = useMemo(
-    () => buildGraticulePath(projection, GRATICULE_STEP_DEGREES),
-    [projection],
-  )
-
-  const countryPaths = useMemo(() => {
-    return worldCountries.features.map((feature) => ({
-      key: feature.id != null ? String(feature.id) : feature.properties?.name ?? '',
-      d: pathGenerator(feature) ?? '',
-    }))
-  }, [pathGenerator])
-
-  const journeyPath = useMemo(() => {
-    if (!hasValidVisual || visual === null || journeySource === null) return ''
-    const interpolate = geoInterpolate(
-      [journeySource.longitude, journeySource.latitude],
-      [visual.longitude, visual.latitude],
-    )
-    const coordinates = Array.from(
-      { length: JOURNEY_SAMPLE_COUNT + 1 },
-      (_, index) => interpolate(index / JOURNEY_SAMPLE_COUNT),
-    )
-    return pathGenerator({ type: 'LineString', coordinates }) ?? ''
-  }, [hasValidVisual, journeySource, pathGenerator, visual])
-
-  const markerPosition = useMemo(() => {
-    if (!hasValidVisual || visual === null) return null
-    const projected = projection([visual.longitude, visual.latitude])
-    if (projected === null) return null
-    return { x: projected[0], y: projected[1] }
-  }, [projection, hasValidVisual, visual])
+  const projection = createProjectionAtRotation(currentRotationRef.current, DEFAULT_GLOBE_SIZE)
+  const projectedMarker = hasValidVisual && visual !== null
+    ? projection([visual.longitude, visual.latitude])
+    : null
+  const previousVisual = previousVisualRef.current
+  const selectionWillAnimate = previousVisual !== visual
+    && previousVisual !== null
+    && visual !== null
+    && isValidCoordinate(previousVisual.latitude, previousVisual.longitude)
+    && (previousVisual.latitude !== visual.latitude || previousVisual.longitude !== visual.longitude)
+    && !reducedMotionRef.current
+  const showTransition = isAnimating || selectionWillAnimate
+  const transitionMarker = showTransition
+    ? projection([
+        currentCoordinateRef.current.longitude,
+        currentCoordinateRef.current.latitude,
+      ])
+    : projectedMarker
+  const markerPosition = transitionMarker === null
+    ? null
+    : { x: transitionMarker[0], y: transitionMarker[1] }
 
   if (!HAS_WORLD_GEOMETRY) {
     return (
@@ -214,7 +239,14 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     : `Static globe displayed for ${eventName}. Location coordinates are not available.`
 
   return (
-    <div className={`race-globe${hasValidVisual ? '' : ' race-globe--placeholder'}`}>
+    <div className={`race-globe${hasValidVisual ? '' : ' race-globe--placeholder'}${showTransition ? ' race-globe--animating' : ''}`}>
+      <canvas
+        ref={mapCanvasRef}
+        className="race-globe__map"
+        width={DEFAULT_GLOBE_SIZE * CANVAS_PIXEL_RATIO}
+        height={DEFAULT_GLOBE_SIZE * CANVAS_PIXEL_RATIO}
+        aria-hidden="true"
+      />
       <svg
         className="race-globe__canvas"
         role="img"
@@ -224,24 +256,32 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
       >
         <title>{ariaLabel}</title>
         <desc>{description}</desc>
+        <defs>
+          <clipPath id="race-globe-sphere-clip">
+            <circle
+              cx={DEFAULT_GLOBE_SIZE / 2}
+              cy={DEFAULT_GLOBE_SIZE / 2}
+              r={DEFAULT_GLOBE_SIZE * 0.45}
+            />
+          </clipPath>
+        </defs>
         <circle
           className="race-globe__sphere"
           cx={DEFAULT_GLOBE_SIZE / 2}
           cy={DEFAULT_GLOBE_SIZE / 2}
           r={DEFAULT_GLOBE_SIZE * 0.45}
         />
-        <path className="race-globe__graticule" d={graticulePath} />
-        <g className="race-globe__countries">
-          {countryPaths.map(({ key, d }) => (
-            <path key={key} className="race-globe__country" d={d} />
-          ))}
-        </g>
-        {journeyPath !== '' && (
+        {isAnimating && journeySource !== null && visual !== null && (
           <path
-            key={`${journeySource?.longitude ?? 0}-${visual?.longitude ?? 0}`}
+            ref={journeyRef}
             className="race-globe__journey"
-            d={journeyPath}
+            d={createJourneyPath(projection, journeySource, {
+              latitude: visual.latitude,
+              longitude: visual.longitude,
+            })}
             pathLength={1}
+            clipPath="url(#race-globe-sphere-clip)"
+            style={{ strokeDashoffset: 1 }}
           />
         )}
         {markerPosition !== null && (
@@ -269,8 +309,81 @@ function createProjectionAtRotation(rotation: GlobeRotation, size: number): GeoP
   return projection.rotate([rotation[0], rotation[1], rotation[2]])
 }
 
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
+function updateGlobeGeometry(
+  rotation: GlobeRotation,
+  source: GlobeCoordinate,
+  target: GlobeCoordinate,
+  canvas: HTMLCanvasElement | null,
+  journey: SVGPathElement | null,
+  progress: number,
+): void {
+  drawGlobeMap(rotation, canvas)
+  const projection = createProjectionAtRotation(rotation, DEFAULT_GLOBE_SIZE)
+  if (journey === null) return
+  journey.setAttribute('d', createJourneyPath(projection, source, target))
+  journey.style.strokeDashoffset = String(1 - (2 * progress))
+}
+
+function drawGlobeMap(rotation: GlobeRotation, canvas: HTMLCanvasElement | null): void {
+  const context = canvas?.getContext('2d')
+  if (context === null || context === undefined) return
+  const projection = createProjectionAtRotation(rotation, DEFAULT_GLOBE_SIZE)
+  const pathGenerator = geoPath(projection, context)
+
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.clearRect(0, 0, DEFAULT_GLOBE_SIZE * CANVAS_PIXEL_RATIO, DEFAULT_GLOBE_SIZE * CANVAS_PIXEL_RATIO)
+  context.setTransform(CANVAS_PIXEL_RATIO, 0, 0, CANVAS_PIXEL_RATIO, 0, 0)
+
+  context.beginPath()
+  pathGenerator({ type: 'Sphere' })
+  context.fillStyle = '#0f1519'
+  context.fill()
+
+  context.beginPath()
+  pathGenerator(geoGraticule().step([GRATICULE_STEP_DEGREES, GRATICULE_STEP_DEGREES])())
+  context.strokeStyle = 'rgb(214 255 0 / 14%)'
+  context.lineWidth = 0.5
+  context.stroke()
+
+  context.beginPath()
+  pathGenerator(worldLand)
+  context.fillStyle = '#182027'
+  context.strokeStyle = '#44505a'
+  context.lineJoin = 'round'
+  context.lineWidth = 0.75
+  context.fill()
+  context.stroke()
+}
+
+function createJourneyPath(
+  projection: GeoProjection,
+  source: GlobeCoordinate,
+  target: GlobeCoordinate,
+): string {
+  const start = projection([source.longitude, source.latitude])
+  const end = projection([target.longitude, target.latitude])
+  if (start === null || end === null) return ''
+
+  const deltaX = end[0] - start[0]
+  const deltaY = end[1] - start[1]
+  const distance = Math.hypot(deltaX, deltaY)
+  if (distance === 0) return `M ${start[0]} ${start[1]} L ${end[0]} ${end[1]}`
+
+  const midpointX = (start[0] + end[0]) / 2
+  const midpointY = (start[1] + end[1]) / 2
+  const curveDistance = Math.min((distance / DEFAULT_GLOBE_SIZE) * 100, 100)
+  const normalX = -deltaY / distance
+  const normalY = deltaX / distance
+  const controlX = midpointX + (normalX * curveDistance)
+  const controlY = midpointY + (normalY * curveDistance)
+
+  return `M ${start[0]} ${start[1]} Q ${controlX} ${controlY} ${end[0]} ${end[1]}`
+}
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5
+    ? 4 * Math.pow(t, 3)
+    : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
 function isValidCoordinate(latitude: number, longitude: number): boolean {

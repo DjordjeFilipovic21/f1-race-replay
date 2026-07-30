@@ -64,16 +64,26 @@
   width: 100%;
 }
 
+.race-globe__map,
 .race-globe__canvas {
   block-size: 100%;
   display: block;
+  grid-area: 1 / 1;
   inline-size: 100%;
   max-block-size: 100%;
   max-inline-size: 100%;
 }
 
+.race-globe__map {
+  z-index: 1;
+}
+
+.race-globe__canvas {
+  z-index: 2;
+}
+
 .race-globe__sphere {
-  fill: color-mix(in oklch, var(--accent) 6%, var(--surface));
+  fill: none;
   stroke: color-mix(in oklch, var(--accent) 28%, var(--border-strong));
   stroke-width: 1;
 }
@@ -94,19 +104,32 @@
 .race-globe__marker {
   fill: var(--accent);
   filter: drop-shadow(0 0 7px rgb(214 255 0 / 85%));
+  opacity: 1;
   stroke: #f4f1ea;
   stroke-width: 1.5;
+  transform: scale(1);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 300ms ease-out,
+    transform 300ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.race-globe--animating .race-globe__marker {
+  opacity: 0;
+  transform: scale(0);
+  transition-timing-function: ease-in;
 }
 
 .race-globe__journey {
-  animation: race-library-journey-draw 900ms ease-out forwards;
   fill: none;
-  filter: drop-shadow(0 0 3px rgb(214 255 0 / 55%));
+  filter:
+    drop-shadow(0 0 3px rgb(214 255 0 / 80%))
+    drop-shadow(0 0 7px rgb(214 255 0 / 30%));
   stroke: var(--accent);
   stroke-dasharray: 1;
-  stroke-dashoffset: 1;
   stroke-linecap: round;
-  stroke-width: 1.5;
+  stroke-width: 2;
 }
 
 .race-globe--placeholder,
@@ -137,8 +160,7 @@
 .circuit-preview {
   align-items: center;
   aspect-ratio: 16 / 10;
-  background:
-    radial-gradient(circle at center, rgb(214 255 0 / 5%), transparent 60%);
+  background: transparent;
   border: 0;
   border-radius: 0;
   display: grid;
@@ -146,7 +168,7 @@
   max-width: 100%;
   min-height: 12rem;
   overflow: hidden;
-  padding: 1rem 2rem;
+  padding: 1.25rem 1.5rem;
   position: relative;
   width: 100%;
 }
@@ -157,25 +179,35 @@
   inline-size: 100%;
   max-block-size: 100%;
   max-inline-size: 100%;
-  transform: perspective(50rem) rotateX(52deg) rotateZ(-4deg);
-  transform-origin: center;
+  overflow: hidden;
+  transform: perspective(35rem) rotateX(50deg) translateY(-6%) scale(0.88);
+  transform-origin: 50% 75%;
 }
 
+.circuit-preview__glow,
 .circuit-preview__path {
   fill: none;
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 0 5px rgb(214 255 0 / 45%));
-  stroke-width: 3;
-  /* One-time draw animation. The dasharray value is intentionally generous
-     so it covers typical circuit path lengths; the `forwards` fill keeps
-     the fully-drawn final state. */
-  stroke-dasharray: 2000;
-  stroke-dashoffset: 2000;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.circuit-preview__glow {
   animation:
-    race-library-circuit-draw 1.8s cubic-bezier(.22, .75, .25, 1) forwards,
-    race-library-circuit-glow 3.5s ease-in-out 1.8s infinite;
+    race-library-circuit-draw 60s cubic-bezier(.16, .58, .2, 1) forwards,
+    race-library-circuit-glow 3.4s ease-in-out infinite;
+  filter: none;
+  opacity: 0.2;
+  stroke-width: 8;
+}
+
+.circuit-preview__path {
+  animation: race-library-circuit-draw 40s cubic-bezier(.16, .58, .2, 1) forwards;
+  filter: drop-shadow(0 0 3px rgb(214 255 0 / 55%));
+  stroke-width: 3;
 }
 
 .circuit-preview__message {
@@ -220,7 +252,7 @@
 
 @keyframes race-library-circuit-draw {
   from {
-    stroke-dashoffset: 2000;
+    stroke-dashoffset: 1;
   }
   to {
     stroke-dashoffset: 0;
@@ -228,14 +260,15 @@
 }
 
 @keyframes race-library-circuit-glow {
-  50% {
-    filter: drop-shadow(0 0 12px rgb(214 255 0 / 80%));
+  0%,
+  100% {
+    opacity: 0.18;
+    stroke-width: 7;
   }
-}
 
-@keyframes race-library-journey-draw {
-  to {
-    stroke-dashoffset: 0;
+  50% {
+    opacity: 0.4;
+    stroke-width: 10;
   }
 }
 
@@ -247,13 +280,13 @@
  * --------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
+  .circuit-preview__glow,
   .circuit-preview__path {
     animation: none;
     stroke-dashoffset: 0;
   }
 
-  .race-globe__journey {
-    animation: none;
-    stroke-dashoffset: 0;
+  .race-globe__marker {
+    transition: none;
   }
 }

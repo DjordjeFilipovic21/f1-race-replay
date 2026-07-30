@@ -169,18 +169,17 @@ describe('RaceGlobe', () => {
   })
 
   describe('geometry rendering', () => {
-    test('renders country paths and a graticule inside the SVG', () => {
+    test('renders the geographic map on a canvas beneath the SVG overlay', () => {
       const race = createRace({
         visual: { latitude: 26.0325, longitude: 50.5106 },
       })
       render(<RaceGlobe race={race} />)
 
-      const countries = document.querySelectorAll('.race-globe__country')
-      expect(countries.length).toBeGreaterThan(0)
-
-      const graticule = document.querySelector('.race-globe__graticule')
-      expect(graticule).toBeTruthy()
-      expect(graticule?.getAttribute('d')).toBeTruthy()
+      const map = document.querySelector('canvas.race-globe__map')
+      expect(map).toBeTruthy()
+      expect(map?.getAttribute('aria-hidden')).toBe('true')
+      expect(map?.getAttribute('width')).toBe('800')
+      expect(map?.getAttribute('height')).toBe('800')
     })
 
     test('renders the sphere background circle', () => {
@@ -238,11 +237,10 @@ describe('RaceGlobe', () => {
       expect(document.querySelector('.race-globe__marker')).toBeNull()
     })
 
-    test('still renders country paths and graticule in placeholder state', () => {
+    test('still renders the geographic map in placeholder state', () => {
       render(<RaceGlobe race={null} />)
 
-      expect(document.querySelectorAll('.race-globe__country').length).toBeGreaterThan(0)
-      expect(document.querySelector('.race-globe__graticule')).toBeTruthy()
+      expect(document.querySelector('canvas.race-globe__map')).toBeTruthy()
     })
 
     test('transitions from valid coordinates to placeholder when race becomes null', () => {
@@ -329,12 +327,17 @@ describe('RaceGlobe', () => {
       expect(window.requestAnimationFrame).toHaveBeenCalled()
     })
 
-    test('draws a clipped geographic journey when moving between races', () => {
+    test('draws and erases a clipped geographic journey while travelling to the next race', () => {
       const raceA = createRace({
         race_id: 'race-a',
         visual: { latitude: 26.0325, longitude: 50.5106 },
       })
       const { rerender } = render(<RaceGlobe race={raceA} />)
+      const initialMarker = document.querySelector('.race-globe__marker')
+      const initialMarkerPosition = {
+        cx: initialMarker?.getAttribute('cx'),
+        cy: initialMarker?.getAttribute('cy'),
+      }
       const raceB = createRace({
         race_id: 'race-b',
         event_name: 'Monaco Grand Prix',
@@ -349,6 +352,29 @@ describe('RaceGlobe', () => {
       expect(journey).toBeTruthy()
       expect(journey?.getAttribute('d')).toBeTruthy()
       expect(journey?.getAttribute('pathLength')).toBe('1')
+      expect(journey?.getAttribute('clip-path')).toBe('url(#race-globe-sphere-clip)')
+      expect(document.querySelector('.race-globe--animating')).toBeTruthy()
+      expect(document.querySelector('.race-globe__marker')?.getAttribute('cx')).toBe(initialMarkerPosition.cx)
+      expect(document.querySelector('.race-globe__marker')?.getAttribute('cy')).toBe(initialMarkerPosition.cy)
+
+      act(() => {
+        flushAllFrames(200)
+      })
+
+      expect((journey as SVGPathElement).style.strokeDashoffset).toBe('1')
+
+      act(() => {
+        flushAllFrames(550)
+      })
+
+      expect(Number((journey as SVGPathElement).style.strokeDashoffset)).toBeCloseTo(0)
+
+      act(() => {
+        flushAllFrames(500)
+      })
+
+      expect(document.querySelector('.race-globe__journey')).toBeNull()
+      expect(document.querySelector('.race-globe--animating')).toBeNull()
     })
 
     test('cancels race B when race C is selected before race B completes', () => {
@@ -418,7 +444,7 @@ describe('RaceGlobe', () => {
       })
       const { rerender } = render(<RaceGlobe race={raceA} />)
 
-      flushAllFrames(500)
+      flushAllFrames(1_300)
       vi.mocked(window.requestAnimationFrame).mockClear()
 
       const raceB = createRace({
@@ -431,7 +457,7 @@ describe('RaceGlobe', () => {
         rerender(<RaceGlobe race={raceB} />)
       })
 
-      flushAllFrames(500)
+      flushAllFrames(1_300)
 
       expect(frameCallbacks.length).toBe(0)
     })
@@ -588,11 +614,9 @@ describe('RaceGlobe', () => {
       render(<RaceGlobe race={race} />)
 
       expect(document.querySelector('.race-globe')).toBeTruthy()
+      expect(document.querySelector('.race-globe__map')).toBeTruthy()
       expect(document.querySelector('.race-globe__canvas')).toBeTruthy()
       expect(document.querySelector('.race-globe__sphere')).toBeTruthy()
-      expect(document.querySelector('.race-globe__countries')).toBeTruthy()
-      expect(document.querySelector('.race-globe__country')).toBeTruthy()
-      expect(document.querySelector('.race-globe__graticule')).toBeTruthy()
       expect(document.querySelector('.race-globe__marker')).toBeTruthy()
     })
 

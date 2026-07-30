@@ -90,7 +90,7 @@ describe('CircuitPreview', () => {
   })
 
   describe('loading state', () => {
-    test('renders a loading message while the preview is being fetched', () => {
+    test('reserves a clean busy preview while the asset is being fetched', () => {
       const deferred = createDeferred<CircuitPreviewResult>()
       mockLoadCircuitPreview.mockReturnValue(deferred.promise)
 
@@ -98,7 +98,8 @@ describe('CircuitPreview', () => {
       render(<CircuitPreview source={source} previewPointer="visuals/monaco.json" circuitName="Monaco" />)
 
       expect(document.querySelector('.circuit-preview--loading')).toBeTruthy()
-      expect(screen.getByText('Loading Monaco circuit preview…')).toBeTruthy()
+      expect(document.querySelector('.circuit-preview--loading')?.getAttribute('aria-busy')).toBe('true')
+      expect(screen.queryByText('Loading Monaco circuit preview…')).toBeNull()
       expect(document.querySelector('svg')).toBeNull()
     })
 
@@ -160,7 +161,27 @@ describe('CircuitPreview', () => {
       })
 
       const svg = document.querySelector('svg.circuit-preview__canvas')
-      expect(svg?.getAttribute('viewBox')).toBe('-10 -10 120 120')
+      expect(svg?.getAttribute('viewBox')).toBe('-22 -22 144 144')
+    })
+
+    test('preserves the generator orientation without applying a client-side rotation', async () => {
+      const deferred = createDeferred<CircuitPreviewResult>()
+      mockLoadCircuitPreview.mockReturnValue(deferred.promise)
+
+      const source = createSource()
+      render(<CircuitPreview source={source} previewPointer="visuals/portrait.json" circuitName="Portrait" />)
+
+      await act(async () => {
+        deferred.resolve(Object.freeze({
+          pathData: 'M 0 0 L 100 0 L 100 200 L 0 200 Z',
+          viewBox: '0 0 100 200',
+        }))
+      })
+
+      expect(document.querySelector('.circuit-preview__canvas')?.getAttribute('viewBox'))
+        .toBe('-10 -20 120 240')
+      expect(document.querySelector('.circuit-preview__geometry')?.getAttribute('transform'))
+        .toBeNull()
     })
 
     test('includes a title element for screen readers', async () => {
@@ -223,6 +244,24 @@ describe('CircuitPreview', () => {
       const path = document.querySelector('path.circuit-preview__path')
       expect(path).toBeTruthy()
       expect(path?.classList.contains('circuit-preview__path')).toBe(true)
+      expect(path?.getAttribute('pathLength')).toBe('1')
+    })
+
+    test('renders a separate animated glow path beneath the circuit line', async () => {
+      const deferred = createDeferred<CircuitPreviewResult>()
+      mockLoadCircuitPreview.mockReturnValue(deferred.promise)
+
+      const source = createSource()
+      render(<CircuitPreview source={source} previewPointer="visuals/monaco.json" circuitName="Monaco" />)
+
+      await act(async () => {
+        deferred.resolve(createSuccessResult())
+      })
+
+      const glow = document.querySelector('path.circuit-preview__glow')
+      expect(glow?.getAttribute('d')).toBe('M 0 0 L 100 0 L 100 100 L 0 100 Z')
+      expect(glow?.getAttribute('pathLength')).toBe('1')
+      expect(glow?.getAttribute('aria-hidden')).toBe('true')
     })
   })
 
@@ -453,7 +492,8 @@ describe('CircuitPreview', () => {
       })
 
       expect(document.querySelector('.circuit-preview--loading')).toBeTruthy()
-      expect(screen.getByText('Loading Silverstone circuit preview…')).toBeTruthy()
+      expect(screen.queryByText('Loading Silverstone circuit preview…')).toBeNull()
+      expect(document.querySelector('.circuit-preview--loading')?.getAttribute('aria-busy')).toBe('true')
     })
   })
 
@@ -571,7 +611,8 @@ describe('CircuitPreview', () => {
       const { unmount: unmount2 } = render(
         <CircuitPreview source={source} previewPointer="visuals/monaco.json" circuitName="Monaco" />,
       )
-      expect(screen.getByText('Loading Monaco circuit preview…')).toBeTruthy()
+      expect(screen.getByLabelText('Loading Monaco circuit preview')).toBeTruthy()
+      expect(screen.queryByText('Loading Monaco circuit preview…')).toBeNull()
       unmount2()
     })
 
@@ -612,7 +653,7 @@ describe('CircuitPreview', () => {
 
       expect(document.querySelector('.circuit-preview')).toBeTruthy()
       expect(document.querySelector('.circuit-preview--loading')).toBeTruthy()
-      expect(document.querySelector('.circuit-preview__message')).toBeTruthy()
+      expect(document.querySelector('.circuit-preview__message')).toBeNull()
     })
 
     test('applies the expected BEM classes in the resolved state', async () => {

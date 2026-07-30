@@ -138,10 +138,16 @@ def create_circuit_preview(
     source = track_assets.get("centerLine")
     if not isinstance(source, Sequence) or isinstance(source, (str, bytes, bytearray)):
         return None
+    rotation_degrees = track_assets.get("rotationDegrees")
+    if not _is_finite_number(rotation_degrees):
+        return None
     points = _validated_points(source)
     if points is None or len(points) < 4:
         return None
-    sampled = _downsample(points, max_points)
+    sampled = _to_workspace_map_points(
+        _downsample(points, max_points),
+        float(cast(float, rotation_degrees)),
+    )
     bounds = _bounds(sampled)
     if bounds is None:
         return None
@@ -192,6 +198,26 @@ def _downsample(points: tuple[tuple[float, float], ...], max_points: int) -> tup
         return points
     last = len(points) - 1
     return tuple(points[round(index * last / (max_points - 1))] for index in range(max_points))
+
+
+def _to_workspace_map_points(
+    points: tuple[tuple[float, float], ...],
+    rotation_degrees: float,
+) -> tuple[tuple[float, float], ...]:
+    """Mirror LiveTrackMap.toMapPoint without changing source traversal order."""
+    radians = math.radians(rotation_degrees)
+    cosine, sine = math.cos(radians), math.sin(radians)
+    return tuple(
+        (
+            _normalize_coordinate(x * cosine + y * sine),
+            _normalize_coordinate(x * sine - y * cosine),
+        )
+        for x, y in points
+    )
+
+
+def _normalize_coordinate(value: float) -> float:
+    return 0.0 if abs(value) < 1e-12 else value
 
 
 def _bounds(points: tuple[tuple[float, float], ...]) -> tuple[float, float, float, float] | None:

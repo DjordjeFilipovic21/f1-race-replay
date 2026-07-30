@@ -325,7 +325,7 @@
   border: 1px solid var(--border);
   display: grid;
   margin: 0 auto;
-  min-height: calc(100vh - 7rem);
+  min-height: 0;
   overflow: hidden;
   width: min(100%, 100rem);
 }
@@ -337,6 +337,7 @@
     #0a0d10;
   display: grid;
   min-height: 36rem;
+  min-inline-size: 0;
   overflow: hidden;
   padding: clamp(1.25rem, 3vw, 2.5rem);
   position: relative;
@@ -398,6 +399,7 @@
   background: var(--surface);
   display: grid;
   gap: clamp(1.25rem, 2.2vw, 2rem);
+  min-inline-size: 0;
   padding: clamp(1.5rem, 4vw, 4rem);
 }
 
@@ -408,6 +410,8 @@
 }
 
 .race-presentation__title {
+  align-items: center;
+  display: grid;
   font-family: var(--font-display);
   font-size: clamp(3rem, 6vw, 6.5rem);
   font-weight: 700;
@@ -415,6 +419,7 @@
   line-height: 0.88;
   margin: 0.75rem auto 0.5rem;
   max-width: 10ch;
+  min-block-size: 1.76em;
   text-shadow: 0 0 2.5rem rgb(214 255 0 / 20%);
   text-transform: uppercase;
 }
@@ -650,7 +655,42 @@
 
 @media (min-width: 900px) {
   .race-presentation__layout {
-    grid-template-columns: minmax(25rem, 0.85fr) minmax(31rem, 1.15fr);
+    align-items: stretch;
+    grid-template-columns: minmax(0, 17fr) minmax(0, 23fr);
+  }
+
+  .race-presentation__world {
+    block-size: auto;
+    min-height: 36rem;
+  }
+
+  .race-presentation__details {
+    gap: clamp(0.75rem, 1vw, 1rem);
+    grid-template-rows: 11rem auto auto auto;
+    padding: clamp(1.5rem, 3vw, 3rem);
+  }
+
+  .race-presentation__header {
+    align-content: center;
+    block-size: 11rem;
+    display: grid;
+    overflow: hidden;
+  }
+
+  .race-presentation__title {
+    font-size: clamp(2.5rem, 3.6vw, 4rem);
+    margin-block: 0.45rem 0.3rem;
+    min-block-size: 1.55em;
+  }
+
+  .race-presentation__subtitle {
+    margin-bottom: 0.45rem;
+  }
+
+  .circuit-preview {
+    aspect-ratio: auto;
+    block-size: 19.5rem;
+    min-height: 0;
   }
 }
 

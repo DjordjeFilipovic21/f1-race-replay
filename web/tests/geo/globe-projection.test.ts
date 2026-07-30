@@ -3,7 +3,7 @@ import {
   buildGraticulePath,
   computeRotation,
   createOrthographicProjection,
-  worldCountries,
+  worldLand,
 } from '../../src/geo/globe-projection'
 
 function expectTupleCloseTo(actual: readonly number[], expected: readonly number[]): void {
@@ -220,14 +220,14 @@ describe('buildGraticulePath', () => {
 })
 
 // ──────────────────────────────────────────────────────────────
-// worldCountries — positive case
+// worldLand — positive case
 // ──────────────────────────────────────────────────────────────
 
-describe('worldCountries', () => {
+describe('worldLand', () => {
   it('exposes bundled world-atlas countries as GeoJSON features', () => {
     // Assert
-    expect(worldCountries.type).toBe('FeatureCollection')
-    expect(worldCountries.features.length).toBeGreaterThan(0)
-    expect(worldCountries.features[0]?.type).toBe('Feature')
+    expect(worldLand.type).toBe('FeatureCollection')
+    expect(worldLand.features.length).toBeGreaterThan(0)
+    expect(worldLand.features[0]?.type).toBe('Feature')
   })
 })

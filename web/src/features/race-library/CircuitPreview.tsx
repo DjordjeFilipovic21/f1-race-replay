@@ -80,20 +80,36 @@ export const CircuitPreview = memo(function CircuitPreview({
   }, [source, previewPointer])
 
   return (
-    <div className={`circuit-preview circuit-preview--${state.phase}`}>
+    <div
+      className={`circuit-preview circuit-preview--${state.phase}`}
+      aria-busy={state.phase === 'loading' ? 'true' : undefined}
+      aria-label={state.phase === 'loading' ? `Loading ${circuitName} circuit preview` : undefined}
+    >
       {state.phase === 'resolved' ? (
         <svg
           key={state.result.pathData}
           className="circuit-preview__canvas"
           role="img"
           aria-label={`${circuitName} circuit preview`}
-          viewBox={state.result.viewBox}
+          viewBox={addViewBoxPadding(state.result.viewBox)}
           preserveAspectRatio="xMidYMid meet"
         >
           <title>{`${circuitName} circuit preview`}</title>
-          <path className="circuit-preview__path" d={state.result.pathData} />
+          <g className="circuit-preview__geometry">
+            <path
+              className="circuit-preview__glow"
+              d={state.result.pathData}
+              pathLength={1}
+              aria-hidden="true"
+            />
+            <path
+              className="circuit-preview__path"
+              d={state.result.pathData}
+              pathLength={1}
+            />
+          </g>
         </svg>
-      ) : (
+      ) : state.phase === 'loading' ? null : (
         <p className="circuit-preview__message" role="status">
           {describeStatusMessage(state, circuitName)}
         </p>
@@ -115,4 +131,16 @@ function describeStatusMessage(state: IdlePhase | LoadingPhase | ErrorPhase, cir
     case 'error':
       return state.message
   }
+}
+
+function addViewBoxPadding(viewBox: string): string {
+  const [minX, minY, width, height] = viewBox.split(/\s+/).map(Number)
+  const horizontalPadding = width * 0.1
+  const verticalPadding = height * 0.1
+  return [
+    minX - horizontalPadding,
+    minY - verticalPadding,
+    width + (horizontalPadding * 2),
+    height + (verticalPadding * 2),
+  ].join(' ')
 }

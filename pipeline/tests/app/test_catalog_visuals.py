@@ -25,16 +25,33 @@ def test_coordinate_registry_resolves_template_venue_and_rejects_unknown() -> No
 
 
 def test_circuit_preview_is_normalized_bounded_and_deterministic() -> None:
-    assets = {"centerLine": [{"x": 0, "y": 0}, {"x": 10, "y": 20}, {"x": 20, "y": 0}, {"x": 0, "y": 0}]}
+    assets = {
+        "rotationDegrees": 0,
+        "centerLine": [{"x": 0, "y": 0}, {"x": 10, "y": 20}, {"x": 20, "y": 0}, {"x": 0, "y": 0}],
+    }
 
     preview = create_circuit_preview(assets)
 
-    assert preview == {"pathData": "M 0 0 L 10 20 L 20 0 L 0 0 Z", "viewBox": "0 0 20 20"}
+    assert preview == {"pathData": "M 0 0 L 10 -20 L 20 0 L 0 0 Z", "viewBox": "0 -20 20 20"}
+
+
+def test_circuit_preview_uses_workspace_rotation_and_preserves_point_order() -> None:
+    assets = {
+        "rotationDegrees": 90,
+        "centerLine": [{"x": 0, "y": 0}, {"x": 0, "y": 20}, {"x": 10, "y": 40}, {"x": 0, "y": 0}],
+    }
+
+    preview = create_circuit_preview(assets)
+
+    assert preview == {"pathData": "M 0 0 L 20 0 L 40 10 L 0 0 Z", "viewBox": "0 0 40 10"}
 
 
 def test_circuit_preview_rejects_invalid_point_data() -> None:
     assert create_circuit_preview({"centerLine": [{"x": 0, "y": 0}] * 3}) is None
-    assert create_circuit_preview({"centerLine": [{"x": 0, "y": 0}, {"x": float("nan"), "y": 1}] * 2}) is None
+    assert create_circuit_preview({
+        "rotationDegrees": 0,
+        "centerLine": [{"x": 0, "y": 0}, {"x": float("nan"), "y": 1}] * 2,
+    }) is None
 
 
 def test_publish_catalog_populates_preview_and_retains_unrelated_visuals(tmp_path: Path, monkeypatch) -> None:
@@ -49,7 +66,10 @@ def test_publish_catalog_populates_preview_and_retains_unrelated_visuals(tmp_pat
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
     monkeypatch.setattr(
         "f1_replay_pipeline.app.batch_generation._read_circuit_preview_source",
-        lambda *_args: {"centerLine": [{"x": 0, "y": 0}, {"x": 10, "y": 20}, {"x": 20, "y": 0}, {"x": 0, "y": 0}]},
+        lambda *_args: {
+            "rotationDegrees": 0,
+            "centerLine": [{"x": 0, "y": 0}, {"x": 10, "y": 20}, {"x": 20, "y": 0}, {"x": 0, "y": 0}],
+        },
     )
 
     publish_catalog(result)

@@ -3,7 +3,7 @@ import type { GeoProjection } from 'd3-geo'
 import type { FeatureCollection, GeometryObject as GeoJsonGeometryObject } from 'geojson'
 import { feature } from 'topojson-client'
 import type { GeometryCollection, Topology } from 'topojson-specification'
-import worldData from 'world-atlas/countries-110m.json'
+import landData from 'world-atlas/land-110m.json'
 
 const DEFAULT_GLOBE_SIZE = 600
 const DEFAULT_GRATICULE_STEP = 15
@@ -18,11 +18,11 @@ export interface OrthographicProjectionOptions {
 
 export type GlobeRotation = readonly [number, number, number]
 
-const worldTopology = worldData as unknown as Topology
-const worldCountriesObject = worldTopology.objects.countries as GeometryCollection
+const landTopology = landData as unknown as Topology
+const worldLandObject = landTopology.objects.land as GeometryCollection
 
-/** Local, bundled country geometry converted from the world-atlas TopoJSON. */
-export const worldCountries: FeatureCollection<GeoJsonGeometryObject> = feature(worldTopology, worldCountriesObject)
+/** Lightweight bundled land geometry for animated globe rendering. */
+export const worldLand: FeatureCollection<GeoJsonGeometryObject> = feature(landTopology, worldLandObject)
 
 /**
  * Returns the d3 rotation that puts a race coordinate at the centre of a globe.

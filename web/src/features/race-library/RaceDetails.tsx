@@ -122,12 +122,24 @@ function TemporaryCircuitPreview({ circuitName }: { readonly circuitName: string
         className="circuit-preview__canvas"
         role="img"
         aria-label={label}
-        viewBox="0 0 400 220"
+        viewBox="-24 -24 448 268"
         preserveAspectRatio="xMidYMid meet"
         data-preview-source="temporary"
       >
         <title>{label}</title>
-        <path className="circuit-preview__path" d={TEMPORARY_CIRCUIT_PATH} />
+        <g className="circuit-preview__geometry">
+          <path
+            className="circuit-preview__glow"
+            d={TEMPORARY_CIRCUIT_PATH}
+            pathLength={1}
+            aria-hidden="true"
+          />
+          <path
+            className="circuit-preview__path"
+            d={TEMPORARY_CIRCUIT_PATH}
+            pathLength={1}
+          />
+        </g>
       </svg>
     </div>
   )
