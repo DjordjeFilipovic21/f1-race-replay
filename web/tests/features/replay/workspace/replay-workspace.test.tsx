@@ -71,7 +71,7 @@ const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'track-map', label: 'Track map', columns: 2, element: <p>Track content</p> },
   { id: 'leaderboard', label: 'Leaderboard', columns: 1, element: <p>Leaderboard content</p> },
   { id: 'driver', label: 'Driver', columns: 1, element: <p>Driver content</p> },
-  { id: 'telemetry', label: 'Telemetry', columns: 2, element: <p>Telemetry content</p> },
+  { id: 'telemetry', label: 'Telemetry', columns: 1, element: <p>Telemetry content</p> },
 ]
 
 afterEach(() => {
@@ -200,7 +200,7 @@ test('renders prospective cross-column order and normalizes a visually equivalen
    expect(document.querySelector('.replay-workspace__drop-preview')?.textContent).toContain('Drop telemetry panel')
   expect(document.querySelector('.replay-workspace__lane-highlight')).toBeTruthy()
   expect((document.querySelector('.replay-workspace__drop-preview') as HTMLElement).style.left).toBe('')
-   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+   expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
 
   fireEvent.click(screen.getByRole('button', { name: 'Invalidate preview' }))
   expect(document.querySelector('.replay-workspace__drop-preview')).toBeNull()
@@ -277,7 +277,7 @@ test('commits a valid preview even when its center overlaps the source slot geom
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
 
   expect(screen.getByText('Custom')).toBeTruthy()
-  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
 })
 
 test('keeps the default layout when zero-sized geometry cannot resolve a destination', () => {
@@ -394,11 +394,11 @@ test('restores a committed drag position from persisted preferences', () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
   fireEvent.click(screen.getByRole('button', { name: 'Commit drop' }))
-  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
   unmount()
 
   render(<ReplayWorkspace panels={panels} storage={storage} />)
-  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('3')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
 })
 
 test('locks drag and pin editing without changing the saved custom layout', () => {
@@ -971,14 +971,14 @@ test('recomputes the active drop preview when the workspace breakpoint changes',
   fireEvent.click(screen.getByRole('button', { name: 'Preview drop' }))
   const desktopPreview = document.querySelector<HTMLElement>('.replay-workspace__drop-preview')
   expect(desktopPreview?.style.getPropertyValue('--replay-preview-column-count')).toBe('4')
-   expect(desktopPreview?.style.getPropertyValue('--replay-preview-column')).toBe('3')
+   expect(desktopPreview?.style.getPropertyValue('--replay-preview-column')).toBe('4')
 
   setViewportWidth(800)
   fireEvent(window, new Event('resize'))
 
   const tabletPreview = document.querySelector<HTMLElement>('.replay-workspace__drop-preview')
   expect(tabletPreview?.style.getPropertyValue('--replay-preview-column-count')).toBe('2')
-  expect(tabletPreview?.style.getPropertyValue('--replay-preview-column')).toBe('1')
+  expect(tabletPreview?.style.getPropertyValue('--replay-preview-column')).toBe('2')
 })
 
 function setViewportWidth(width: number): void {

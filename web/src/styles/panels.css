@@ -10,23 +10,31 @@
 .driver-info-panel__segment dt { color: var(--text-muted); font-size: .6rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .driver-info-panel__segment dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .7rem; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .driver-info-panel__empty { color: var(--text-muted); font-size: .9rem; }
-.driver-telemetry-panel { --driver-telemetry-team-color: #7a8794; background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
+.driver-telemetry-panel { --driver-telemetry-team-color: #7a8794; background: repeating-linear-gradient(-42deg, rgb(0 0 0 / 18%) 0, rgb(0 0 0 / 18%) 4px, transparent 4px, transparent 8px), #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
 .driver-telemetry-panel__header { align-items: stretch; background: linear-gradient(105deg, #171c20, #101316); display: grid; grid-template-columns: 5px minmax(0, 1fr); gap: .65rem; padding: .7rem; }
 .driver-telemetry-panel__accent { background: var(--driver-telemetry-team-color); }
-.driver-telemetry-panel__eyebrow, .driver-telemetry-panel__reading dt, .driver-telemetry-panel__gauge-copy span { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
 .driver-telemetry-panel__header h2 { font-size: 1rem; line-height: 1.2; }
-.driver-telemetry-panel__header h2 span { color: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .8em; }
-.driver-telemetry-panel__layout { align-items: center; display: grid; gap: .75rem; grid-template-columns: minmax(7.5rem, .85fr) minmax(0, 1fr); padding: .75rem; }
-.driver-telemetry-panel__gauge { aspect-ratio: 1; display: grid; min-width: 0; place-items: center; position: relative; }
-.driver-telemetry-panel__gauge-svg { grid-area: 1 / 1; height: auto; transform: rotate(0deg); width: 100%; }
-.driver-telemetry-panel__gauge-track, .driver-telemetry-panel__gauge-value { fill: none; stroke-linecap: round; stroke-width: 9; }
-.driver-telemetry-panel__gauge-track { stroke: #303940; }
-.driver-telemetry-panel__gauge-value { stroke: var(--driver-telemetry-team-color); }
-.driver-telemetry-panel__gauge-copy { align-items: center; display: grid; gap: .15rem; grid-area: 1 / 1; justify-items: center; text-align: center; }
-.driver-telemetry-panel__gauge-copy strong { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: clamp(1rem, 6vw, 1.55rem); font-variant-numeric: tabular-nums; }
-.driver-telemetry-panel__readings { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
-.driver-telemetry-panel__reading { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .4rem .45rem; }
-.driver-telemetry-panel__reading dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .76rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: .15rem 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.driver-telemetry-panel__gauge { margin: 0 auto; max-width: 22rem; min-width: 0; padding: .35rem; width: 100%; }
+.driver-telemetry-panel__gauge-svg { display: block; height: auto; overflow: visible; width: 100%; }
+.driver-telemetry-panel__speed-track, .driver-telemetry-panel__speed-value, .driver-telemetry-panel__input-track, .driver-telemetry-panel__throttle-value, .driver-telemetry-panel__brake-value { fill: none; stroke-linecap: butt; }
+.driver-telemetry-panel__speed-track, .driver-telemetry-panel__speed-value { stroke-width: 12; }
+.driver-telemetry-panel__speed-track { stroke: rgb(52 61 68 / 45%); }
+.driver-telemetry-panel__speed-value { stroke: var(--driver-telemetry-team-color); }
+.driver-telemetry-panel__input-track, .driver-telemetry-panel__throttle-value, .driver-telemetry-panel__brake-value { stroke-width: 12; }
+.driver-telemetry-panel__input-track { stroke: rgb(52 61 68 / 35%); }
+.driver-telemetry-panel__throttle-value { stroke: #16b40d; }
+.driver-telemetry-panel__brake-value { stroke: #ef1a03; }
+.driver-telemetry-panel__speed-tick { dominant-baseline: middle; fill: #dce2e6; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 6px; text-anchor: middle; }
+.driver-telemetry-panel__input-label { dominant-baseline: central; fill: #dce2e6; font-size: 7px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+.driver-telemetry-panel__speed, .driver-telemetry-panel__rpm, .driver-telemetry-panel__unit, .driver-telemetry-panel__drs text, .driver-telemetry-panel__gear { fill: #f4f5f6; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; text-anchor: middle; }
+.driver-telemetry-panel__speed { font-size: 18px; font-weight: 900; }
+.driver-telemetry-panel__rpm { font-size: 12px; font-weight: 800; }
+.driver-telemetry-panel__unit { fill: var(--text-muted); font-size: 6px; text-transform: uppercase; }
+.driver-telemetry-panel__drs rect { fill: transparent; }
+.driver-telemetry-panel__drs text { font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.driver-telemetry-panel__drs--active rect { fill: #087f04; }
+.driver-telemetry-panel__gear { font-size: 7px; text-transform: uppercase; }
+.driver-telemetry-panel__gear tspan { font-size: 15px; font-weight: 900; }
 .driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
 .race-control-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; display: grid; gap: .75rem; min-width: 0; overflow: hidden; padding-bottom: .75rem; }
 .race-control-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
