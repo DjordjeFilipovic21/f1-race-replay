@@ -47,10 +47,10 @@ class ProgressState:
     last_session_time_ms: int | None = None
     last_lap_number: int | None = None
     last_track_distance_meters: float | None = None
+    last_ranking_distance_meters: float | None = None
     last_valid_progress_meters: float | None = None
     last_valid_time_ms: int | None = None
-    within_lap_wrap_count: int = 0
-    within_lap_offset_meters: float = 0.0
+    cut_crossing_count: int = 0
     terminal_mode: ProgressMode | None = None
     failure_reason: ProgressReason | None = None
     finished: bool = False
@@ -64,16 +64,20 @@ class ProgressState:
             raise ValueError("last_valid_time_ms must be a non-negative integer or None")
         if (self.last_valid_progress_meters is None) != (self.last_valid_time_ms is None):
             raise ValueError("last valid progress and time must be present together")
-        if any(value is not None and not _finite(value) for value in (self.last_track_distance_meters, self.last_valid_progress_meters)):
+        if any(value is not None and not _finite(value) for value in (
+            self.last_track_distance_meters, self.last_ranking_distance_meters,
+            self.last_valid_progress_meters,
+        )):
             raise ValueError("stored progress values must be finite or None")
-        if any(value is not None and value < 0 for value in (self.last_track_distance_meters, self.last_valid_progress_meters)):
+        if any(value is not None and value < 0 for value in (
+            self.last_track_distance_meters, self.last_ranking_distance_meters,
+            self.last_valid_progress_meters,
+        )):
             raise ValueError("stored progress values must be non-negative or None")
-        if type(self.within_lap_wrap_count) is not int or self.within_lap_wrap_count not in (0, 1):
-            raise ValueError("within_lap_wrap_count must be zero or one")
-        if not _finite(self.within_lap_offset_meters) or self.within_lap_offset_meters < 0:
-            raise ValueError("within_lap_offset_meters must be finite and non-negative")
-        if (self.within_lap_wrap_count == 0) != (self.within_lap_offset_meters == 0.0):
-            raise ValueError("within-lap wrap count and offset must agree")
+        if type(self.cut_crossing_count) is not int or self.cut_crossing_count < 0:
+            raise ValueError("cut_crossing_count must be a non-negative integer")
+        if (self.last_track_distance_meters is None) != (self.last_ranking_distance_meters is None):
+            raise ValueError("track and ranking distances must be present together")
         if self.terminal_mode is not None and self.terminal_mode not in (ProgressMode.RETIRED, ProgressMode.OUT):
             raise ValueError("terminal_mode must be retired, out, or None")
         if self.failure_reason is not None and not isinstance(self.failure_reason, ProgressReason):
@@ -125,43 +129,77 @@ def advance_progress(
     return _active(state, session_time_ms, lap_number, circuit_length_meters, projection, mode)
 
 
+def seed_progress(
+    *, session_time_ms: int, lap_number: int, circuit_length_meters: float,
+    projection: CenterlineProjection, cut_crossing_count: int,
+    mode: ProgressMode = ProgressMode.ACTIVE,
+) -> ProgressUpdate:
+    """Create one validated progress epoch without coupling it to the visual start line."""
+    if not isinstance(projection, CenterlineProjection):
+        raise TypeError("a progress seed requires a CenterlineProjection")
+    _validate_input(
+        ProgressState(), session_time_ms, lap_number, circuit_length_meters, projection, mode,
+    )
+    if (
+        type(cut_crossing_count) is not int
+        or cut_crossing_count not in (lap_number - 1, lap_number)
+    ):
+        raise ValueError("cut_crossing_count must be compatible with lap_number")
+    if mode is not ProgressMode.ACTIVE:
+        raise ValueError("a progress seed must be active")
+    distance = _projection_distance(projection, circuit_length_meters)
+    ranking_distance_meters = ranking_distance(distance, circuit_length_meters)
+    progress = cut_crossing_count * circuit_length_meters + ranking_distance_meters
+    state = ProgressState(
+        last_session_time_ms=session_time_ms,
+        last_lap_number=lap_number,
+        last_track_distance_meters=distance,
+        last_ranking_distance_meters=ranking_distance_meters,
+        last_valid_progress_meters=progress,
+        last_valid_time_ms=session_time_ms,
+        cut_crossing_count=cut_crossing_count,
+    )
+    return ProgressUpdate(
+        state, mode, distance, progress, False, False, ProgressReason.ACTIVE,
+    )
+
+
 def _active(state, time_ms, lap, length, projection, mode):
     distance = _projection_distance(projection, length)
+    ranking_distance_meters = ranking_distance(distance, length)
     transition = _lap_transition(state, lap)
     if transition is not None:
         return _fail(state, mode, transition)
-    offset, wraps, reason = _within_lap_offset(state, lap, distance, length)
+    track_reason = _track_transition_reason(state, distance, length)
+    if track_reason is not None:
+        return _fail(state, mode, track_reason)
+    if state.last_ranking_distance_meters is None:
+        return seed_progress(
+            session_time_ms=time_ms,
+            lap_number=lap,
+            circuit_length_meters=length,
+            projection=projection,
+            cut_crossing_count=_initial_cut_crossing_count(lap, distance, length),
+            mode=mode,
+        )
+    crossings, reason = _cut_crossings(state, lap, ranking_distance_meters, length)
     if reason is not None:
         return _fail(state, mode, reason)
-    progress = (lap - 1) * length + distance + offset
-    if _is_official_lap_increment(state, lap) and _regresses_beyond_tolerance(state, progress):
-        if _has_one_circuit_within_lap_wrap(state, length):
-            offset, wraps = length, 1
-            progress += length
-        else:
-            return _fail(state, mode, ProgressReason.INVALID_LAP_TRANSITION)
+    progress = crossings * length + ranking_distance_meters
     if state.last_valid_progress_meters is not None and progress < state.last_valid_progress_meters - MAX_BACKWARD_PROGRESS_M:
         return _fail(state, mode, ProgressReason.BACKWARD_PROGRESS)
-    next_state = ProgressState(time_ms, lap, distance, progress, time_ms, wraps, offset)
+    if state.last_valid_progress_meters is not None:
+        progress = max(state.last_valid_progress_meters, progress)
+    next_state = ProgressState(
+        last_session_time_ms=time_ms,
+        last_lap_number=lap,
+        last_track_distance_meters=distance,
+        last_ranking_distance_meters=ranking_distance_meters,
+        last_valid_progress_meters=progress,
+        last_valid_time_ms=time_ms,
+        cut_crossing_count=crossings,
+    )
     return ProgressUpdate(next_state, mode, distance, progress, False, False, ProgressReason.ACTIVE)
-
-
-def _is_official_lap_increment(state, lap):
-    return state.last_lap_number is not None and lap == state.last_lap_number + 1
-
-
-def _regresses_beyond_tolerance(state, progress):
-    return (
-        state.last_valid_progress_meters is not None
-        and progress < state.last_valid_progress_meters - MAX_BACKWARD_PROGRESS_M
-    )
-
-
-def _has_one_circuit_within_lap_wrap(state, length):
-    return (
-        state.within_lap_wrap_count == 1
-        and state.within_lap_offset_meters == length
-    )
 
 
 def _lap_transition(state, lap):
@@ -174,18 +212,41 @@ def _lap_transition(state, lap):
     return None
 
 
-def _within_lap_offset(state, lap, distance, length):
-    if state.last_lap_number != lap or state.last_track_distance_meters is None:
-        return 0.0, 0, None
+def _track_transition_reason(state, distance, length):
     previous = state.last_track_distance_meters
-    decrease = previous - distance
+    if previous is None or previous - distance <= MAX_BACKWARD_PROGRESS_M:
+        return None
+    if _is_geometric_wrap(previous, distance, length):
+        return None
+    return ProgressReason.INVALID_WRAP
+
+
+def _cut_crossings(state, lap, ranking_distance, length):
+    previous = state.last_ranking_distance_meters
+    assert previous is not None
+    decrease = previous - ranking_distance
     if decrease <= MAX_BACKWARD_PROGRESS_M:
-        return state.within_lap_offset_meters, state.within_lap_wrap_count, None
-    if not _is_geometric_wrap(previous, distance, length):
-        return 0.0, 0, ProgressReason.INVALID_WRAP
-    if state.within_lap_wrap_count:
-        return 0.0, 0, ProgressReason.MULTIPLE_WRAP
-    return length, 1, None
+        return state.cut_crossing_count, None
+    if not _is_geometric_wrap(previous, ranking_distance, length):
+        return state.cut_crossing_count, ProgressReason.INVALID_WRAP
+    crossings = state.cut_crossing_count + 1
+    if crossings > lap:
+        return state.cut_crossing_count, ProgressReason.MULTIPLE_WRAP
+    return crossings, None
+
+
+def _initial_cut_crossing_count(lap, distance, length):
+    return lap - 1 + int(distance >= length / 2.0)
+
+
+def ranking_distance(distance: float, length: float) -> float:
+    """Rotate a lap-local coordinate so its cut lies opposite the visual start line."""
+    if not _finite(length) or length <= 0:
+        raise ValueError("circuit length must be positive and finite")
+    if not _finite(distance) or not 0.0 <= distance < length:
+        raise ValueError("track distance must be finite and lap-local")
+    shifted = distance + length / 2.0
+    return shifted - length if shifted >= length else shifted
 
 
 def _is_geometric_wrap(previous, current, length):
@@ -281,5 +342,6 @@ def _finite(value):
 __all__ = [
     "FINAL_TRACK_REGION_RATIO", "GEOMETRIC_WRAP_POLICY_VERSION", "INITIAL_TRACK_REGION_RATIO",
     "MAX_BACKWARD_PROGRESS_M", "MIN_GEOMETRIC_WRAP_DECREASE_RATIO", "PROJECTION_QUALITY_GATE_VERSION",
-    "ProgressMode", "ProgressReason", "ProgressState", "ProgressUpdate", "STALE_PROJECTION_MS", "advance_progress",
+    "ProgressMode", "ProgressReason", "ProgressState", "ProgressUpdate", "STALE_PROJECTION_MS",
+    "advance_progress", "ranking_distance", "seed_progress",
 ]
