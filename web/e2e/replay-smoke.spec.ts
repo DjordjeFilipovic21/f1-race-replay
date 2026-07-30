@@ -68,7 +68,7 @@ test('renders accessible globe and circuit preview for a race before entering wo
   const circuit = page.locator('svg[role="img"][aria-label="Deterministic Grand Prix circuit preview"]')
   await expect(circuit).toBeVisible()
   await expect(circuit.locator('title')).toHaveText('Deterministic Grand Prix circuit preview')
-  await expect(circuit.locator('path')).toHaveAttribute('d', 'M 150 50 A 100 100 0 1 1 149.9999 50')
+  await expect(circuit.locator('.circuit-preview__path')).toHaveAttribute('d', 'M 150 50 A 100 100 0 1 1 149.9999 50')
 
   // Assert — URL selection remains local; no query parameters are pushed yet
   expect(new URL(page.url()).search).toBe('')
