@@ -89,14 +89,21 @@ rule. The R2 CORS policy must allow `GET` and `HEAD` from
 The recommended production path is the opt-in `generate --publish-r2` flag.
 Normal generation performs no R2 access.
 
-Configure the R2 target and its standard S3 credentials:
+Store the R2 S3 credentials in a dedicated AWS profile, then configure the
+target and profile:
 
 ```bash
+aws configure --profile f1-r2
+chmod 600 ~/.aws/credentials ~/.aws/config
+
 export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
 export R2_BUCKET=f1-race-replay-data
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
+export AWS_PROFILE=f1-r2
 ```
+
+Do not put R2 access keys in the repository, local `.env` files, command
+arguments, or shell history. Use an R2 token with Object Read & Write access
+scoped only to `f1-race-replay-data`.
 
 Generate or resume selected rounds and publish all valid catalog references:
 

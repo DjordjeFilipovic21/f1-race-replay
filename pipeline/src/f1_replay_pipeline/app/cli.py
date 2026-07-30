@@ -482,6 +482,7 @@ class _R2ProgressRenderer:
         self._phase: str | None = None
         self._reported_bucket = -1
         self._line_open = False
+        self._rendered_width = 0
 
     def __call__(self, event: R2ProgressEvent) -> None:
         percent = _r2_progress_percent(event)
@@ -501,12 +502,16 @@ class _R2ProgressRenderer:
         self._reported_bucket = max(self._reported_bucket, bucket)
         text = _format_r2_progress(event, monotonic() - self._started)
         if self._interactive:
-            sys.stderr.write(f"\r\033[2K{text}")
+            padding = " " * max(0, self._rendered_width - len(text))
+            sys.stderr.write(f"\r{text}{padding}")
             sys.stderr.flush()
-            self._line_open = event.phase != "r2_completed"
-            if not self._line_open:
+            self._rendered_width = len(text)
+            self._line_open = True
+            if event.completed == event.total or event.phase == "r2_completed":
                 sys.stderr.write("\n")
                 sys.stderr.flush()
+                self._line_open = False
+                self._rendered_width = 0
         else:
             print(text, file=sys.stderr)
 
@@ -515,6 +520,7 @@ class _R2ProgressRenderer:
             sys.stderr.write("\n")
             sys.stderr.flush()
             self._line_open = False
+            self._rendered_width = 0
 
 
 def _r2_progress_percent(event: R2ProgressEvent) -> int:
@@ -527,13 +533,23 @@ def _r2_progress_percent(event: R2ProgressEvent) -> int:
 
 def _format_r2_progress(event: R2ProgressEvent, elapsed: float) -> str:
     minutes, seconds = divmod(int(elapsed), 60)
-    key = f" | {event.key}" if event.key else ""
+    phase = _R2_PROGRESS_PHASE_LABELS.get(event.phase, event.phase.removeprefix("r2_"))
     return (
-        f"r2 progress {_r2_progress_percent(event):03d}%"
-        f" | {event.phase} {event.completed}/{event.total}"
-        f" | uploaded={event.uploaded} reused={event.reused}"
-        f" | {minutes:02d}:{seconds:02d}{key}"
+        f"r2 {_r2_progress_percent(event):03d}%"
+        f" | {phase} {event.completed}/{event.total}"
+        f" | up={event.uploaded} reuse={event.reused}"
+        f" | {minutes:02d}:{seconds:02d}"
     )
+
+
+_R2_PROGRESS_PHASE_LABELS = {
+    "r2_validating": "validating",
+    "r2_uploading_immutable": "immutable",
+    "r2_uploading_visuals": "visuals",
+    "r2_uploading_pointers": "pointers",
+    "r2_committing_catalog": "catalog",
+    "r2_completed": "completed",
+}
 
 
 def _format_progress(

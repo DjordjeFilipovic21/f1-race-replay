@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import sys
@@ -37,7 +38,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_request import (
     BrowserDeliveryServiceError,
     BrowserPublishResult,
 )
-from f1_replay_pipeline.app.cli import main
+from f1_replay_pipeline.app.cli import _R2ProgressRenderer, main
 from f1_replay_pipeline.app.r2_publication import (
     R2PublicationError,
     R2PublicationResult,
@@ -254,9 +255,40 @@ def test_generate_renders_granular_r2_progress_to_stderr(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "r2 progress 000% | r2_validating 0/1" in captured.err
-    assert "r2 progress 050% | r2_uploading_immutable 1/2" in captured.err
-    assert "r2 progress 100% | r2_completed 4/4" in captured.err
+    assert "r2 000% | validating 0/1" in captured.err
+    assert "r2 050% | immutable 1/2" in captured.err
+    assert "r2 100% | completed 4/4" in captured.err
+    assert "seasons/2024/browser/chunk-001.json" not in captured.err
+
+
+def test_interactive_r2_progress_overwrites_one_compact_line(
+    monkeypatch,
+) -> None:
+    class InteractiveStderr(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stderr = InteractiveStderr()
+    monkeypatch.setattr(sys, "stderr", stderr)
+    renderer = _R2ProgressRenderer()
+    long_key = (
+        "seasons/2024/browser/2024-round-04-japanese-grand-prix/"
+        "generations/2024-round-04-r/chunks/cr2-position.json"
+    )
+
+    renderer(R2ProgressEvent(
+        "r2_uploading_immutable", 2348, 2350, uploaded=717, reused=1631, key=long_key,
+    ))
+    renderer(R2ProgressEvent(
+        "r2_uploading_immutable", 2350, 2350, uploaded=719, reused=1631, key=long_key,
+    ))
+
+    output = stderr.getvalue()
+    assert output.count("\r") == 2
+    assert output.endswith("\n")
+    assert "\033" not in output
+    assert long_key not in output
+    assert all(len(refresh) <= 80 for refresh in output.split("\r")[1:])
 
 
 def test_generate_prints_failed_race_detail_after_renderer_closes(

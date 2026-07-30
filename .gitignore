@@ -3,6 +3,12 @@ venv/
 .venv/
 env/
 
+# Local environment and credential files
+.env
+.env.*
+!.env.example
+!web/.env.production
+
 # Python caches
 __pycache__/
 *.py[cod]

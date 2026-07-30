@@ -202,18 +202,24 @@ apart from their documented data sources.
 
 ### Publish validated browser data to R2
 
-Set the R2 S3 endpoint, bucket, and standard AWS credential variables before
-using the opt-in flag:
+Store the R2 S3 credentials in a dedicated AWS profile, then set the endpoint,
+bucket, and profile before using the opt-in flag:
 
 ```bash
+aws configure --profile f1-r2
+chmod 600 ~/.aws/credentials ~/.aws/config
+
 export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
 export R2_BUCKET=f1-race-replay-data
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
+export AWS_PROFILE=f1-r2
 
 f1-replay-pipeline generate \
   --year 2024 --round 3 --session R --resume --publish-r2
 ```
+
+Do not put R2 access keys in the repository, local `.env` files, command
+arguments, or shell history. Use an R2 token with Object Read & Write access
+scoped only to the publication bucket.
 
 The uploader rebuilds a browser-only public catalog from locally validated
 sessions. It deep-validates each referenced browser delivery, uploads immutable
@@ -227,8 +233,8 @@ terminals receive a live line; redirected logs are throttled to phase changes,
 10% increments, and phase completion:
 
 ```text
-r2 progress 040% | r2_uploading_immutable 441/1101 | uploaded=40 reused=401
-r2 progress 100% | r2_completed 1106/1106 | uploaded=5 reused=1101
+r2 040% | immutable 441/1101 | up=40 reuse=401 | 01:12
+r2 100% | completed 1106/1106 | up=5 reuse=1101 | 01:44
 ```
 
 The local season catalog is authoritative. Keep existing production artifacts
