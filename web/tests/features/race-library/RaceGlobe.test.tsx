@@ -351,23 +351,24 @@ describe('RaceGlobe', () => {
       const journey = document.querySelector('.race-globe__journey')
       expect(journey).toBeTruthy()
       expect(journey?.getAttribute('d')).toBeTruthy()
-      expect(journey?.getAttribute('pathLength')).toBe('1')
+      expect(journey?.getAttribute('pathLength')).toBeNull()
       expect(journey?.getAttribute('clip-path')).toBe('url(#race-globe-sphere-clip)')
       expect(document.querySelector('.race-globe--animating')).toBeTruthy()
       expect(document.querySelector('.race-globe__marker')?.getAttribute('cx')).toBe(initialMarkerPosition.cx)
       expect(document.querySelector('.race-globe__marker')?.getAttribute('cy')).toBe(initialMarkerPosition.cy)
+      const initialJourneyPath = journey?.getAttribute('d')
 
       act(() => {
         flushAllFrames(200)
       })
 
-      expect((journey as SVGPathElement).style.strokeDashoffset).toBe('1')
+      expect(journey?.getAttribute('d')).toBe(initialJourneyPath)
 
       act(() => {
         flushAllFrames(550)
       })
 
-      expect(Number((journey as SVGPathElement).style.strokeDashoffset)).toBeCloseTo(0)
+      expect(journey?.getAttribute('d')).not.toBe(initialJourneyPath)
 
       act(() => {
         flushAllFrames(500)
