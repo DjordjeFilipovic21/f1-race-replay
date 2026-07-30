@@ -178,6 +178,29 @@ progress only inside the freshness limit; stale coordinates become `null`.
 Retired/out state remains explicit future status logic and cannot turn stale
 geometry into a live observation.
 
+### Live ranking epoch and asynchronous timing streams
+
+Browser ranking does not add a circuit length when the official lap counter
+changes. FastF1 lap and position streams can reach the same browser timestamp in
+either order, so doing that would temporarily advance a driver by a full lap
+and the monotonic progress guard would preserve the false lead. Instead, live
+progress unwraps projected distance at a deterministic ranking cut half a
+circuit from the visual start/finish. That cut is deliberately independent of
+the official timing line and works identically for clockwise and
+counter-clockwise centerlines.
+
+All grid starters are seeded into one shared cut-crossing epoch at the first
+synchronized frame. A driver first observed from the pit lane is assigned one
+of the two lap-compatible cut epochs by choosing the candidate nearest to the
+established field's median progress; pit starts therefore do not receive a
+fabricated circuit. Official lap changes remain validation evidence, while the
+projected geometric cut is the sole source of live spatial unwrapping.
+
+The ranking cut affects only derived race progress and leaderboard order.
+Published `trackDistanceMeters`, track geometry, and start/finish coordinates
+retain their original visual coordinate system. Per-event display rotation is
+also presentation-only and cannot affect progress or ranking.
+
 ## Limitations
 
 The test helper is intentionally scoped to this calibration spike and is not a

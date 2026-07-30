@@ -68,6 +68,34 @@ def test_generator_preserves_explicit_display_rotation_override():
     assert asset["rotationDegrees"] == -37.5
 
 
+def test_generator_rotates_imola_display_by_180_degrees_without_changing_geometry():
+    baseline = generate_track_assets(_snapshot(), centerline_points=8)
+    imola = generate_track_assets(
+        _snapshot(session_id="2024-07-race", event_name="Emilia Romagna Grand Prix"),
+        centerline_points=8,
+    )
+
+    assert imola["rotationDegrees"] == pytest.approx(
+        ((baseline["rotationDegrees"] + 360.0) % 360.0) - 180.0,
+    )
+    assert {
+        key: imola[key]
+        for key in ("centerLine", "innerBoundary", "outerBoundary", "startFinish", "circuitLengthMeters")
+    } == {
+        key: baseline[key]
+        for key in ("centerLine", "innerBoundary", "outerBoundary", "startFinish", "circuitLengthMeters")
+    }
+
+
+def test_explicit_imola_display_rotation_remains_authoritative():
+    asset = generate_track_assets(
+        _snapshot(session_id="2024-07-race", event_name="Emilia Romagna Grand Prix"),
+        rotation_degrees=-37.5,
+    )
+
+    assert asset["rotationDegrees"] == -37.5
+
+
 def test_reference_lap_selector_matches_the_generator_source_policy():
     reference = select_reference_lap(_snapshot())
 
@@ -182,7 +210,10 @@ def _calibration_snapshot(*, boundary_count: int) -> CanonicalGenerationSnapshot
     return CanonicalGenerationSnapshot("canonical", "a" * 64, frames)
 
 
-def _snapshot(*, points=None):
+def _snapshot(
+    *, points=None, session_id: str = "2024-bahrain-race",
+    event_name: str = "Bahrain Grand Prix",
+):
     points = points or ((1000.0, 0.0), (1100.0, 0.0), (1100.0, 100.0), (1000.0, 100.0))
     laps = pl.DataFrame([
         _lap("AAA", 1, 0, 1000, 900, pit_in_time_ms=500),
@@ -202,7 +233,7 @@ def _snapshot(*, points=None):
     ])
     frames = {
         "session_metadata": pl.DataFrame([{
-            "session_id": "2024-bahrain-race", "event_name": "Bahrain Grand Prix",
+            "session_id": session_id, "event_name": event_name,
         }]),
         "laps": laps,
         "position_telemetry": pl.DataFrame(rows),

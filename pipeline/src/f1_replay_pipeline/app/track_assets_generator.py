@@ -28,6 +28,7 @@ _MAX_START_FINISH_SPREAD_M = 75.0
 _SAFE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 Point = tuple[float, float]
+_DISPLAY_ROTATION_ADJUSTMENTS_DEGREES = {"2024-07-race": 180.0}
 
 
 class TrackAssetsGenerationError(ValueError):
@@ -70,10 +71,8 @@ def generate_track_assets(
     )
     inner, outer = _offset_boundaries(centerline, visual_track_width_m / 2.0)
     length_m = _polyline_length(centerline)
-    display_rotation = (
-        _landscape_rotation_degrees(centerline)
-        if rotation_degrees is None
-        else float(rotation_degrees)
+    display_rotation = _resolved_display_rotation(
+        fixture_id, centerline, rotation_degrees,
     )
     return {
         "contractVersion": "v1",
@@ -390,6 +389,16 @@ def _landscape_rotation_degrees(points):
     if height > width:
         rotation += 90.0
     return ((rotation + 180.0) % 360.0) - 180.0
+
+
+def _resolved_display_rotation(
+    fixture_id: str, centerline: tuple[Point, ...], explicit_rotation: float | None,
+) -> float:
+    if explicit_rotation is not None:
+        return float(explicit_rotation)
+    automatic = _landscape_rotation_degrees(centerline)
+    adjusted = automatic + _DISPLAY_ROTATION_ADJUSTMENTS_DEGREES.get(fixture_id, 0.0)
+    return ((adjusted + 180.0) % 360.0) - 180.0
 
 
 def _display_extents(points, rotation_degrees):

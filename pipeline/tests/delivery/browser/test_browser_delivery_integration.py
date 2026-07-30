@@ -470,9 +470,11 @@ def test_startup_guard_does_not_mix_asynchronous_per_driver_samples(tmp_path: Pa
     assert _leaderboard_value(delivery, 4_000) == ("NOR", "RUS", "TSU", "OCO")
 
 
-def test_origin_split_seeds_dynamic_leaderboard_in_grid_order(tmp_path: Path) -> None:
+def test_shifted_ranking_cut_seeds_visual_origin_straddle_without_grid_branching(
+    tmp_path: Path,
+) -> None:
     canonical_parent = tmp_path / "canonical"
-    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 380.0, "TSU": 370.0, "OCO": 10.0})
+    frames = _startup_grid_frames({"NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0})
     publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
 
     delivery = build_browser_delivery(
@@ -502,16 +504,18 @@ def test_origin_split_excludes_a_pit_lane_starter_from_grid_calibration(tmp_path
     assert _leaderboard_value(delivery, 0)[:4] == ("NOR", "RUS", "TSU", "OCO")
 
 
-def test_pit_lane_starter_joins_live_progress_after_pit_out(tmp_path: Path) -> None:
+def test_pit_lane_starter_joins_current_race_epoch_without_a_fabricated_lap(
+    tmp_path: Path,
+) -> None:
     canonical_parent = tmp_path / "canonical"
     frames = _startup_grid_frames(
-        {"NOR": 30.0, "RUS": 20.0, "TSU": 10.0, "OCO": 390.0, "PER": 380.0, "SAI": 299.0},
+        {"NOR": 130.0, "RUS": 120.0, "TSU": 110.0, "OCO": 100.0, "PER": 90.0, "SAI": 299.0},
         position_samples={
-            "NOR": ((0, 30.0), (600, 100.0)),
-            "RUS": ((0, 20.0), (600, 90.0)),
-            "TSU": ((0, 10.0), (600, 80.0)),
-            "OCO": ((0, 390.0), (600, 35.0)),
-            "PER": ((0, 380.0), (600, 20.0)),
+            "NOR": ((0, 130.0), (600, 195.0)),
+            "RUS": ((0, 120.0), (600, 185.0)),
+            "TSU": ((0, 110.0), (600, 175.0)),
+            "OCO": ((0, 100.0), (600, 165.0)),
+            "PER": ((0, 90.0), (600, 155.0)),
             "SAI": ((0, 299.0), (600, 25.0)),
         },
     )
@@ -526,11 +530,42 @@ def test_pit_lane_starter_joins_live_progress_after_pit_out(tmp_path: Path) -> N
     )
 
     order = _leaderboard_value(delivery, 600)
-    assert order.index("SAI") < order.index("PER")
-    assert _driver_value(delivery, "SAI", "position", 600) == 5
+    assert order == ("NOR", "RUS", "TSU", "OCO", "PER", "SAI")
+    assert _driver_value(delivery, "SAI", "position", 600) == 6
+    assert _driver_value(delivery, "SAI", "track_distance_meters", 600) == 25.0
 
 
-def test_origin_split_seeds_progress_state_once_at_the_shared_startup_frame(
+def test_pit_lane_starter_after_shifted_cut_joins_the_nearest_field_epoch(
+    tmp_path: Path,
+) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"NOR": 190.0, "RUS": 185.0, "TSU": 180.0, "OCO": 175.0, "PER": 170.0, "SAI": 299.0},
+        position_samples={
+            "NOR": ((0, 190.0), (600, 210.0)),
+            "RUS": ((0, 185.0), (600, 208.0)),
+            "TSU": ((0, 180.0), (600, 206.0)),
+            "OCO": ((0, 175.0), (600, 204.0)),
+            "PER": ((0, 170.0), (600, 202.0)),
+            "SAI": ((0, 299.0), (600, 201.0)),
+        },
+    )
+    _add_pit_lane_start(frames, "SAI", 500)
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 600) == ("NOR", "RUS", "TSU", "OCO", "PER", "SAI")
+    assert _driver_value(delivery, "SAI", "position", 600) == 6
+    assert _driver_value(delivery, "SAI", "track_distance_meters", 600) == pytest.approx(201.0)
+
+
+def test_shifted_cut_seeds_progress_state_once_at_the_shared_startup_frame(
     tmp_path: Path, monkeypatch,
 ) -> None:
     canonical_parent = tmp_path / "canonical"
@@ -552,18 +587,18 @@ def test_origin_split_seeds_progress_state_once_at_the_shared_startup_frame(
 
     plan = captured["plan"]
     assert plan.timestamp_ms == 0
-    assert plan.seeds["NOR"].state.last_valid_progress_meters == 430.0
+    assert plan.seeds["NOR"].state.last_valid_progress_meters == 230.0
     assert plan.seeds["NOR"].state.last_valid_time_ms == 0
-    assert plan.seeds["NOR"].state.within_lap_wrap_count == 1
-    assert plan.seeds["NOR"].state.within_lap_offset_meters == 400.0
-    assert plan.seeds["OCO"].state.last_valid_progress_meters == 390.0
-    assert plan.seeds["OCO"].state.within_lap_wrap_count == 0
-    assert plan.seeds["OCO"].state.within_lap_offset_meters == 0.0
+    assert plan.seeds["NOR"].state.last_ranking_distance_meters == 230.0
+    assert plan.seeds["NOR"].state.cut_crossing_count == 0
+    assert plan.seeds["OCO"].state.last_valid_progress_meters == 190.0
+    assert plan.seeds["OCO"].state.last_ranking_distance_meters == 190.0
+    assert plan.seeds["OCO"].state.cut_crossing_count == 0
 
 
-def test_three_starter_origin_split_seeds_dynamic_leaderboard_in_grid_order(tmp_path: Path) -> None:
+def test_three_starter_visual_origin_straddle_uses_the_shifted_cut(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
-    frames = _startup_grid_frames({"NOR": 390.0, "RUS": 380.0, "TSU": 10.0})
+    frames = _startup_grid_frames({"NOR": 30.0, "RUS": 20.0, "TSU": 390.0})
     publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
 
     delivery = build_browser_delivery(
@@ -574,16 +609,18 @@ def test_three_starter_origin_split_seeds_dynamic_leaderboard_in_grid_order(tmp_
     assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU")
 
 
-def test_origin_split_rejects_inconsistent_projected_grid_order(tmp_path: Path) -> None:
+def test_origin_split_accepts_projected_overtake_of_grid_leader(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
     frames = _startup_grid_frames({"NOR": 390.0, "RUS": 10.0, "TSU": 380.0, "OCO": 370.0})
     publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
 
-    with pytest.raises(BrowserDeliveryBuildError, match="projected ordering"):
-        build_browser_delivery(
-            read_validated_canonical_generation(canonical_parent), _square_track_assets(),
-            quality_assessor=lambda *_: _assessment(True),
-        )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("RUS", "NOR", "TSU", "OCO")
+    assert _leaderboard_value(delivery, 5_000) == ("RUS", "NOR", "TSU", "OCO")
 
 
 def test_origin_split_rejects_duplicate_grid_positions(tmp_path: Path) -> None:
@@ -606,7 +643,7 @@ def test_origin_split_rejects_a_non_compact_projected_pack(tmp_path: Path) -> No
     frames = _startup_grid_frames({"NOR": 390.0, "RUS": 250.0, "TSU": 100.0, "OCO": 10.0})
     publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
 
-    with pytest.raises(BrowserDeliveryBuildError, match="not a compact circular grid"):
+    with pytest.raises(BrowserDeliveryBuildError, match="not a compact shifted grid"):
         build_browser_delivery(
             read_validated_canonical_generation(canonical_parent), _square_track_assets(),
             quality_assessor=lambda *_: _assessment(True),
@@ -628,6 +665,23 @@ def test_dns_starter_is_excluded_before_origin_split_reconciliation(tmp_path: Pa
 
     assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "TSU")
     assert _driver_value(delivery, "OCO", "status", 0) == "OUT"
+
+
+def test_later_disqualified_driver_still_joins_the_shared_startup_epoch(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical"
+    frames = _startup_grid_frames(
+        {"HUL": 390.0, "NOR": 30.0, "RUS": 20.0},
+        result_statuses={"HUL": "Disqualified"},
+        grid_positions={"NOR": 1, "RUS": 2, "HUL": 3},
+    )
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert _leaderboard_value(delivery, 0) == ("NOR", "RUS", "HUL")
 
 
 def test_origin_split_handles_an_immediate_rear_side_wrap_without_a_ranking_jump(tmp_path: Path) -> None:
