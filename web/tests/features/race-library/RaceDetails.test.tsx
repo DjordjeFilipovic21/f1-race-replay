@@ -49,7 +49,7 @@ afterEach(() => {
 })
 
 describe('RaceDetails visual integration', () => {
-  test('renders the globe and circuit preview before sessions with the explicit season source', async () => {
+  test('renders the circuit preview before sessions with the explicit season source', async () => {
     const source = createSource()
     mockLoadCircuitPreview.mockResolvedValue({ pathData: 'M 0 0 L 1 1', viewBox: '0 0 1 1' })
 
@@ -68,15 +68,16 @@ describe('RaceDetails visual integration', () => {
       />,
     )
 
-    expect(document.querySelector('.race-globe')).toBeTruthy()
     expect(document.querySelector('.circuit-preview')).toBeTruthy()
-    expect(document.querySelector('.library-details__visuals')?.compareDocumentPosition(
+    expect(screen.getByText('Bahrain')).toBeTruthy()
+    expect(screen.getByText('Grand Prix')).toBeTruthy()
+    expect(document.querySelector('.race-presentation__circuit')?.compareDocumentPosition(
       screen.getByRole('radiogroup', { name: 'Available sessions' }),
     )).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     await waitFor(() => expect(mockLoadCircuitPreview).toHaveBeenCalledWith(source, 'visuals/bahrain.json'))
   })
 
-  test('renders no visual section when a race has no visual metadata', () => {
+  test('renders a temporary circuit preview when a race has no visual metadata', () => {
     render(
       <RaceDetails
         race={createRace('race-1', 'Bahrain Grand Prix')}
@@ -88,12 +89,13 @@ describe('RaceDetails visual integration', () => {
       />,
     )
 
-    expect(document.querySelector('.library-details__visuals')).toBeNull()
-    expect(document.querySelector('.race-globe')).toBeNull()
+    expect(document.querySelector('.circuit-preview--temporary')).toBeTruthy()
+    expect(screen.getByRole('img', { name: 'Bahrain Grand Prix circuit preview' })
+      .getAttribute('data-preview-source')).toBe('temporary')
     expect(mockLoadCircuitPreview).not.toHaveBeenCalled()
   })
 
-  test('keeps a globe-only layout when coordinates have no circuit pointer', () => {
+  test('renders a temporary circuit preview when coordinates have no circuit pointer', () => {
     render(
       <RaceDetails
         race={createRace('race-1', 'Bahrain Grand Prix', { latitude: 26.0325, longitude: 50.5106 })}
@@ -105,9 +107,8 @@ describe('RaceDetails visual integration', () => {
       />,
     )
 
-    expect(document.querySelector('.library-details__visuals')).toBeTruthy()
-    expect(document.querySelector('.race-globe')).toBeTruthy()
-    expect(document.querySelector('.circuit-preview')).toBeNull()
+    expect(document.querySelector('.circuit-preview--temporary')).toBeTruthy()
+    expect(mockLoadCircuitPreview).not.toHaveBeenCalled()
   })
 
   test('loads only the selected race preview as selection changes', async () => {
@@ -146,7 +147,9 @@ describe('RaceDetails visual integration', () => {
     await waitFor(() => expect(mockLoadCircuitPreview).toHaveBeenCalledWith(source, 'visuals/bahrain.json'))
     expect(mockLoadCircuitPreview).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: /Monaco Grand Prix/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Change circuit' }), {
+      target: { value: 'race-2' },
+    })
     await waitFor(() => expect(mockLoadCircuitPreview).toHaveBeenLastCalledWith(source, 'visuals/monaco.json'))
     expect(mockLoadCircuitPreview).toHaveBeenCalledTimes(2)
   })

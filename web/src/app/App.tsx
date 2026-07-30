@@ -8,6 +8,7 @@ import { useUrlSelection } from '../url/useUrlSelection'
 import type { UrlSelection } from '../url/adapter'
 
 const DEFAULT_YEAR = 2024
+const DEFAULT_AVAILABLE_YEARS = [DEFAULT_YEAR] as const
 const DEFAULT_SEASONS_BASE_URL = '/replay-data/seasons/'
 const INVALID_SELECTION_MESSAGE = 'Choose a listed race and a session marked “Ready to replay”.'
 
@@ -28,6 +29,7 @@ export default function App() {
   const [urlSelection, setUrlSelection] = useUrlSelection()
   const [localSelection, setLocalSelection] = useState<LocalSelection>(() => toLocalSelection(urlSelection))
   const requestedYear = urlSelection?.year ?? localSelection.year
+  const availableYears = resolveAvailableYears(import.meta.env.VITE_REPLAY_SEASON_YEARS, requestedYear)
   const { catalog: loadedCatalog, source, isLoading, error, retry } = useSeasonCatalog({ seasonsBaseUrl, year: requestedYear })
   const catalog = loadedCatalog?.year === requestedYear ? loadedCatalog : null
   const urlReplayTarget = resolveReplayTarget(catalog, urlSelection, seasonsBaseUrl)
@@ -40,6 +42,10 @@ export default function App() {
 
   function handleSelectRace(raceId: string | null): void {
     setLocalSelection((current) => ({ ...current, race: raceId, session: null }))
+  }
+
+  function handleSelectYear(year: number): void {
+    setLocalSelection({ year, race: null, session: null })
   }
 
   function handleSelectSession(sessionCode: string | null): void {
@@ -74,10 +80,13 @@ export default function App() {
     <RaceLibraryPage
       catalog={catalog}
       source={source}
+      availableYears={availableYears}
+      selectedYear={requestedYear}
       selectedRaceId={localSelection.race}
       selectedSessionCode={localSelection.session}
       isLoading={isLoading}
       error={error}
+      onSelectYear={handleSelectYear}
       onSelectRace={handleSelectRace}
       onSelectSession={handleSelectSession}
       onOpenWorkspace={handleOpenWorkspace}
@@ -136,4 +145,11 @@ function toLocalSelection(selection: UrlSelection | null): LocalSelection {
 
 function withTrailingSlash(value: string): string {
   return value.endsWith('/') ? value : `${value}/`
+}
+
+function resolveAvailableYears(configuredYears: string | undefined, requestedYear: number): readonly number[] {
+  const parsedYears = configuredYears?.split(',')
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isInteger(value) && value > 0) ?? DEFAULT_AVAILABLE_YEARS
+  return [...new Set([...parsedYears, requestedYear])].sort((left, right) => right - left)
 }

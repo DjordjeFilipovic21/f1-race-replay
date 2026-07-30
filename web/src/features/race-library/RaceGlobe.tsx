@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { geoPath } from 'd3-geo'
+import { geoInterpolate, geoPath } from 'd3-geo'
 import type { GeoProjection } from 'd3-geo'
 import type { CatalogV2Race } from '../../data/catalog/types'
 import {
@@ -16,6 +16,12 @@ const DEFAULT_ROTATION: GlobeRotation = [0, 0, 0]
 const GRATICULE_STEP_DEGREES = 15
 
 const HAS_WORLD_GEOMETRY = worldCountries.features.length > 0
+const JOURNEY_SAMPLE_COUNT = 32
+
+interface GlobeCoordinate {
+  readonly latitude: number
+  readonly longitude: number
+}
 
 export interface RaceGlobeProps {
   readonly race: CatalogV2Race | null
@@ -41,6 +47,7 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     : DEFAULT_ROTATION
 
   const [displayRotation, setDisplayRotation] = useState<GlobeRotation>(initialRotation)
+  const [journeySource, setJourneySource] = useState<GlobeCoordinate | null>(null)
   const currentRotationRef = useRef<GlobeRotation>(initialRotation)
   const previousVisualRef = useRef(visual)
   const animationFrameRef = useRef<number | null>(null)
@@ -78,6 +85,7 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     }
 
     if (!hasValidVisual) {
+      setJourneySource(null)
       currentRotationRef.current = DEFAULT_ROTATION
       setDisplayRotation(DEFAULT_ROTATION)
       return
@@ -92,6 +100,12 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     if (previousVisual === visual) {
       return
     }
+
+    setJourneySource(previousVisual !== null
+      && isValidCoordinate(previousVisual.latitude, previousVisual.longitude)
+      && (previousVisual.latitude !== visual.latitude || previousVisual.longitude !== visual.longitude)
+      ? { latitude: previousVisual.latitude, longitude: previousVisual.longitude }
+      : null)
 
     if (rotationEquals(currentRotationRef.current, targetRotation)) {
       return
@@ -161,6 +175,19 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
     }))
   }, [pathGenerator])
 
+  const journeyPath = useMemo(() => {
+    if (!hasValidVisual || visual === null || journeySource === null) return ''
+    const interpolate = geoInterpolate(
+      [journeySource.longitude, journeySource.latitude],
+      [visual.longitude, visual.latitude],
+    )
+    const coordinates = Array.from(
+      { length: JOURNEY_SAMPLE_COUNT + 1 },
+      (_, index) => interpolate(index / JOURNEY_SAMPLE_COUNT),
+    )
+    return pathGenerator({ type: 'LineString', coordinates }) ?? ''
+  }, [hasValidVisual, journeySource, pathGenerator, visual])
+
   const markerPosition = useMemo(() => {
     if (!hasValidVisual || visual === null) return null
     const projected = projection([visual.longitude, visual.latitude])
@@ -209,6 +236,14 @@ export const RaceGlobe = memo(function RaceGlobe({ race }: RaceGlobeProps) {
             <path key={key} className="race-globe__country" d={d} />
           ))}
         </g>
+        {journeyPath !== '' && (
+          <path
+            key={`${journeySource?.longitude ?? 0}-${visual?.longitude ?? 0}`}
+            className="race-globe__journey"
+            d={journeyPath}
+            pathLength={1}
+          />
+        )}
         {markerPosition !== null && (
           <circle
             className="race-globe__marker"

@@ -7,23 +7,23 @@
 }
 
 :root {
-  color: #f1f3f5;
-  background: #0c0f12;
+  color: #f4f1ea;
+  background: #07090c;
   font-family: ui-sans-serif, system-ui, sans-serif;
-  --surface: #15191d;
-  --surface-muted: #20272d;
-  --surface-raised: #191f25;
-  --border: #35404a;
-  --border-strong: #596673;
-  --text-muted: #aeb9c2;
-  --accent: #e26d3d;
-  --focus: #f0bc53;
-  --danger: #ffb4a0;
+  --surface: #101419;
+  --surface-muted: #171d23;
+  --surface-raised: #12171c;
+  --border: #28313a;
+  --border-strong: #48535e;
+  --text-muted: #919ca7;
+  --accent: #d6ff00;
+  --focus: #f4f1ea;
+  --danger: #ff6b78;
   --timeline-yellow: #f0bc53;
   --timeline-sc: #e26d3d;
   --timeline-red: #ff5158;
   --timeline-vsc: #7fc8e8;
-  --interactive: #171d22;
-  --interactive-hover: #29333b;
+  --interactive: #11171c;
+  --interactive-hover: #1c242b;
   --font-display: 'Oxanium', 'Arial Narrow', ui-sans-serif, system-ui, sans-serif;
 }

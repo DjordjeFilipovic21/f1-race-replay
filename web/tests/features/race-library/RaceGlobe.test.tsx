@@ -329,6 +329,28 @@ describe('RaceGlobe', () => {
       expect(window.requestAnimationFrame).toHaveBeenCalled()
     })
 
+    test('draws a clipped geographic journey when moving between races', () => {
+      const raceA = createRace({
+        race_id: 'race-a',
+        visual: { latitude: 26.0325, longitude: 50.5106 },
+      })
+      const { rerender } = render(<RaceGlobe race={raceA} />)
+      const raceB = createRace({
+        race_id: 'race-b',
+        event_name: 'Monaco Grand Prix',
+        visual: { latitude: 43.7389, longitude: 7.4194 },
+      })
+
+      act(() => {
+        rerender(<RaceGlobe race={raceB} />)
+      })
+
+      const journey = document.querySelector('.race-globe__journey')
+      expect(journey).toBeTruthy()
+      expect(journey?.getAttribute('d')).toBeTruthy()
+      expect(journey?.getAttribute('pathLength')).toBe('1')
+    })
+
     test('cancels race B when race C is selected before race B completes', () => {
       const raceA = createRace({
         race_id: 'race-a',

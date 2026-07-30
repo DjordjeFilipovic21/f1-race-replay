@@ -130,8 +130,8 @@ describe('RaceLibraryPage', () => {
       />
     )
 
-    expect(screen.getByText('Season 2024')).toBeTruthy()
-    expect(screen.getByText('2024 Races')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Choose your race' })).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: 'Season year' }) as HTMLSelectElement).value).toBe('2024')
     expect(screen.getByText('1 event')).toBeTruthy()
   })
 
@@ -152,8 +152,8 @@ describe('RaceLibraryPage', () => {
 
     expect(screen.getByRole('list', { name: 'Season races' })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
-    expect(screen.getByText('R1')).toBeTruthy()
-    expect(screen.getByText('Bahrain')).toBeTruthy()
+    expect(screen.getByText('Round 01')).toBeTruthy()
+    expect(screen.getByText('Sakhir, Bahrain')).toBeTruthy()
   })
 
   test('calls onSelectRace when a race is clicked', () => {
@@ -176,7 +176,31 @@ describe('RaceLibraryPage', () => {
     expect(onSelectRace).toHaveBeenCalledWith('race-1')
   })
 
-  test('expands selected race to show sessions', () => {
+  test('changes season and clears the current flow through the page callback', () => {
+    const onSelectYear = vi.fn()
+    render(
+      <RaceLibraryPage
+        catalog={createCatalog()}
+        availableYears={[2025, 2024]}
+        selectedYear={2024}
+        selectedRaceId={null}
+        selectedSessionCode={null}
+        isLoading={false}
+        error={null}
+        onSelectYear={onSelectYear}
+        onSelectRace={vi.fn()}
+        onSelectSession={vi.fn()}
+        onOpenWorkspace={vi.fn()}
+      />
+    )
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Season year' }), {
+      target: { value: '2025' },
+    })
+    expect(onSelectYear).toHaveBeenCalledWith(2025)
+  })
+
+  test('shows the race presentation and sessions for a selected race', () => {
     const catalog = createCatalog()
     render(
       <RaceLibraryPage
@@ -191,14 +215,9 @@ describe('RaceLibraryPage', () => {
       />
     )
 
-    const raceTrigger = screen.getByRole('button', { name: /Bahrain Grand Prix/ })
-    expect(raceTrigger.getAttribute('aria-expanded')).toBe('true')
-    const detailsId = raceTrigger.getAttribute('aria-controls')
-    expect(detailsId).toBeTruthy()
-    expect(document.getElementById(detailsId ?? '')?.getAttribute('role')).toBe('region')
-    const raceListItem = raceTrigger.closest('[role="listitem"]')
-    expect(raceListItem?.hasAttribute('aria-selected')).toBe(false)
-    expect(raceListItem?.hasAttribute('aria-expanded')).toBe(false)
+    expect(screen.getByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Bahrain Grand Prix details' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Change circuit' })).toBeTruthy()
     expect(screen.getByRole('radiogroup', { name: 'Available sessions' })).toBeTruthy()
     expect(screen.getByRole('radio', { name: /Race/ })).toBeTruthy()
   })
@@ -312,7 +331,51 @@ describe('RaceLibraryPage', () => {
     expect(screen.getByText('Awaiting validation')).toBeTruthy()
   })
 
-  test('collapses race when clicking selected race again', () => {
+  test('navigates to the next round and supports direct circuit selection', () => {
+    const onSelectRace = vi.fn()
+    const secondRace = createRace({
+      race_id: 'race-2',
+      round_number: 2,
+      event_name: 'Saudi Arabian Grand Prix',
+      country: 'Saudi Arabia',
+      location: 'Jeddah',
+    })
+    const catalog = createCatalog({ races: [createRace(), secondRace] })
+    const { rerender } = render(
+      <RaceLibraryPage
+        catalog={catalog}
+        selectedRaceId="race-1"
+        selectedSessionCode={null}
+        isLoading={false}
+        error={null}
+        onSelectRace={onSelectRace}
+        onSelectSession={vi.fn()}
+        onOpenWorkspace={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next round: Saudi Arabian Grand Prix' }))
+    expect(onSelectRace).toHaveBeenCalledWith('race-2')
+
+    rerender(
+      <RaceLibraryPage
+        catalog={catalog}
+        selectedRaceId="race-2"
+        selectedSessionCode={null}
+        isLoading={false}
+        error={null}
+        onSelectRace={onSelectRace}
+        onSelectSession={vi.fn()}
+        onOpenWorkspace={vi.fn()}
+      />
+    )
+    fireEvent.change(screen.getByRole('combobox', { name: 'Change circuit' }), {
+      target: { value: 'race-1' },
+    })
+    expect(onSelectRace).toHaveBeenLastCalledWith('race-1')
+  })
+
+  test('returns to all races from the presentation', () => {
     const onSelectRace = vi.fn()
     const onSelectSession = vi.fn()
     const catalog = createCatalog()
@@ -329,7 +392,7 @@ describe('RaceLibraryPage', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /Bahrain Grand Prix/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'All races' }))
     expect(onSelectRace).toHaveBeenCalledWith(null)
     expect(onSelectSession).toHaveBeenCalledWith(null)
   })

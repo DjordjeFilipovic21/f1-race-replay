@@ -153,7 +153,8 @@ test('loads a valid year-only URL without showing a selection error', async () =
 
   expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
   expect(screen.queryByRole('alert', { name: 'Replay Selection Unavailable' })).toBeNull()
-  expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ }).getAttribute('aria-expanded')).toBe('false')
+  expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
+  expect(screen.queryByRole('combobox', { name: 'Change circuit' })).toBeNull()
   expect(window.location.search).toBe('?trajectory=linear&year=2024')
 })
 
@@ -166,11 +167,9 @@ test('change race returns to the library, preserves unrelated query values, and 
   await screen.findByRole('group', { name: 'Race status timeline' })
   fireEvent.click(screen.getByRole('button', { name: 'Change race' }))
 
-  expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
   expect(window.location.search).toBe('?trajectory=linear')
-  const selectedRaceTrigger = screen.getByRole('button', { name: /Bahrain Grand Prix/ })
-  expect(selectedRaceTrigger.getAttribute('aria-expanded')).toBe('true')
-  expect(selectedRaceTrigger.getAttribute('aria-controls')).toBeTruthy()
+  expect(screen.getByRole('combobox', { name: 'Change circuit' })).toBeTruthy()
   expect(screen.getByRole('radio', { name: /Race/ }).getAttribute('aria-checked')).toBe('true')
   expect(controller.dispose).toHaveBeenCalledOnce()
 })
@@ -195,7 +194,7 @@ test('switches screens on browser navigation while retaining StrictMode stale-lo
     window.history.pushState(null, '', '/?trajectory=linear')
     window.dispatchEvent(new PopStateEvent('popstate'))
   })
-  expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
   expect(activeController.dispose).toHaveBeenCalledOnce()
   unmount()
 })
