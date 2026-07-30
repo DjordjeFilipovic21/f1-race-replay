@@ -7,6 +7,7 @@ from f1_replay_pipeline.analysis.live_position.live_position_progress import (
     ProgressReason,
     ProgressState,
     advance_progress,
+    seed_progress,
 )
 from f1_replay_pipeline.analysis.live_position.live_position_projection import CenterlineProjection
 
@@ -14,96 +15,121 @@ from f1_replay_pipeline.analysis.live_position.live_position_projection import C
 LENGTH = 1_000.0
 
 
-def test_active_same_lap_progress_uses_lap_local_distance():
-    update = advance_progress(ProgressState(), session_time_ms=0, lap_number=2, circuit_length_meters=LENGTH, projection=_projection(250.0), mode=ProgressMode.ACTIVE)
-
-    assert update.race_progress_meters == 1_250.0
-
-
-def test_official_lap_increment_resets_within_lap_wrap_state():
-    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(900.0), mode=ProgressMode.ACTIVE)
-    update = advance_progress(first.state, session_time_ms=10, lap_number=2, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-
-    assert update.race_progress_meters == 1_020.0 and update.state.within_lap_wrap_count == 0
-
-
-def test_official_lap_increment_carries_prior_geometric_wrap_when_reset_regresses():
-    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-    lap_end = advance_progress(wrapped.state, session_time_ms=20, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    update = advance_progress(lap_end.state, session_time_ms=30, lap_number=2, circuit_length_meters=LENGTH, projection=_projection(10.0), mode=ProgressMode.ACTIVE)
-
-    assert update.race_progress_meters == 2_010.0
-    assert update.state.within_lap_wrap_count == 1
-    assert update.state.within_lap_offset_meters == LENGTH
-
-
-def test_official_lap_increment_after_wrap_resets_when_candidate_is_monotonic():
-    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-    update = advance_progress(wrapped.state, session_time_ms=20, lap_number=2, circuit_length_meters=LENGTH, projection=_projection(990.0), mode=ProgressMode.ACTIVE)
-
-    assert update.race_progress_meters == 1_990.0
-    assert update.state.within_lap_wrap_count == 0
-    assert update.state.within_lap_offset_meters == 0.0
-
-
-def test_seeded_front_progress_remains_monotonic_and_official_lap_increment_resets_offset():
-    seeded = ProgressState(
-        last_session_time_ms=0,
-        last_lap_number=1,
-        last_track_distance_meters=30.0,
-        last_valid_progress_meters=1_030.0,
-        last_valid_time_ms=0,
-        within_lap_wrap_count=1,
-        within_lap_offset_meters=LENGTH,
+def test_visual_start_line_lap_increment_does_not_advance_the_geometric_cut_epoch():
+    before_cut = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE,
+    )
+    after_cut = advance_progress(
+        before_cut.state, session_time_ms=10, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(600.0), mode=ProgressMode.ACTIVE,
+    )
+    stale_pre_line = advance_progress(
+        after_cut.state, session_time_ms=20, lap_number=2,
+        circuit_length_meters=LENGTH, projection=_projection(900.0), mode=ProgressMode.ACTIVE,
+    )
+    post_line = advance_progress(
+        stale_pre_line.state, session_time_ms=30, lap_number=2,
+        circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE,
     )
 
-    same_lap = advance_progress(
-        seeded, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH,
-        projection=_projection(40.0), mode=ProgressMode.ACTIVE,
+    assert tuple(
+        update.race_progress_meters
+        for update in (before_cut, after_cut, stale_pre_line, post_line)
+    ) == (900.0, 1_100.0, 1_400.0, 1_520.0)
+    assert post_line.state.cut_crossing_count == 1
+
+
+def test_position_wrap_before_lap_increment_does_not_require_origin_reconciliation():
+    before_cut = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE,
     )
-    next_lap = advance_progress(
-        same_lap.state, session_time_ms=20, lap_number=2, circuit_length_meters=LENGTH,
-        projection=_projection(990.0), mode=ProgressMode.ACTIVE,
+    after_cut = advance_progress(
+        before_cut.state, session_time_ms=10, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(600.0), mode=ProgressMode.ACTIVE,
     )
-
-    assert same_lap.race_progress_meters == 1_040.0
-    assert next_lap.race_progress_meters == 1_990.0
-    assert next_lap.state.within_lap_wrap_count == 0
-    assert next_lap.state.within_lap_offset_meters == 0.0
-
-
-def test_seeded_rear_progress_accepts_the_immediate_geometric_wrap():
-    first = advance_progress(
-        ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
-        projection=_projection(990.0), mode=ProgressMode.ACTIVE,
+    pre_line = advance_progress(
+        after_cut.state, session_time_ms=20, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE,
     )
-
     wrapped = advance_progress(
-        first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH,
-        projection=_projection(10.0), mode=ProgressMode.ACTIVE,
+        pre_line.state, session_time_ms=30, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE,
+    )
+    lap_increment = advance_progress(
+        wrapped.state, session_time_ms=40, lap_number=2,
+        circuit_length_meters=LENGTH, projection=_projection(40.0), mode=ProgressMode.ACTIVE,
     )
 
-    assert wrapped.race_progress_meters == 1_010.0
-    assert wrapped.state.within_lap_wrap_count == 1
+    assert wrapped.race_progress_meters == 1_520.0
+    assert lap_increment.race_progress_meters == 1_540.0
+    assert lap_increment.state.cut_crossing_count == 1
 
 
-def test_approved_geometric_wrap_offsets_remaining_timing_lap_samples():
-    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-    following = advance_progress(wrapped.state, session_time_ms=20, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(80.0), mode=ProgressMode.ACTIVE)
+def test_initial_progress_uses_the_half_circuit_ranking_cut():
+    before_cut = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=2,
+        circuit_length_meters=LENGTH, projection=_projection(250.0), mode=ProgressMode.ACTIVE,
+    )
+    after_cut = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=2,
+        circuit_length_meters=LENGTH, projection=_projection(750.0), mode=ProgressMode.ACTIVE,
+    )
 
-    assert wrapped.race_progress_meters == 1_020.0
-    assert following.race_progress_meters == 1_080.0
+    assert before_cut.race_progress_meters == 1_750.0
+    assert after_cut.race_progress_meters == 2_250.0
+
+
+def test_startup_seed_places_both_sides_of_visual_origin_in_one_epoch():
+    front = seed_progress(
+        session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(30.0), cut_crossing_count=0,
+    )
+    rear = seed_progress(
+        session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+        projection=_projection(990.0), cut_crossing_count=0,
+    )
+
+    assert front.race_progress_meters == 530.0
+    assert rear.race_progress_meters == 490.0
+
+
+def test_seed_progress_rejects_missing_projection_and_incompatible_epoch():
+    with pytest.raises(TypeError, match="CenterlineProjection"):
+        seed_progress(
+            session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+            projection=None, cut_crossing_count=0,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="compatible"):
+        seed_progress(
+            session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH,
+            projection=_projection(10.0), cut_crossing_count=2,
+        )
+
+
+def test_ranking_cut_crossing_increments_epoch_before_the_visual_lap_boundary():
+    before = advance_progress(
+        ProgressState(), session_time_ms=0, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE,
+    )
+    after = advance_progress(
+        before.state, session_time_ms=10, lap_number=1,
+        circuit_length_meters=LENGTH, projection=_projection(600.0), mode=ProgressMode.ACTIVE,
+    )
+
+    assert after.race_progress_meters == 1_100.0
+    assert after.state.cut_crossing_count == 1
 
 
 def test_second_wrap_and_non_boundary_backward_jump_fail_closed():
-    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-    second = advance_progress(wrapped.state, session_time_ms=20, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
-    second = advance_progress(second.state, session_time_ms=30, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
-    backward = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE)
+    first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE)
+    wrapped = advance_progress(first.state, session_time_ms=10, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(600.0), mode=ProgressMode.ACTIVE)
+    near_line = advance_progress(wrapped.state, session_time_ms=20, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(950.0), mode=ProgressMode.ACTIVE)
+    visual_wrap = advance_progress(near_line.state, session_time_ms=30, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
+    pre_cut = advance_progress(visual_wrap.state, session_time_ms=40, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE)
+    second = advance_progress(pre_cut.state, session_time_ms=50, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(600.0), mode=ProgressMode.ACTIVE)
+    backward = advance_progress(near_line.state, session_time_ms=30, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(400.0), mode=ProgressMode.ACTIVE)
 
     assert second.reason is ProgressReason.MULTIPLE_WRAP and second.race_progress_meters is None
     assert backward.reason is ProgressReason.INVALID_WRAP and backward.race_progress_meters is None
@@ -114,7 +140,7 @@ def test_active_missing_projection_freezes_at_999_ms_and_expires_at_1000_ms():
     fresh = advance_progress(first.state, session_time_ms=999, lap_number=1, circuit_length_meters=LENGTH, projection=None, mode=ProgressMode.ACTIVE)
     stale = advance_progress(fresh.state, session_time_ms=1_000, lap_number=1, circuit_length_meters=LENGTH, projection=None, mode=ProgressMode.ACTIVE)
 
-    assert fresh.race_progress_meters == 100.0 and fresh.is_frozen is True
+    assert fresh.race_progress_meters == 600.0 and fresh.is_frozen is True
     assert stale.race_progress_meters is None and stale.reason is ProgressReason.STALE_PROJECTION
 
 
@@ -129,8 +155,8 @@ def test_pit_freezes_beyond_stale_cutoff_and_active_resume_reconciles():
     pit = advance_progress(first.state, session_time_ms=2_000, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(10.0), mode=ProgressMode.PIT)
     resumed = advance_progress(pit.state, session_time_ms=2_100, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(20.0), mode=ProgressMode.ACTIVE)
 
-    assert pit.race_progress_meters == 900.0 and pit.reason is ProgressReason.PIT_FROZEN
-    assert resumed.race_progress_meters == 1_020.0
+    assert pit.race_progress_meters == 1_400.0 and pit.reason is ProgressReason.PIT_FROZEN
+    assert resumed.race_progress_meters == 1_520.0
 
 
 @pytest.mark.parametrize("mode", [ProgressMode.RETIRED, ProgressMode.OUT])
@@ -138,7 +164,7 @@ def test_terminal_modes_freeze_last_valid_progress_indefinitely(mode):
     first = advance_progress(ProgressState(), session_time_ms=0, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(100.0), mode=ProgressMode.ACTIVE)
     update = advance_progress(first.state, session_time_ms=99_999, lap_number=1, circuit_length_meters=LENGTH, projection=None, mode=mode)
 
-    assert update.race_progress_meters == 100.0 and update.is_terminal is True
+    assert update.race_progress_meters == 600.0 and update.is_terminal is True
 
 
 def test_finished_mode_freezes_progress_without_becoming_terminal_or_out():
@@ -157,7 +183,7 @@ def test_finished_mode_freezes_progress_without_becoming_terminal_or_out():
 
     assert finished.mode is ProgressMode.FINISHED
     assert finished.state.finished is True and finished.is_terminal is False
-    assert stale.race_progress_meters == finished.race_progress_meters == 200.0
+    assert stale.race_progress_meters == finished.race_progress_meters == 700.0
 
 
 def test_lap_regression_and_skipped_lap_fail_closed():
@@ -195,8 +221,8 @@ def test_valid_observation_after_failure_recovers_from_last_valid_state():
     recovered = advance_progress(missing.state, session_time_ms=30, lap_number=1, circuit_length_meters=LENGTH, projection=_projection(960.0), mode=ProgressMode.ACTIVE)
 
     assert failed.reason is ProgressReason.INVALID_WRAP
-    assert missing.race_progress_meters == 950.0
-    assert recovered.race_progress_meters == 960.0
+    assert missing.race_progress_meters == 1_450.0
+    assert recovered.race_progress_meters == 1_460.0
     assert recovered.state.failure_reason is None
 
 

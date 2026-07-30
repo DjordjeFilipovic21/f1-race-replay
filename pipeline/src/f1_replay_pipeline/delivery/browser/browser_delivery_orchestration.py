@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from statistics import median
 from types import MappingProxyType
 from typing import cast
 
@@ -39,10 +39,11 @@ from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import build_stint_summary
 from f1_replay_pipeline.analysis.live_position.live_position_progress import (
     ProgressMode,
-    ProgressReason,
     ProgressState,
     ProgressUpdate,
     advance_progress,
+    ranking_distance,
+    seed_progress,
 )
 from f1_replay_pipeline.analysis.live_position.live_position_projection import (
     CenterlineProjection,
@@ -62,10 +63,8 @@ from f1_replay_pipeline.app.track_assets_generator import TrackAssetsGenerationE
 ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], ProjectionQualityAssessment]
 
 _STARTUP_PROJECTION_WINDOW_MS = 5_000
-_MIN_STARTERS_FOR_ORIGIN_GUARD = 3
-_MIN_LINEAR_SPAN_FRACTION = 0.8
-_MAX_CIRCULAR_SPAN_FRACTION = 0.2
-_EXCLUDED_STARTER_STATUSES = frozenset({"dns", "didnotstart", "disqualified", "excluded", "out"})
+_MAX_SHIFTED_STARTUP_SPAN_FRACTION = 0.2
+_NON_STARTER_RESULT_STATUSES = frozenset({"dns", "didnotstart"})
 
 
 @dataclass(frozen=True)
@@ -438,61 +437,37 @@ def _startup_seed_plan(
     geometry: ProjectionGeometry, race_start_ms: int, *,
     excluded_driver_ids: frozenset[str] = frozenset(),
 ) -> _StartupSeedPlan | None:
-    """Build one deterministic lap-one branch plan for an origin-crossing grid."""
+    """Seed a compact field against a ranking cut half a circuit from the grid."""
     candidates = _eligible_startup_candidates(results, drivers, excluded_driver_ids)
-    if len(candidates) < _MIN_STARTERS_FOR_ORIGIN_GUARD:
+    if not candidates:
         return None
     observation = _earliest_startup_projection(candidates, geometry, race_start_ms)
     if observation is None:
         raise ValueError(
             "dynamic ranking rejected: synchronized startup projections are unreliable"
         )
-    distances = tuple(projection.track_distance_meters for _, _, projection in observation.candidates)
-    if any(
-        not math.isfinite(distance) or not 0.0 <= distance < geometry.circuit_length_meters
-        for distance in distances
-    ):
-        raise ValueError("dynamic ranking rejected: startup projections contain invalid distances")
+    length = geometry.circuit_length_meters
+    distances = tuple(
+        ranking_distance(projection.track_distance_meters, length)
+        for _, _, projection in observation.candidates
+    )
     if len(set(distances)) != len(distances):
         raise ValueError("dynamic ranking rejected: startup projections contain duplicate positions")
-    linear_span, circular_span = _startup_spans(distances, geometry.circuit_length_meters)
-    if circular_span > geometry.circuit_length_meters * _MAX_CIRCULAR_SPAN_FRACTION:
+    if max(distances) - min(distances) > length * _MAX_SHIFTED_STARTUP_SPAN_FRACTION:
         raise ValueError(
-            "dynamic ranking rejected: startup projections are not a compact circular grid"
+            "dynamic ranking rejected: startup projections are not a compact shifted grid"
         )
-    split_index = 0
-    if linear_span >= geometry.circuit_length_meters * _MIN_LINEAR_SPAN_FRACTION:
-        split_index = _startup_split_index(distances, geometry.circuit_length_meters)
-        if split_index is None:
-            raise ValueError(
-                "dynamic ranking rejected: startup projected ordering is inconsistent with grid order"
-            )
 
     seeds = {}
-    for index, (candidate, lap_number, projection) in enumerate(observation.candidates):
-        distance = projection.track_distance_meters
-        front_side = index < split_index
-        progress = (
-            (lap_number - 1) * geometry.circuit_length_meters
-            + distance
-            + (geometry.circuit_length_meters if front_side else 0.0)
+    for candidate, lap_number, projection in observation.candidates:
+        update = seed_progress(
+            session_time_ms=observation.timestamp_ms,
+            lap_number=lap_number,
+            circuit_length_meters=length,
+            projection=projection,
+            cut_crossing_count=0,
         )
-        state = ProgressState(
-            last_session_time_ms=observation.timestamp_ms,
-            last_lap_number=lap_number,
-            last_track_distance_meters=distance,
-            last_valid_progress_meters=progress,
-            last_valid_time_ms=observation.timestamp_ms,
-            within_lap_wrap_count=1 if front_side else 0,
-            within_lap_offset_meters=geometry.circuit_length_meters if front_side else 0.0,
-        )
-        seeds[candidate.driver_id] = _StartupSeed(
-            state,
-            ProgressUpdate(
-                state, ProgressMode.ACTIVE, distance, progress, False, False,
-                ProgressReason.ACTIVE,
-            ),
-        )
+        seeds[candidate.driver_id] = _StartupSeed(update.state, update)
     return _StartupSeedPlan(observation.timestamp_ms, MappingProxyType(seeds))
 
 
@@ -510,7 +485,7 @@ def _eligible_startup_candidates(
             not isinstance(driver_id, str) or not driver_id
             or driver_id in excluded_driver_ids
             or type(grid_position) is not int or grid_position <= 0
-            or _normalized_status(result.get("status")) in _EXCLUDED_STARTER_STATUSES
+            or _normalized_status(result.get("status")) in _NON_STARTER_RESULT_STATUSES
         ):
             continue
         fields = drivers.get(driver_id)
@@ -553,7 +528,7 @@ def _earliest_startup_projection(
         observations = []
         for candidate in candidates:
             index = candidate.fields.time_ms.index(time_ms)
-            if _normalized_status(candidate.fields.status[index]) in _EXCLUDED_STARTER_STATUSES:
+            if _normalized_status(candidate.fields.status[index]) in _NON_STARTER_RESULT_STATUSES:
                 break
             lap_number = candidate.fields.lap[index]
             if type(lap_number) is not int or lap_number < 1:
@@ -565,34 +540,6 @@ def _earliest_startup_projection(
         if len(observations) == len(candidates):
             return _StartupProjection(time_ms, tuple(observations))
     return None
-
-
-def _startup_spans(distances: Sequence[float], circuit_length_meters: float) -> tuple[float, float]:
-    ordered = tuple(sorted(distances))
-    linear_span = ordered[-1] - ordered[0]
-    circular_gaps = tuple(next_distance - distance for distance, next_distance in zip(ordered, ordered[1:]))
-    circular_gaps += (circuit_length_meters - ordered[-1] + ordered[0],)
-    return linear_span, circuit_length_meters - max(circular_gaps)
-
-
-def _startup_split_index(distances: Sequence[float], circuit_length_meters: float) -> int | None:
-    """Return the grid prefix to offset when one origin-sized jump is present."""
-    threshold = circuit_length_meters * (1.0 - _MAX_CIRCULAR_SPAN_FRACTION)
-    jumps = [
-        index + 1
-        for index, (previous, current) in enumerate(zip(distances, distances[1:]))
-        if abs(previous - current) >= threshold
-    ]
-    if len(jumps) != 1 or not 0 < jumps[0] < len(distances):
-        return None
-    split_index = jumps[0]
-    if any(
-        previous <= current
-        for index, (previous, current) in enumerate(zip(distances, distances[1:]))
-        if index != split_index - 1
-    ):
-        return None
-    return split_index
 
 
 def _derive_live_fields(
@@ -636,20 +583,18 @@ def _derive_live_fields(
                     update = None
                 else:
                     distance = projection.track_distance_meters
-                    progress = effective_lap * geometry.circuit_length_meters + distance
-                    state = ProgressState(
-                        last_session_time_ms=time_ms,
-                        last_lap_number=effective_lap,
-                        last_track_distance_meters=distance,
-                        last_valid_progress_meters=progress,
-                        last_valid_time_ms=time_ms,
-                        within_lap_wrap_count=1,
-                        within_lap_offset_meters=geometry.circuit_length_meters,
+                    update = seed_progress(
+                        session_time_ms=time_ms,
+                        lap_number=effective_lap,
+                        circuit_length_meters=geometry.circuit_length_meters,
+                        projection=projection,
+                        cut_crossing_count=_pit_starter_cut_crossing_count(
+                            effective_lap, distance, geometry.circuit_length_meters,
+                            states, driver_id,
+                        ),
+                        mode=mode,
                     )
-                    states[driver_id] = state
-                    update = ProgressUpdate(
-                        state, mode, distance, progress, False, False, ProgressReason.ACTIVE,
-                    )
+                    states[driver_id] = update.state
             elif awaiting_pit_lane_start:
                 update = None
             elif startup_index is not None and index < startup_index:
@@ -681,6 +626,24 @@ def _derive_live_fields(
         driver_id: _with_derived_fields(fields, distances[driver_id], gaps[driver_id], positions[driver_id])
         for driver_id, fields in drivers.items()
     }, tuple(orders)
+
+
+def _pit_starter_cut_crossing_count(
+    lap: int, distance: float, length: float,
+    states: Mapping[str, ProgressState], driver_id: str,
+) -> int:
+    """Attach a lap-one pit starter to the closest already-established field epoch."""
+    candidates = (lap - 1, lap)
+    references = tuple(
+        state.last_valid_progress_meters
+        for candidate_id, state in states.items()
+        if candidate_id != driver_id and state.last_valid_progress_meters is not None
+    )
+    if not references:
+        return lap - 1 + int(distance >= length / 2.0)
+    reference = median(references)
+    shifted = ranking_distance(distance, length)
+    return min(candidates, key=lambda count: (abs(count * length + shifted - reference), count))
 
 
 def _projection_geometry(track_assets: Mapping[str, object]) -> ProjectionGeometry:
