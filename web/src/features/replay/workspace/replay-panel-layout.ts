@@ -8,7 +8,7 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   leaderboard: 1,
   'race-control': 1,
   driver: 1,
-  telemetry: 2,
+  telemetry: 1,
   'lap-analysis': 1,
   strategy: 2,
   'pit-loss-position': 1,

@@ -20,14 +20,17 @@ test('renders telemetry for the selected driver with textual values', () => {
   render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={snapshot} />)
 
   expect(screen.getByRole('heading', { name: 'Live telemetry' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: /Speed 287 kilometers per hour, RPM 11,450, Throttle 82%, Brake Applied, Gear 7, DRS Active/ })).toBeTruthy()
   expect(screen.queryByText('Max Verstappen')).toBeNull()
   expect(screen.queryByText('#1')).toBeNull()
-  expect(screen.getByText('287 km/h')).toBeTruthy()
-  expect(screen.getByText('11,450 RPM')).toBeTruthy()
-  expect(screen.getByText('Applied')).toBeTruthy()
-  expect(screen.getByText('Active')).toBeTruthy()
-  expect(screen.getByText('Leader')).toBeTruthy()
-  expect(screen.queryByText(/last lap/i)).toBeNull()
+  expect(screen.getByText('287')).toBeTruthy()
+  expect(screen.getByText('11,450')).toBeTruthy()
+  expect(screen.getByText('DRS')).toBeTruthy()
+  expect(screen.getByText('Throttle').tagName.toLowerCase()).toBe('textpath')
+  expect(screen.getByText('Brake').tagName.toLowerCase()).toBe('textpath')
+  expect(screen.queryByText('Leader')).toBeNull()
+  expect(screen.queryByText('Lap')).toBeNull()
+  expect(screen.queryByText('Gap')).toBeNull()
 })
 
 test('shows an accessible empty state when no driver is selected', () => {
@@ -40,8 +43,21 @@ test('preserves absent RPM as unavailable rather than zero', () => {
   const legacySnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, rpm: null } } }
   render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={legacySnapshot} />)
 
-  expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  expect(screen.getByRole('img', { name: /RPM Unavailable/ })).toBeTruthy()
   expect(screen.queryByText('0 RPM')).toBeNull()
+})
+
+test('highlights the DRS badge only while DRS is active', () => {
+  const { rerender } = render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={snapshot} />)
+
+  expect(screen.getByText('DRS').closest('g')?.classList.contains('driver-telemetry-panel__drs--active')).toBe(true)
+
+  const inactiveSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: 0 } } }
+  rerender(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={inactiveSnapshot} />)
+
+  expect(screen.getByText('DRS').closest('g')?.classList.contains('driver-telemetry-panel__drs--active')).toBe(false)
+  expect(screen.queryByText(/DRS Off/)).toBeNull()
 })
 
 test('maps only documented DRS codes and marks all other codes unknown', () => {
@@ -52,5 +68,5 @@ test('maps only documented DRS codes and marks all other codes unknown', () => {
   expect(formatDrs(12)).toBe('Active')
   expect(formatDrs(14)).toBe('Active')
   expect(formatDrs(2)).toBe('Unknown')
-  expect(formatDrs(null)).toBe('Unavailable')
+  expect(formatDrs(null)).toBe('—')
 })
