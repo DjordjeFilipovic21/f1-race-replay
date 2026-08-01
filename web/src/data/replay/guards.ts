@@ -2,7 +2,8 @@ import type {
   ArtifactReference, BrowserPointer, ChunkReference, DnfMarker, DriverColumns, DriverMetadata,
   LapSectorDriverColumns, LapSectorSidecar, LapSectorSidecarReference, PitLossModel, PitLossModelReference,
   PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
-  StintDriverColumns, StintSummary, StintSummaryReference, TimelineInterval, TimelineIntervalKind, TimelineSummary,
+  SeasonMetadata, StintDriverColumns, StintSummary, StintSummaryReference, TelemetryCapabilities, TelemetryCapabilityState,
+  TimelineInterval, TimelineIntervalKind, TimelineSummary,
   TimelineSummaryReference, TrackAssets, TrackPoint,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
@@ -22,6 +23,7 @@ const DRIVER_ID = /^[A-Z0-9]{2,4}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 const TIMELINE_INTERVAL_KINDS = ['yellow', 'sc', 'red', 'vsc'] as const
+const TELEMETRY_CAPABILITY_STATES = ['available', 'not-published'] as const
 
 function artifact(value: unknown, label: string, extraFields: readonly string[] = []): ArtifactReference {
   const item = object(value, label)
@@ -41,13 +43,15 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
   if (schemas.manifest !== MANIFEST_SCHEMA || schemas.chunk !== CHUNK_SCHEMA || schemas.trackAssets !== TRACK_SCHEMA) throw new Error('manifest schema identities are unsupported')
   const trackAssets = artifact(item.trackAssets, 'manifest.trackAssets')
   if (trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity is unsupported')
+  const seasonMetadata = item.seasonMetadata === undefined ? undefined : parseSeasonMetadata(item.seasonMetadata)
+  const telemetryCapabilities = item.telemetryCapabilities === undefined ? undefined : parseTelemetryCapabilities(item.telemetryCapabilities)
   const timelineSummary = item.timelineSummary === undefined ? undefined : parseTimelineSummaryReference(item.timelineSummary)
   const lapSectorSidecar = item.lapSectorSidecar === undefined ? undefined : parseLapSectorSidecarReference(item.lapSectorSidecar)
   const stintSummary = item.stintSummary === undefined ? undefined : parseStintSummaryReference(item.stintSummary)
@@ -71,7 +75,27 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+}
+
+export function parseSeasonMetadata(value: unknown): SeasonMetadata {
+  const item = object(value, 'manifest.seasonMetadata')
+  exact(item, ['year'], [], 'manifest.seasonMetadata')
+  return freeze({ year: integer(item.year, 'manifest.seasonMetadata.year', 1, 9999) })
+}
+
+export function parseTelemetryCapabilities(value: unknown): TelemetryCapabilities {
+  const item = object(value, 'manifest.telemetryCapabilities')
+  const fields = ['drs', 'overtakeMode', 'activeAero', 'ersReplacement'] as const
+  exact(item, fields, [], 'manifest.telemetryCapabilities')
+  const capability = (field: typeof fields[number]): TelemetryCapabilityState => {
+    const state = item[field]
+    if (!TELEMETRY_CAPABILITY_STATES.includes(state as TelemetryCapabilityState)) {
+      throw new Error(`manifest.telemetryCapabilities.${field} is invalid`)
+    }
+    return state as TelemetryCapabilityState
+  }
+  return freeze({ drs: capability('drs'), overtakeMode: capability('overtakeMode'), activeAero: capability('activeAero'), ersReplacement: capability('ersReplacement') })
 }
 
 export function parseTimelineSummaryReference(value: unknown): TimelineSummaryReference {

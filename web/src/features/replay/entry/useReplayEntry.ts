@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { loadReplayIndex } from '../../../data/replay/loader'
 import { createFetchSource } from '../../../data/replay/source'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayIndex, StintSummary, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayIndex, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../../../engine/replay'
 
 export interface ReplayEntryOptions {
@@ -16,6 +16,8 @@ export interface ReadyReplay {
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
+  readonly seasonMetadata?: SeasonMetadata
+  readonly telemetryCapabilities?: TelemetryCapabilities
   readonly timelineSummary?: TimelineSummary
   readonly trackAssets: TrackAssets
   readonly coordinateInterpolation: CoordinateInterpolationStrategy
@@ -76,6 +78,8 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
     endMs: lastChunk.endMs,
     drivers: index.manifest.drivers,
     lapStarts: index.manifest.lapStarts,
+    ...(index.seasonMetadata === undefined ? {} : { seasonMetadata: index.seasonMetadata }),
+    ...(index.telemetryCapabilities === undefined ? {} : { telemetryCapabilities: index.telemetryCapabilities }),
     ...(index.timelineSummary === undefined ? {} : { timelineSummary: index.timelineSummary }),
     ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }),
     ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }),

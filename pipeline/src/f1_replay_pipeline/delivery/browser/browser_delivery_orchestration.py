@@ -141,6 +141,7 @@ def build_browser_delivery(
     try:
         session = snapshot.frames["session_metadata"].row(0, named=True)
         fixture_id = cast(str, session["session_id"])
+        season_metadata, telemetry_capabilities = _telemetry_metadata(session)
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
         race_start_ms = _race_start_time_ms(snapshot)
@@ -212,6 +213,8 @@ def build_browser_delivery(
             stint_summary=None,
             pit_loss_model=None,
             penalty_sidecar=None,
+            season_metadata=season_metadata,
+            telemetry_capabilities=telemetry_capabilities,
         )
     except ValueError as error:
         raise BrowserDeliveryBuildError(str(error)) from error
@@ -232,6 +235,23 @@ def _race_start_time_ms(snapshot: CanonicalGenerationSnapshot) -> int:
     if not lap_one_starts:
         raise ValueError("a browser delivery requires a non-null Lap 1 start time")
     return min(lap_one_starts)
+
+
+def _telemetry_metadata(session: Mapping[str, object]) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    """Describe season-specific telemetry without synthesizing unavailable channels."""
+    year = session.get("year")
+    if type(year) is not int or not 1 <= year <= 9999:
+        raise ValueError("session metadata year must be an integer from 1 to 9999")
+    drs_status = "available" if year < 2026 else "not-published"
+    return (
+        {"year": year},
+        {
+            "drs": drs_status,
+            "overtakeMode": "not-published",
+            "activeAero": "not-published",
+            "ersReplacement": "not-published",
+        },
+    )
 
 
 def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int) -> tuple[int, ...]:

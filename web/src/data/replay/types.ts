@@ -130,6 +130,19 @@ export interface DriverMetadata {
   readonly carNumber: string
 }
 
+export interface SeasonMetadata {
+  readonly year: number
+}
+
+export type TelemetryCapabilityState = 'available' | 'not-published'
+
+export interface TelemetryCapabilities {
+  readonly drs: TelemetryCapabilityState
+  readonly overtakeMode: TelemetryCapabilityState
+  readonly activeAero: TelemetryCapabilityState
+  readonly ersReplacement: TelemetryCapabilityState
+}
+
 export interface LapStart {
   readonly lap: number
   readonly startMs: number
@@ -141,6 +154,8 @@ export interface ReplayManifest {
   readonly fixtureName: string
   readonly schemas: Readonly<{ readonly manifest: string; readonly chunk: string; readonly trackAssets: string }>
   readonly trackAssets: ArtifactReference
+  readonly seasonMetadata?: SeasonMetadata
+  readonly telemetryCapabilities?: TelemetryCapabilities
   readonly timelineSummary?: TimelineSummaryReference
   readonly lapSectorSidecar?: LapSectorSidecarReference
   readonly stintSummary?: StintSummaryReference
@@ -256,6 +271,8 @@ export interface ReplayData {
   readonly pointer?: BrowserPointer
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
+  readonly seasonMetadata?: SeasonMetadata
+  readonly telemetryCapabilities?: TelemetryCapabilities
   readonly timelineSummary?: TimelineSummary
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
@@ -268,6 +285,8 @@ export interface ReplayIndex {
   readonly pointer?: BrowserPointer
   readonly manifest: ReplayManifest
   readonly trackAssets: TrackAssets
+  readonly seasonMetadata?: SeasonMetadata
+  readonly telemetryCapabilities?: TelemetryCapabilities
   readonly timelineSummary?: TimelineSummary
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary

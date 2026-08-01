@@ -45,6 +45,32 @@ this index. The JSON Schema validates each marker's structure; the pipeline
 manifest/publication models and browser guard enforce cross-entry ordering and
 require every timestamp to fall inside the half-open replay interval.
 
+### Optional season and telemetry capability metadata
+
+The manifest may include `seasonMetadata` and `telemetryCapabilities` to describe
+season-specific source availability without changing driver or chunk columns:
+
+```json
+{
+  "seasonMetadata": {"year": 2026},
+  "telemetryCapabilities": {
+    "drs": "not-published",
+    "overtakeMode": "not-published",
+    "activeAero": "not-published",
+    "ersReplacement": "not-published"
+  }
+}
+```
+
+Both fields are optional. `seasonMetadata` contains only a positive `year`; each
+capability is either `available` or `not-published`. FastF1 3.8.1+ retains the
+legacy `drs` column for 2026 compatibility, but the source DRS channel is absent
+and FastF1 fills it with zero. That zero is not a measured DRS-Off state, and
+the contract deliberately does not add a factual `overtakeMode`, active-aero,
+or ERS telemetry column. Consumers should render a not-published state when
+the metadata says the capability is unavailable. Manifests without either
+optional field remain valid and preserve legacy DRS behavior.
+
 ### Optional timeline summary
 
 The manifest may include a compact, optional `timelineSummary` reference. It

@@ -71,6 +71,30 @@ def test_adapt_car_telemetry_maps_missing_measurement_fields_to_typed_nulls():
     }
 
 
+def test_adapt_car_telemetry_keeps_absent_drs_null_at_the_adapter_boundary():
+    session = FakeSession({"44": [{"SessionTime": timedelta(milliseconds=1_000)}]})
+
+    row = adapt_car_telemetry(session, "2026-03-race").row(0, named=True)
+
+    assert row["drs"] is None
+
+
+def test_adapt_car_telemetry_preserves_existing_pre_2026_drs_values():
+    drs_values = [0, 1, 8, 10, 12, 14]
+    session = FakeSession(
+        {
+            "44": [
+                {"SessionTime": timedelta(milliseconds=index), "DRS": value}
+                for index, value in enumerate(drs_values, start=1)
+            ]
+        }
+    )
+
+    frame = adapt_car_telemetry(session, "2025-03-race")
+
+    assert frame.get_column("drs").to_list() == drs_values
+
+
 def test_adapt_car_telemetry_preserves_nonaligned_native_timestamps_without_pos_data():
     session = FakeSession(
         {"44": [{"SessionTime": timedelta(milliseconds=100)}, {"SessionTime": timedelta(milliseconds=340)}]}

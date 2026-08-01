@@ -95,5 +95,5 @@ policies. Its byte hashes must not be confused with logical-table identity.
 
 - [Canonical pipeline schema and policies](../canonical-pipeline-schema.md)
 - [Phase 0 replay data contract](../replay-data-contract.md)
-- FastF1 compatibility target: `fastf1>=3.8,<3.9`
+- FastF1 compatibility target: `fastf1>=3.8.1,<3.9`
 - Polars compatibility target: `polars>=1.40,<2`

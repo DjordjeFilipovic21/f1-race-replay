@@ -14,7 +14,7 @@
 .driver-telemetry-panel__header { align-items: stretch; background: linear-gradient(105deg, #171c20, #101316); display: grid; grid-template-columns: 5px minmax(0, 1fr); gap: .65rem; padding: .7rem; }
 .driver-telemetry-panel__accent { background: var(--driver-telemetry-team-color); }
 .driver-telemetry-panel__header h2 { font-size: 1rem; line-height: 1.2; }
-.driver-telemetry-panel__gauge { margin: 0 auto; max-width: 22rem; min-width: 0; padding: .35rem; width: 100%; }
+.driver-telemetry-panel__gauge { margin: 0 auto; max-width: 22rem; min-width: 0; padding: .35rem; position: relative; width: 100%; }
 .driver-telemetry-panel__gauge-svg { display: block; height: auto; overflow: visible; width: 100%; }
 .driver-telemetry-panel__speed-track, .driver-telemetry-panel__speed-value, .driver-telemetry-panel__input-track, .driver-telemetry-panel__throttle-value, .driver-telemetry-panel__brake-value { fill: none; stroke-linecap: butt; }
 .driver-telemetry-panel__speed-track, .driver-telemetry-panel__speed-value { stroke-width: 12; }
@@ -33,6 +33,13 @@
 .driver-telemetry-panel__drs rect { fill: transparent; }
 .driver-telemetry-panel__drs text { font-size: 6px; font-weight: 800; text-transform: uppercase; }
 .driver-telemetry-panel__drs--active rect { fill: #087f04; }
+.driver-telemetry-panel__drs--unavailable text { fill: #dce2e6; }
+.driver-telemetry-panel__drs-strike { stroke: #f4f5f6; stroke-linecap: round; stroke-width: 1.1; }
+.driver-telemetry-panel__drs-tooltip-trigger { cursor: help; outline: none; }
+.driver-telemetry-panel__drs-tooltip-trigger:focus-visible .driver-telemetry-panel__drs-tooltip-circle { stroke: var(--focus); stroke-width: 1.2; }
+.driver-telemetry-panel__drs-tooltip-circle { fill: #1a2025; stroke: #3a434c; stroke-width: .8; }
+.driver-telemetry-panel__drs-tooltip-icon { fill: var(--text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 4px; font-weight: 900; text-anchor: middle; }
+.driver-telemetry-panel__drs-tooltip-content { background: #0b0e10; border: 1px solid var(--border); border-radius: .25rem; color: #f4f5f6; font-size: .6rem; line-height: 1.3; max-width: calc(100% - 1rem); overflow-wrap: anywhere; padding: .35rem .5rem; pointer-events: none; position: absolute; left: 50%; top: 72%; transform: translate(-50%, -100%); width: min(12rem, calc(100% - 1rem)); z-index: 3; }
 .driver-telemetry-panel__gear { font-size: 7px; text-transform: uppercase; }
 .driver-telemetry-panel__gear tspan { font-size: 15px; font-weight: 900; }
 .driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }

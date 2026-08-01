@@ -318,6 +318,116 @@ def test_replay_contract_invalid_manifest_format_is_rejected(contract_bundle, sc
         validate_instance(contract_bundle["schemas"]["manifest"], invalid_manifest, schema_registry)
 
 
+def test_replay_contract_accepts_legacy_manifest_without_capability_metadata(
+    contract_bundle, schema_registry
+):
+    # Arrange
+    legacy_manifest = copy.deepcopy(contract_bundle["manifest"])
+    legacy_manifest.pop("seasonMetadata")
+    legacy_manifest.pop("telemetryCapabilities")
+
+    # Act / Assert
+    validate_instance(contract_bundle["schemas"]["manifest"], legacy_manifest, schema_registry)
+
+
+def test_replay_contract_accepts_2026_capability_metadata_without_new_telemetry_columns(
+    contract_bundle, schema_registry
+):
+    # Arrange
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["seasonMetadata"] = {"year": 2026}
+    manifest["telemetryCapabilities"] = {
+        "drs": "not-published",
+        "overtakeMode": "not-published",
+        "activeAero": "not-published",
+        "ersReplacement": "not-published",
+    }
+
+    # Act / Assert
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+    driver_columns = contract_bundle["chunks"]["chunks/chunk-001.json"]["drivers"]["HAM"]
+    assert "overtakeMode" not in driver_columns
+
+
+@pytest.mark.parametrize(
+    ("metadata_path", "value"),
+    [
+        (("seasonMetadata", "year"), "2026"),
+        (("seasonMetadata", "year"), 0),
+        (("seasonMetadata", "unexpected"), "available"),
+        (("telemetryCapabilities", "drs"), "disabled"),
+        (("telemetryCapabilities", "unknown"), "available"),
+    ],
+)
+def test_replay_contract_rejects_malformed_capability_metadata(
+    contract_bundle, schema_registry, metadata_path, value
+):
+    # Arrange
+    invalid_manifest = copy.deepcopy(contract_bundle["manifest"])
+    target = invalid_manifest
+    for key in metadata_path[:-1]:
+        target = target[key]
+    target[metadata_path[-1]] = value
+
+    # Act / Assert
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], invalid_manifest, schema_registry)
+
+
+def manifest_driver() -> dict[str, str]:
+    return {
+        "id": "HAM",
+        "displayName": "Lewis Hamilton",
+        "teamName": "Mercedes",
+        "colorHex": "#00D2BE",
+        "carNumber": "44",
+    }
+
+
+@pytest.mark.parametrize(
+    ("capability_kwargs", "message"),
+    [
+        ({"season_metadata": {"year": "2026"}}, "year must be an integer from 1 to 9999"),
+        ({"season_metadata": {"year": 0}}, "year must be an integer from 1 to 9999"),
+        ({"season_metadata": {"year": 2026, "round": 1}}, "must contain only year"),
+        (
+            {"telemetry_capabilities": {"drs": "available"}},
+            "must contain the four capability values",
+        ),
+        (
+            {"telemetry_capabilities": {
+                "drs": "disabled", "overtakeMode": "not-published",
+                "activeAero": "not-published", "ersReplacement": "not-published",
+            }},
+            "must be available or not-published",
+        ),
+    ],
+)
+def test_browser_manifest_rejects_malformed_capability_metadata_at_serialization(
+    capability_kwargs, message
+):
+    # Arrange: describe a manifest whose optional capability metadata is malformed.
+
+    # Act / Assert: the immutable model rejects it at the serialization boundary.
+    with pytest.raises(ValueError, match=message):
+        BrowserManifest(
+            "deterministic-race", "Deterministic Race", (manifest_driver(),),
+            **capability_kwargs,
+        )
+
+
+def test_replay_contract_rejects_overtake_mode_as_chunk_telemetry(
+    contract_bundle, schema_registry
+):
+    # Arrange
+    invalid_chunk = copy.deepcopy(contract_bundle["chunks"]["chunks/chunk-001.json"])
+    invalid_chunk["drivers"]["HAM"]["overtakeMode"] = [None] * len(invalid_chunk["timeMs"])
+
+    # Act / Assert
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["chunk"], invalid_chunk, schema_registry)
+
+
 def timeline_summary_payload() -> dict[str, object]:
     return {
         "contractVersion": "v1",

@@ -122,6 +122,18 @@ def build_complete_session() -> FakeFastF1Session:
     return session
 
 
+def build_2026_session_with_default_drs() -> FakeFastF1Session:
+    """Build a 2026-shaped session whose public DRS channel defaults to zero."""
+    session = _new_session()
+    tables = _complete_tables()
+    tables["car_data"] = {
+        source_key: frame.assign(DRS=0)
+        for source_key, frame in tables["car_data"].items()
+    }
+    _set_tables(session, tables)
+    return session
+
+
 def build_empty_session() -> FakeFastF1Session:
     """Build an already-loaded session whose in-scope tables retain their types but no rows."""
     session = _new_session()

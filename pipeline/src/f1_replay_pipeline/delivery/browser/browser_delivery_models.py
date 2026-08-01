@@ -663,6 +663,8 @@ class BrowserManifest:
     stint_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     pit_loss_model: BrowserArtifactReference | Mapping[str, object] | None = None
     penalty_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
+    season_metadata: Mapping[str, object] | None = None
+    telemetry_capabilities: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -677,6 +679,8 @@ class BrowserManifest:
             raise ValueError("drivers must contain immutable driver metadata")
         if len({driver["id"] for driver in frozen_drivers}) != len(frozen_drivers):
             raise ValueError("driver metadata IDs must be unique")
+        season_metadata = _freeze_season_metadata(self.season_metadata)
+        telemetry_capabilities = _freeze_telemetry_capabilities(self.telemetry_capabilities)
         lap_starts = tuple(self.lap_starts)
         if any(not isinstance(marker, BrowserLapStart) for marker in lap_starts):
             raise TypeError("lap_starts must contain BrowserLapStart values")
@@ -772,6 +776,8 @@ class BrowserManifest:
         object.__setattr__(self, "stint_summary", stint_summary)
         object.__setattr__(self, "pit_loss_model", pit_loss_model)
         object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
+        object.__setattr__(self, "season_metadata", season_metadata)
+        object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -785,6 +791,10 @@ class BrowserManifest:
             },
             "drivers": [dict(driver) for driver in self.drivers],
         }
+        if self.season_metadata is not None:
+            value["seasonMetadata"] = dict(self.season_metadata)
+        if self.telemetry_capabilities is not None:
+            value["telemetryCapabilities"] = dict(self.telemetry_capabilities)
         if self.lap_starts:
             value["lapStarts"] = [marker.as_dict() for marker in self.lap_starts]
         if self.timeline_summary is not None:
@@ -808,6 +818,31 @@ class BrowserManifest:
                 BrowserArtifactReference, self.penalty_sidecar,
             ).as_dict()
         return value
+
+
+def _freeze_season_metadata(value: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    frozen = deep_freeze_json(value)
+    if not isinstance(frozen, Mapping) or set(frozen) != {"year"}:
+        raise ValueError("season_metadata must contain only year")
+    year = frozen["year"]
+    if type(year) is not int or not 1 <= year <= 9999:
+        raise ValueError("season_metadata year must be an integer from 1 to 9999")
+    return cast(Mapping[str, object], frozen)
+
+
+def _freeze_telemetry_capabilities(value: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    frozen = deep_freeze_json(value)
+    required = {"drs", "overtakeMode", "activeAero", "ersReplacement"}
+    if not isinstance(frozen, Mapping) or set(frozen) != required:
+        raise ValueError("telemetry_capabilities must contain the four capability values")
+    valid = {"available", "not-published"}
+    if any(not isinstance(item, str) or item not in valid for item in frozen.values()):
+        raise ValueError("telemetry capability values must be available or not-published")
+    return cast(Mapping[str, object], frozen)
 
 
 __all__ = [

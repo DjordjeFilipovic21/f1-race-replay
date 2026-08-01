@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
-import { parseElapsedParts, ReplayControls, selectDriverId } from '../../../../src/features/replay/shell/ReplayControls'
+import { parseElapsedParts, ReplayControls, type ReplayControlsProps, selectDriverId } from '../../../../src/features/replay/shell/ReplayControls'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
 
 const drivers = [{ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }]
@@ -73,6 +73,29 @@ test('wires icon transport, seek, and speed controls to the controller', async (
   expect(screen.getByRole('button', { name: '2×' }).getAttribute('aria-pressed')).toBe('true')
   expect(screen.queryByText('Seek replay')).toBeNull()
   expect(screen.queryByText('Replay samples ready.')).toBeNull()
+})
+
+test('accepts optional telemetry metadata without changing sampled telemetry', () => {
+  const { controller } = createController(readySnapshot)
+  const props: ReplayControlsProps = {
+    controller,
+    startMs: 0,
+    endMs: 3000,
+    drivers,
+    trackAssets,
+    seasonMetadata: { year: 2026 },
+    telemetryCapabilities: {
+      drs: 'not-published',
+      overtakeMode: 'not-published',
+      activeAero: 'not-published',
+      ersReplacement: 'not-published',
+    },
+  }
+
+  render(<ReplayControls {...props} />)
+
+  expect(screen.getByRole('img', { name: /Speed 246 kilometers per hour/ })).toBeTruthy()
+  expect(screen.getByRole('img', { name: /DRS \/ Overtake Mode Not published/ })).toBeTruthy()
 })
 
 test('renders status bands and DNF markers behind the sole native seek control', () => {

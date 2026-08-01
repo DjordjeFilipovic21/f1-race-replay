@@ -47,6 +47,56 @@
           "pattern": "^[0-9]{1,2}$"
         }
       }
+    },
+    "seasonMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "year"
+      ],
+      "properties": {
+        "year": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999
+        }
+      }
+    },
+    "telemetryCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drs",
+        "overtakeMode",
+        "activeAero",
+        "ersReplacement"
+      ],
+      "properties": {
+        "drs": {
+          "enum": [
+            "available",
+            "not-published"
+          ]
+        },
+        "overtakeMode": {
+          "enum": [
+            "available",
+            "not-published"
+          ]
+        },
+        "activeAero": {
+          "enum": [
+            "available",
+            "not-published"
+          ]
+        },
+        "ersReplacement": {
+          "enum": [
+            "available",
+            "not-published"
+          ]
+        }
+      }
     }
   },
   "properties": {
@@ -63,6 +113,12 @@
     },
     "description": {
       "type": "string"
+    },
+    "seasonMetadata": {
+      "$ref": "#/$defs/seasonMetadata"
+    },
+    "telemetryCapabilities": {
+      "$ref": "#/$defs/telemetryCapabilities"
     },
     "formatVersion": {
       "const": "browser-delivery-v1"

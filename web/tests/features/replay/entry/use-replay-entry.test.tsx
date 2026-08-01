@@ -8,7 +8,7 @@ import { useReplayEntry } from '../../../../src/features/replay/entry/useReplayE
 import { loadReplayIndex } from '../../../../src/data/replay/loader'
 import { createFetchSource } from '../../../../src/data/replay/source'
 import { createReplayController, type ReplayController, type ReplayControllerSnapshot } from '../../../../src/engine/replay'
-import type { ReplayIndex, ReplaySource, TrackAssets } from '../../../../src/data/replay/types'
+import type { ReplayIndex, ReplaySource, TelemetryCapabilities, TrackAssets } from '../../../../src/data/replay/types'
 
 vi.mock('../../../../src/data/replay/loader', () => ({ loadReplayIndex: vi.fn() }))
 vi.mock('../../../../src/data/replay/source', () => ({ createFetchSource: vi.fn() }))
@@ -24,6 +24,9 @@ const trackAssets: TrackAssets = {
   outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
 }
 const index = { manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] }, trackAssets } as unknown as ReplayIndex
+const telemetryCapabilities: TelemetryCapabilities = {
+  drs: 'not-published', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published',
+}
 
 function createController(): ReplayController {
   const snapshot: ReplayControllerSnapshot = { status: 'loading', timeMs: 0, speed: 1, isPlaying: false, replay: null, crossedEvents: [], error: null }
@@ -35,6 +38,8 @@ function ReplayEntryProbe({ browserBaseUrl, browserPointerPath }: { readonly bro
   return (
     <>
       <output data-testid="state">{replay === null ? (error === null ? 'loading' : 'error') : 'ready'}</output>
+      <output data-testid="season-metadata">{replay?.seasonMetadata?.year ?? 'absent'}</output>
+      <output data-testid="telemetry-capabilities">{replay?.telemetryCapabilities?.drs ?? 'absent'}</output>
       <button type="button" onClick={retry}>Retry</button>
     </>
   )
@@ -65,9 +70,43 @@ test('loads a nested browser pointer without creating a controller from stale St
   expect(loadReplayIndex).toHaveBeenCalledWith({ source, pointerPath: 'nested/browser-current.json' })
   expect(createReplayController).toHaveBeenCalledWith({ index, coordinateInterpolation: 'smooth' })
   expect(screen.getByTestId('state').textContent).toBe('ready')
+  expect(screen.getByTestId('season-metadata').textContent).toBe('absent')
+  expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('absent')
 
   unmount()
   expect(activeController.dispose).toHaveBeenCalledOnce()
+})
+
+test('retains optional season metadata and telemetry capabilities from a new manifest', async () => {
+  const metadataIndex = {
+    ...index,
+    seasonMetadata: { year: 2026 },
+    telemetryCapabilities,
+  } as ReplayIndex
+  const controller = createController()
+  vi.mocked(createFetchSource).mockReturnValue(source)
+  vi.mocked(loadReplayIndex).mockResolvedValue(metadataIndex)
+  vi.mocked(createReplayController).mockReturnValue(controller)
+
+  render(<ReplayEntryProbe browserBaseUrl="/seasons/2026/" browserPointerPath="browser-current.json" />)
+  await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
+
+  expect(screen.getByTestId('season-metadata').textContent).toBe('2026')
+  expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('not-published')
+})
+
+test('retains season metadata while leaving telemetry capabilities absent for a season-only manifest', async () => {
+  const seasonOnlyIndex = { ...index, seasonMetadata: { year: 2025 } } as ReplayIndex
+  const controller = createController()
+  vi.mocked(createFetchSource).mockReturnValue(source)
+  vi.mocked(loadReplayIndex).mockResolvedValue(seasonOnlyIndex)
+  vi.mocked(createReplayController).mockReturnValue(controller)
+
+  render(<ReplayEntryProbe browserBaseUrl="/seasons/2024/" browserPointerPath="browser-current.json" />)
+  await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
+
+  expect(screen.getByTestId('season-metadata').textContent).toBe('2025')
+  expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('absent')
 })
 
 test('returns an initialization error and retries the same race entry', async () => {
