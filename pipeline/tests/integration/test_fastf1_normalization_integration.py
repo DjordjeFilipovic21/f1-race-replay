@@ -17,6 +17,7 @@ from fixtures.fake_fastf1_session import (
     SESSION_TABLE_NAMES,
     FakeFastF1Session,
     build_complete_session,
+    build_2026_session_with_default_drs,
     build_empty_session,
     build_permuted_session,
     build_session_factory,
@@ -156,6 +157,20 @@ def test_native_car_and_position_streams_remain_separate_sparse_noninterpolated_
     assert set(car_times).isdisjoint(position_times)
     assert [right - left for left, right in zip(car_times, car_times[1:])] == [240, 480]
     assert [right - left for left, right in zip(position_times, position_times[1:])] == [380, 550]
+
+
+def test_2026_public_drs_default_normalizes_to_zero_without_synthesizing_new_telemetry():
+    # Arrange: FastF1's 2026-compatible public DRS column is present but zero-filled.
+    factory = build_session_factory(build_2026_session_with_default_drs())
+
+    # Act: normalize the deterministic session through the normal loader boundary.
+    tables = _normalize_all(factory)
+
+    # Assert: retain canonical DRS only; no factual Overtake Mode, aero, or ERS data is added.
+    assert tables["car_telemetry"].get_column("drs").to_list() == [0, 0, 0]
+    assert "overtake_mode" not in tables["car_telemetry"].columns
+    assert "active_aero" not in tables["car_telemetry"].columns
+    assert "ers" not in tables["car_telemetry"].columns
 
 
 def test_offline_fixture_models_fastf1_timestamp_duration_missing_and_native_mapping_shapes():

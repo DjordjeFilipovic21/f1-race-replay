@@ -205,6 +205,15 @@ describe('replay-engine sampler', () => {
 
     expect([snapshot.drivers.HAM.trackDistanceMeters, snapshot.drivers.HAM.gapToLeaderMs, snapshot.drivers.HAM.rpm, snapshot.drivers.HAM.position, snapshot.leaderboardOrder]).toEqual([null, null, null, null, null])
   })
+
+  test('produces identical samples with or without season and telemetry metadata', async () => {
+    const replay = await loadReplayData({ source: fixtureSource })
+    const legacy = await loadReplayData({ source: stripMetadataSource() })
+
+    for (const timeMs of [1_500, 2_000, 2_600, 3_000]) {
+      expect(sampleReplayAt(legacy, timeMs)).toEqual(sampleReplayAt(replay, timeMs))
+    }
+  })
 })
 
 function syntheticReplay(x: readonly (number | null)[], timeMs = [0, 100, 200, 300], overrides: Partial<DriverColumns> = {}): ReplayData {
@@ -217,6 +226,21 @@ function syntheticReplay(x: readonly (number | null)[], timeMs = [0, 100, 200, 3
     leaderboardOrder: nulls, trackStatusCode: nulls, weatherState: nulls, events: [],
   }
   return { manifest: { contractVersion: 'v1', fixtureId: 'synthetic', fixtureName: 'Synthetic', schemas: { manifest: '', chunk: '', trackAssets: '' }, trackAssets: { path: '', schemaId: '' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] }, trackAssets: {} as ReplayData['trackAssets'], chunks: [chunk] }
+}
+
+function stripMetadataSource(): ReplaySource {
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  return {
+    async read(path) {
+      const bytes = await fixtureSource.read(path)
+      if (path !== 'manifest.json') return bytes
+      const manifest = JSON.parse(decoder.decode(bytes)) as { seasonMetadata?: unknown; telemetryCapabilities?: unknown }
+      delete manifest.seasonMetadata
+      delete manifest.telemetryCapabilities
+      return encoder.encode(JSON.stringify(manifest))
+    },
+  }
 }
 
 function derivedReplay(overrides: Partial<DriverColumns>, circuitLengthMeters = 1_000): ReplayData {

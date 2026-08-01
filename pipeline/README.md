@@ -16,6 +16,28 @@ The package requires Python 3.11+ and installs FastF1 3.8.x, Polars 1.x,
 the local browser-publication schema engine `jsonschema-rs` 0.48.x, and
 `boto3` for opt-in Cloudflare R2 publication.
 
+## FastF1 2026 compatibility
+
+The package requires `fastf1>=3.8.1,<3.9`. Version 3.8.1 added the fallback for
+the raw DRS channel that is absent from 2026 timing data. FastF1 3.8.3 keeps
+`DRS` in `Session.car_data`, but 2026 output is all zero: this is a compatibility
+column, not a measured DRS-Off state.
+
+No published FastF1 telemetry replacement exists for Overtake Mode, active
+aero, or ERS state. Keep `drs` in both the canonical `car_telemetry` table and
+browser driver fields so pre-2026 values and older payloads remain readable;
+do not derive or serialize a factual `overtakeMode` channel from unavailable
+data. For browser deliveries, the optional manifest fields
+`seasonMetadata.year` and `telemetryCapabilities` can identify the season and
+mark 2026 `drs`, `overtakeMode`, `activeAero`, and `ersReplacement` as
+`not-published`. Consumers should render an unavailable/not-published state,
+not `DRS: Off`; manifests without the optional metadata remain backward
+compatible.
+
+Sources: [FastF1 documentation](https://docs.fastf1.dev/), [FastF1 3.8.1
+release](https://github.com/theOehrly/Fast-F1/releases/tag/v3.8.1), and the
+maintainer's [2026 telemetry discussion](https://github.com/theOehrly/Fast-F1/discussions/861).
+
 ## Foundation scope
 
 This initial boundary establishes independent packaging and a deliberately

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import { DriverTelemetryPanel, formatDrs } from '../../../../src/features/replay/panels/DriverTelemetryPanel'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
@@ -69,4 +69,69 @@ test('maps only documented DRS codes and marks all other codes unknown', () => {
   expect(formatDrs(14)).toBe('Active')
   expect(formatDrs(2)).toBe('Unknown')
   expect(formatDrs(null)).toBe('—')
+})
+
+test('renders 2026 DRS as not published instead of treating zero as Off', () => {
+  const zeroDrsSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: 0 } } }
+  render(
+    <DriverTelemetryPanel
+      drivers={drivers}
+      selectedDriverId="VER"
+      seasonMetadata={{ year: 2026 }}
+      telemetryCapabilities={{ drs: 'not-published', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published' }}
+      snapshot={zeroDrsSnapshot}
+    />,
+  )
+
+  expect(screen.getByRole('img', { name: /DRS \/ Overtake Mode Not published/ })).toBeTruthy()
+  expect(screen.getByText('DRS').closest('g')?.classList.contains('driver-telemetry-panel__drs--unavailable')).toBe(true)
+  const tooltipTrigger = screen.getByRole('button', { name: 'Why is DRS telemetry unavailable?' })
+  expect(screen.queryByRole('tooltip')).toBeNull()
+  fireEvent.mouseEnter(tooltipTrigger)
+  expect(screen.getByRole('tooltip').textContent).toContain('Public telemetry does not contain that signal')
+  fireEvent.mouseLeave(tooltipTrigger)
+  expect(screen.queryByRole('tooltip')).toBeNull()
+  expect(screen.queryByText('Off')).toBeNull()
+})
+
+test('uses the defensive 2026 status when capability metadata is absent', () => {
+  const zeroDrsSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: 0 } } }
+  render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" seasonMetadata={{ year: 2026 }} snapshot={zeroDrsSnapshot} />)
+
+  expect(screen.getByRole('img', { name: /DRS \/ Overtake Mode Not published/ })).toBeTruthy()
+  expect(screen.getByText('DRS')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Why is DRS telemetry unavailable?' })).toBeTruthy()
+  expect(screen.queryByText('Off')).toBeNull()
+})
+
+test('preserves DRS formatting when 2026 capability metadata says it is available', () => {
+  const zeroDrsSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: 0 } } }
+  render(
+    <DriverTelemetryPanel
+      drivers={drivers}
+      selectedDriverId="VER"
+      seasonMetadata={{ year: 2026 }}
+      telemetryCapabilities={{ drs: 'available', overtakeMode: 'available', activeAero: 'available', ersReplacement: 'available' }}
+      snapshot={zeroDrsSnapshot}
+    />,
+  )
+
+  expect(screen.getByRole('img', { name: /DRS Off/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Why is DRS telemetry unavailable?' })).toBeNull()
+})
+
+test('renders legacy DRS Off in the accessible label when capability metadata is absent', () => {
+  const offSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: 0 } } }
+  render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={offSnapshot} />)
+
+  expect(screen.getByRole('img', { name: /DRS Off/ })).toBeTruthy()
+  expect(screen.queryByRole('status')).toBeNull()
+})
+
+test('renders DRS Unavailable in the accessible label when the sampled DRS value is null', () => {
+  const unavailableSnapshot: ReplaySnapshot = { ...snapshot, drivers: { VER: { ...snapshot.drivers.VER, drs: null } } }
+  render(<DriverTelemetryPanel drivers={drivers} selectedDriverId="VER" snapshot={unavailableSnapshot} />)
+
+  expect(screen.getByRole('img', { name: /DRS Unavailable/ })).toBeTruthy()
+  expect(screen.queryByRole('status')).toBeNull()
 })

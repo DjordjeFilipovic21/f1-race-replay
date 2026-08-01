@@ -133,6 +133,10 @@ async function fixtureSourceWithSidecars(options: {
   wrongFixtureLapSector?: boolean
   wrongFixtureStintSummary?: boolean
   wrongFixturePitLossModel?: boolean
+  seasonMetadata?: Record<string, unknown>
+  telemetryCapabilities?: Record<string, unknown>
+  omitSeasonMetadata?: boolean
+  omitTelemetryCapabilities?: boolean
 } = {}): Promise<{ source: ReplaySource; reads: string[] }> {
   const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
   const track = await fixtureSource.read('track-assets.json')
@@ -148,6 +152,10 @@ async function fixtureSourceWithSidecars(options: {
 
   manifest.formatVersion = 'browser-delivery-v1'
   manifest.deliveryVersion = 'demo-v1'
+  if (options.seasonMetadata !== undefined) manifest.seasonMetadata = options.seasonMetadata
+  if (options.telemetryCapabilities !== undefined) manifest.telemetryCapabilities = options.telemetryCapabilities
+  if (options.omitSeasonMetadata) delete manifest.seasonMetadata
+  if (options.omitTelemetryCapabilities) delete manifest.telemetryCapabilities
 
   const files = new Map<string, Uint8Array>([
     ['generations/demo/track-assets.json', track],
@@ -825,6 +833,43 @@ describe('parsePitLossModel', () => {
 // ---------------------------------------------------------------------------
 
 describe('sidecar loader integration', () => {
+  test('exposes frozen manifest telemetry metadata alongside sidecars', async () => {
+    const { source } = await fixtureSourceWithSidecars({
+      seasonMetadata: { year: 2026 },
+      telemetryCapabilities: {
+        drs: 'not-published',
+        overtakeMode: 'not-published',
+        activeAero: 'not-published',
+        ersReplacement: 'not-published',
+      },
+    })
+
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    expect(index.seasonMetadata).toEqual({ year: 2026 })
+    expect(index.telemetryCapabilities?.drs).toBe('not-published')
+    expect(Object.isFrozen(index.seasonMetadata!)).toBe(true)
+    expect(Object.isFrozen(index.telemetryCapabilities!)).toBe(true)
+  })
+
+  test('loads a legacy manifest without season or telemetry metadata alongside sidecars', async () => {
+    // Arrange — strip both optional metadata blocks but keep all three sidecars
+    const { source } = await fixtureSourceWithSidecars({
+      omitSeasonMetadata: true,
+      omitTelemetryCapabilities: true,
+    })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert — capability metadata is absent while sidecars still load
+    expect(index).not.toHaveProperty('seasonMetadata')
+    expect(index).not.toHaveProperty('telemetryCapabilities')
+    expect(index.lapSectorSidecar).toBeDefined()
+    expect(index.stintSummary).toBeDefined()
+    expect(index.pitLossModel).toBeDefined()
+  })
+
   test('loads all three sidecars in parallel with valid references', async () => {
     // Arrange
     const { source, reads } = await fixtureSourceWithSidecars()

@@ -3,6 +3,15 @@
   "fixtureId": "deterministic-race",
   "fixtureName": "Deterministic Two-Driver Handoff Fixture",
   "description": "Two-driver, two-chunk offline replay fixture with an intentional overlap handoff, discrete state transitions, a sparse event, and a leaderboard order change.",
+  "seasonMetadata": {
+    "year": 2025
+  },
+  "telemetryCapabilities": {
+    "drs": "available",
+    "overtakeMode": "not-published",
+    "activeAero": "not-published",
+    "ersReplacement": "not-published"
+  },
   "schemas": {
     "manifest": "urn:f1-cache-replay:schema:replay-data:v1:manifest",
     "chunk": "urn:f1-cache-replay:schema:replay-data:v1:chunk",

@@ -97,6 +97,7 @@ test('loads the catalog and renders the race library without entering replay', a
 
   expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
   expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
+  expect(screen.getByRole('option', { name: '2026' })).toBeTruthy()
   expect(loadReplayIndex).not.toHaveBeenCalled()
 })
 

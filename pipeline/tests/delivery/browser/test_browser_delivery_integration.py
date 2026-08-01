@@ -16,7 +16,11 @@ from referencing import Registry, Resource
 
 import f1_replay_pipeline.delivery.browser.browser_delivery_orchestration as delivery_orchestration
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import CONTINUOUS_FIELD_SEMANTICS, PREVIOUS_VALUE_FIELD_SEMANTICS
-from f1_replay_pipeline.delivery.browser.browser_delivery_models import BrowserDriverFields, CanonicalGenerationSnapshot
+from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
+    BrowserDriverFields,
+    BrowserManifest,
+    CanonicalGenerationSnapshot,
+)
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
     _delivery_timeline,
@@ -88,6 +92,26 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     ]
     assert first_manifest["sourceGenerationId"] == "canonical-v1"
     assert first_manifest["sourceManifestSha256"] == published_canonical.manifest_sha256
+    assert first_manifest["seasonMetadata"] == {"year": 2026}
+    assert first_manifest["telemetryCapabilities"] == {
+        "drs": "not-published",
+        "overtakeMode": "not-published",
+        "activeAero": "not-published",
+        "ersReplacement": "not-published",
+    }
+    assert all(
+        capability not in first_chunks[0]["drivers"]["HAM"]
+        for capability in ("overtakeMode", "activeAero", "ersReplacement")
+    )
+    # 2026 reports DRS as not-published at the manifest level, but drs remains a
+    # numeric browser driver column (real pre-2026 signal, 2026 compatibility placeholder).
+    assert all(
+        value is None or type(value) is int
+        for chunk in first_chunks
+        for value in chunk["drivers"]["HAM"]["drs"]
+    )
+    assert first_chunks[0]["drivers"]["HAM"]["drs"] == [0, None, None, None]
+    assert first_chunks[1]["drivers"]["HAM"]["drs"] == [None, 1, 1, None]
     assert tuple(chunk["timeMs"] for chunk in first_chunks) == (
         [0, 5_000, 6_000, 9_500], [9_500, 10_000, 11_000, 19_999], [19_999, 20_000],
     )
@@ -193,6 +217,70 @@ def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tm
 
     assert chunks[0]["drivers"]["HAM"]["rpm"] == [11_000.0, None, None, None]
     assert chunks[1]["drivers"]["HAM"]["rpm"] == [None, 12_000.0, 12_500.0, None]
+
+
+def test_browser_delivery_reports_legacy_drs_without_changing_numeric_samples(tmp_path: Path) -> None:
+    canonical_parent = tmp_path / "canonical-legacy"
+    publish_canonical_generation(
+        frames=_canonical_frames(year=2025), target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-legacy", delivery_version="delivery-v1", delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(published.manifest_path)
+    chunks = tuple(_load_json(path) for path in published.chunk_paths)
+
+    assert manifest["seasonMetadata"] == {"year": 2025}
+    assert manifest["telemetryCapabilities"]["drs"] == "available"
+    assert chunks[0]["drivers"]["HAM"]["drs"] == [0, None, None, None]
+    assert chunks[1]["drivers"]["HAM"]["drs"] == [None, 1, 1, None]
+    assert all(
+        capability not in chunks[0]["drivers"]["HAM"]
+        for capability in ("overtakeMode", "activeAero", "ersReplacement")
+    )
+
+
+def test_browser_delivery_rejects_a_malformed_season_year_before_publishing(tmp_path: Path) -> None:
+    # Arrange: a canonical Int16 year outside the supported 1..9999 range is published.
+    canonical_parent = tmp_path / "canonical"
+    publish_canonical_generation(
+        frames=_canonical_frames(year=0), target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    # Act / Assert: capability metadata derivation fails closed instead of emitting wrong status.
+    with pytest.raises(BrowserDeliveryBuildError, match="year must be an integer from 1 to 9999"):
+        build_browser_delivery(read_validated_canonical_generation(canonical_parent), _track_assets())
+
+
+def test_direct_browser_manifest_without_metadata_keeps_legacy_output_and_freezes_metadata() -> None:
+    drivers = ({
+        "id": "HAM", "displayName": "Lewis Hamilton", "teamName": "Mercedes",
+        "colorHex": "#00D2BE", "carNumber": "44",
+    },)
+    legacy = BrowserManifest("synthetic-race", "Synthetic Race", drivers)
+    assert "seasonMetadata" not in legacy.as_dict()
+    assert "telemetryCapabilities" not in legacy.as_dict()
+
+    metadata = {"year": 2026}
+    capabilities = {
+        "drs": "not-published", "overtakeMode": "not-published",
+        "activeAero": "not-published", "ersReplacement": "not-published",
+    }
+    enriched = BrowserManifest(
+        "synthetic-race", "Synthetic Race", drivers,
+        season_metadata=metadata, telemetry_capabilities=capabilities,
+    )
+    metadata["year"] = 2025
+    capabilities["drs"] = "available"
+    assert enriched.season_metadata is not None
+    assert enriched.telemetry_capabilities is not None
+    assert enriched.season_metadata["year"] == 2026
+    assert enriched.telemetry_capabilities["drs"] == "not-published"
 
 
 def test_browser_delivery_serializes_canonical_tyre_life_as_aligned_tyre_age(tmp_path: Path) -> None:
@@ -850,9 +938,10 @@ def test_finished_leader_keeps_frozen_progress_and_p1_after_offtrack_data(
 def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
-    include_pre_race: bool = False, include_rpm: bool = False,
+    include_pre_race: bool = False, include_rpm: bool = False, year: int = 2026,
 ) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
+    rows["session_metadata"][0]["year"] = year
     rows["car_telemetry"] = [
         _row("car_telemetry", session_time_ms=time, speed_kph=speed, throttle_pct=throttle,
              brake=brake, gear=gear, drs=drs, **({"rpm": rpm} if include_rpm else {}))

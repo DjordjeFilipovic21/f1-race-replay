@@ -36,6 +36,13 @@ describe('replay-data v1 loader', () => {
     expect(Object.isFrozen(chunks[1].events[0].payload)).toBe(true)
     expect(() => { (chunks[1].timeMs as number[])[0] = -1 }).toThrow(TypeError)
     expect(() => { (chunks[1].events[0].payload as Record<string, unknown>).forPosition = 2 }).toThrow(TypeError)
+    expect(index.seasonMetadata).toEqual({ year: 2025 })
+    expect(index.telemetryCapabilities).toEqual({
+      drs: 'available',
+      overtakeMode: 'not-published',
+      activeAero: 'not-published',
+      ersReplacement: 'not-published',
+    })
   })
 
   test('loads and verifies an optional timeline summary after manifest and track assets', async () => {
@@ -77,6 +84,84 @@ describe('replay-data v1 loader', () => {
     const parsedManifest = parseManifest(manifest)
 
     expect(parsedManifest).not.toHaveProperty('lapSectorSidecar')
+  })
+
+  test('parses and freezes optional season and telemetry metadata for the index and data bundle', async () => {
+    const source = mutateFixture('manifest.json', (manifest) => {
+      const value = manifest as Record<string, unknown>
+      value.seasonMetadata = { year: 2026 }
+      value.telemetryCapabilities = {
+        drs: 'not-published', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published',
+      }
+    })
+
+    const index = await loadReplayIndex({ source })
+    const replay = await loadReplayData({ source })
+
+    expect(index.seasonMetadata).toEqual({ year: 2026 })
+    expect(index.telemetryCapabilities?.overtakeMode).toBe('not-published')
+    expect(replay.seasonMetadata).toEqual(index.seasonMetadata)
+    expect(replay.telemetryCapabilities).toEqual(index.telemetryCapabilities)
+    expect(Object.isFrozen(index.seasonMetadata!)).toBe(true)
+    expect(Object.isFrozen(index.telemetryCapabilities!)).toBe(true)
+  })
+
+  test('accepts a legacy manifest without season or telemetry metadata and exposes neither property', async () => {
+    // Arrange — strip both optional metadata blocks from the manifest
+    const source = mutateFixture('manifest.json', (manifest) => {
+      const value = manifest as { seasonMetadata?: unknown; telemetryCapabilities?: unknown }
+      delete value.seasonMetadata
+      delete value.telemetryCapabilities
+    })
+
+    // Act
+    const index = await loadReplayIndex({ source })
+    const replay = await loadReplayData({ source })
+
+    // Assert — both metadata blocks stay absent on the index, manifest, and data bundle
+    expect(index).not.toHaveProperty('seasonMetadata')
+    expect(index).not.toHaveProperty('telemetryCapabilities')
+    expect(index.manifest).not.toHaveProperty('seasonMetadata')
+    expect(index.manifest).not.toHaveProperty('telemetryCapabilities')
+    expect(replay).not.toHaveProperty('seasonMetadata')
+    expect(replay).not.toHaveProperty('telemetryCapabilities')
+  })
+
+  test('treats season and telemetry metadata as independently optional', async () => {
+    // Arrange — season metadata only
+    const seasonOnly = mutateFixture('manifest.json', (manifest) => {
+      delete (manifest as { telemetryCapabilities?: unknown }).telemetryCapabilities
+    })
+
+    // Act
+    const seasonIndex = await loadReplayIndex({ source: seasonOnly })
+
+    // Assert
+    expect(seasonIndex.seasonMetadata).toEqual({ year: 2025 })
+    expect(seasonIndex).not.toHaveProperty('telemetryCapabilities')
+
+    // Arrange — telemetry capabilities only
+    const capabilitiesOnly = mutateFixture('manifest.json', (manifest) => {
+      delete (manifest as { seasonMetadata?: unknown }).seasonMetadata
+    })
+    const capabilitiesIndex = await loadReplayIndex({ source: capabilitiesOnly })
+
+    // Assert
+    expect(capabilitiesIndex.telemetryCapabilities?.drs).toBe('available')
+    expect(capabilitiesIndex).not.toHaveProperty('seasonMetadata')
+  })
+
+  test.each([
+    ['season metadata with the wrong shape', { seasonMetadata: null }, 'manifest.seasonMetadata must be an object'],
+    ['season metadata with an invalid year', { seasonMetadata: { year: 0 } }, 'seasonMetadata.year must be an integer'],
+    ['season metadata with an extra field', { seasonMetadata: { year: 2026, round: 1 } }, 'seasonMetadata.round is not allowed'],
+    ['telemetry metadata with the wrong shape', { telemetryCapabilities: [] }, 'manifest.telemetryCapabilities must be an object'],
+    ['telemetry metadata missing a capability', { telemetryCapabilities: { drs: 'available' } }, 'telemetryCapabilities.overtakeMode is required'],
+    ['telemetry metadata with an invalid capability state', { telemetryCapabilities: { drs: 'unknown', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published' } }, 'telemetryCapabilities.drs is invalid'],
+    ['telemetry metadata with an extra capability key', { telemetryCapabilities: { drs: 'available', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published', ers: 'available' } }, 'telemetryCapabilities.ers is not allowed'],
+  ] as const)('rejects %s deterministically', async (_description, metadata, message) => {
+    const source = mutateFixture('manifest.json', (manifest) => Object.assign(manifest as Record<string, unknown>, metadata))
+    await expect(loadReplayIndex({ source })).rejects.toThrow(message)
   })
 
   test('rejects a lapSectorSidecar reference with invalid sha256', async () => {
