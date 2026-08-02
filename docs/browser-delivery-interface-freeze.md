@@ -5,7 +5,9 @@
 This is the boundary between validated canonical Parquet and browser replay
 artifacts. Canonical Parquet is unchanged and remains the native-cadence,
 loss-minimizing source. Browser delivery derives presentation fields without
-mutating, resampling, or republishing canonical rows.
+mutating, resampling, or republishing canonical rows. The v1 interface below
+is frozen; the v2 qualifying lap-status sidecar (section 11) is a separate,
+Python-only extension that adds no v1 field.
 
 ## 1. Timeline and provenance
 
@@ -230,3 +232,43 @@ The sidecar and manifest reference are optional. Core chunks and older
 manifests remain valid without them. See [Replay Data Contract — Optional
 issued-penalty sidecar](replay-data-contract.md#optional-issued-penalty-sidecar)
 for the schema and publication guarantees.
+
+## 11. Optional v2 qualifying lap-status sidecar
+
+V2 qualifying-like deliveries (`sessionMode` `qualifying`,
+`sprint-qualifying`, or `sprint-shootout`) may carry a `qualifyingLapStatus`
+manifest reference (`path`, `schemaId`, `sha256`) pointing to
+`qualifying-lap-status.json`:
+
+- The sidecar publishes the final lap status per driver plus the causal
+  deletion/reinstatement events that produced it, validated against
+  `urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status`.
+- Raw race-control text is parsed because FastF1 3.8.3 does not populate
+  deletion through the structured `RacingNumber`/`Lap` columns. Both `TIME ...
+  DELETED` and `TIME ... REINSTATED` messages are recognized; reinstatement
+  exists because FastF1 can unmark laps through a look-ahead pass.
+- The final canonical `laps.deleted` column is authoritative and is never
+  rewritten. Without a replay boundary the reconciled event state must exactly
+  equal it; contradiction, ambiguous identity, contradictory fields, or an
+  unresolvable canonical lap fails closed instead of inventing a lap or
+  timestamp.
+- Consumers reveal events causally: an event is effective when
+  `eventTimeMs <= replayTimeMs`, and reinstatement restores the lap to `valid`
+  at its event time. Duplicate messages are idempotent and event order is
+  deterministic.
+- `deletedReason` is null for valid laps and for deleted laps without a source
+  reason; valid laps never carry a reason. Drivers without status rows publish
+  empty aligned arrays.
+- Publication validates schema, digest, fixture/driver identity, aligned
+  columns, deterministic ordering, and agreement between events and final
+  status before the manifest reference is published.
+- **Frozen surface**: v1 chunks, v1 contracts, and core v2 chunk payloads are
+  unchanged; the sidecar embeds nothing into chunks. The reference is
+  v2-only and qualifying-like-only, and is absent when no status messages
+  exist. Consumers must accept manifests without `qualifyingLapStatus`.
+- **Scope**: Python-only. No web implementation is included; the artifact
+  exists to drive historical lap invalidation in a later web integration.
+
+See [Replay Data Contract — Optional v2 qualifying lap-status
+sidecar](replay-data-contract.md#optional-v2-qualifying-lap-status-sidecar)
+for the full contract including parsing, matching, and fail-closed rules.

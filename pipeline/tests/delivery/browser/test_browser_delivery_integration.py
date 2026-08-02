@@ -646,6 +646,91 @@ def test_qualifying_summary_best_lap_ignores_deleted_and_null_duration_runs(tmp_
     assert qualifying["drivers"]["HAM"]["bestLapTimeMs"] == [94_000]
 
 
+def test_qualifying_lap_status_sidecar_publishes_end_to_end(tmp_path: Path) -> None:
+    # Arrange: a qualifying session with a deleted canonical lap and the causal
+    # deletion/reinstatement/deletion message sequence that produced it.
+    frames = _canonical_frames(lap_number=3, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("qualifying").alias("session_mode"),
+    )
+    frames["laps"] = pl.DataFrame([
+        _row(
+            "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
+            lap_end_time_ms=90_000, lap_duration_ms=90_000, deleted=False,
+            compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
+            lap_end_time_ms=180_000, lap_duration_ms=90_000, deleted=True,
+            deleted_reason="TRACK LIMITS", compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=3, lap_start_time_ms=180_000,
+            lap_end_time_ms=270_000, lap_duration_ms=90_000, deleted=False,
+            compound="MEDIUM",
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    frames["race_control_messages"] = pl.DataFrame([
+        _row(
+            "race_control_messages", session_time_ms=185_000, message_index=0,
+            message="CAR 44 TIME 1:30.000 DELETED - TRACK LIMITS",
+            driver_id="HAM", lap_number=2,
+        ),
+        _row(
+            "race_control_messages", session_time_ms=190_000, message_index=1,
+            message="CAR 44 TIME 1:30.000 REINSTATED",
+            driver_id="HAM", lap_number=2,
+        ),
+        _row(
+            "race_control_messages", session_time_ms=195_000, message_index=2,
+            message="CAR 44 TIME 1:30.000 DELETED - TRACK LIMITS",
+            driver_id="HAM", lap_number=2,
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["race_control_messages"]), strict=True)
+    canonical_parent = tmp_path / "canonical-qualifying-lap-status"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive the delivery and publish the causal sidecar as a v2 artifact.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.qualifying_lap_status_sidecar is not None
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-qualifying-lap-status",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: the sidecar is referenced, reconciled to the canonical table, and
+    # passes deep delivery validation without mutating the canonical generation.
+    manifest = _load_json(published.manifest_path)
+    assert manifest["qualifyingLapStatus"]["path"] == "qualifying-lap-status.json"
+    assert manifest["qualifyingLapStatus"]["schemaId"].endswith(
+        ":v2:browser-qualifying-lap-status"
+    )
+    assert manifest["schemas"]["qualifyingLapStatus"].endswith(
+        ":v2:browser-qualifying-lap-status"
+    )
+    status = _load_json(published.qualifying_lap_status_path)
+    assert status["drivers"]["HAM"]["status"] == ["valid", "deleted", "valid"]
+    assert status["drivers"]["HAM"]["deletedReason"] == [
+        None, "TRACK LIMITS", None,
+    ]
+    assert [event["status"] for event in status["events"]] == [
+        "deleted", "reinstated", "deleted",
+    ]
+    validate_complete_browser_delivery(
+        tmp_path / "browser-qualifying-lap-status",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
 def test_practice_lap_pace_semantics_are_published_in_sidecar_without_race_lap_starts(
     tmp_path: Path,
 ) -> None:

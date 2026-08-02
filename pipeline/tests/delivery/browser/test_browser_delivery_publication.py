@@ -254,6 +254,23 @@ def test_v2_qualifying_summary_rejects_partial_rankings(tmp_path: Path) -> None:
     assert not (tmp_path / "browser").exists()
 
 
+def test_v2_qualifying_without_lap_status_inputs_omits_sidecar(tmp_path: Path) -> None:
+    # Arrange: the qualifying delivery carries results and laps but no drivers
+    # or race-control frames, so no causal lap-status sidecar can be derived.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_delivery(), schema_root=SCHEMA_ROOT_V2,
+        contract_version="v2",
+    )
+
+    # Act / Assert: the summary publishes while the causal artifact stays absent.
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert manifest["qualifyingSummary"]["path"] == "qualifying-summary.json"
+    assert "qualifyingLapStatus" not in manifest
+    assert "qualifyingLapStatus" not in manifest["schemas"]
+    assert result.qualifying_lap_status_path is None
+
+
 def test_v2_manifest_rejects_race_only_sidecars_for_non_race_modes() -> None:
     drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
                 "colorHex": "#000000", "carNumber": "44"},)

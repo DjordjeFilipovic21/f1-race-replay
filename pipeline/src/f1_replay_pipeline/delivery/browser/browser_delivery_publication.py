@@ -19,6 +19,7 @@ import jsonschema_rs
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChunk, BrowserEvent
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
+    BrowserQualifyingLapStatusSidecar,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     MAX_INT64,
     PENALTY_SIDECAR_SCHEMA_ID,
@@ -33,9 +34,14 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     V2_STINT_SUMMARY_SCHEMA_ID,
     V2_TIMELINE_SUMMARY_SCHEMA_ID,
     V2_TRACK_ASSETS_SCHEMA_ID,
+    V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
     QUALIFYING_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
+from f1_replay_pipeline.delivery.browser.browser_lap_status import (
+    build_qualifying_lap_status_sidecar,
+    has_qualifying_lap_status_messages,
+)
 from f1_replay_pipeline.domain.dataset_manifest import ManifestValidationError, serialize_deterministic_json
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 from f1_replay_pipeline.storage.generation_publication import (
@@ -102,6 +108,7 @@ _CONTRACT_SPECS = {
         "pit-loss-model": V2_PIT_LOSS_MODEL_SCHEMA_ID,
         "penalty-sidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
         "qualifying-summary": QUALIFYING_SUMMARY_SCHEMA_ID,
+        "qualifying-lap-status": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
     }),
 }
 
@@ -203,6 +210,7 @@ class PublishedBrowserDelivery:
     pit_loss_model_path: Path | None = None
     penalty_sidecar_path: Path | None = None
     qualifying_summary_path: Path | None = None
+    qualifying_lap_status_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -223,7 +231,9 @@ def publish_browser_delivery(
     emit("browser_payload_preparing")
     emit("browser_contract_schema_loading")
     schemas, registry = _load_contract_schemas(
-        schema_root, include_qualifying_summary=spec.version == "v2",
+        schema_root,
+        include_qualifying_summary=spec.version == "v2",
+        include_qualifying_lap_status=spec.version == "v2",
     )
     validators = _contract_validators(schemas, registry)
     artifacts = _prepared_artifacts(version, delivery, validators, spec=spec, progress=emit)
@@ -276,6 +286,7 @@ def validate_complete_browser_delivery(
         pit_loss_reference = manifest.get("pitLossModel")
         penalty_reference = manifest.get("penaltySidecar")
         qualifying_reference = manifest.get("qualifyingSummary")
+        qualifying_lap_status_reference = manifest.get("qualifyingLapStatus")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
@@ -284,6 +295,7 @@ def validate_complete_browser_delivery(
             *((pit_loss_reference,) if pit_loss_reference is not None else ()),
             *((penalty_reference,) if penalty_reference is not None else ()),
             *((qualifying_reference,) if qualifying_reference is not None else ()),
+            *((qualifying_lap_status_reference,) if qualifying_lap_status_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -299,7 +311,9 @@ def validate_complete_browser_delivery(
             payloads.append((relative, guarded.data))
         emit("browser_contract_schema_loading")
         schemas, registry = _load_contract_schemas(
-            schema_root, include_qualifying_summary=spec.version == "v2",
+            schema_root,
+            include_qualifying_summary=spec.version == "v2",
+            include_qualifying_lap_status=spec.version == "v2",
         )
         _validate_stored_delivery_payloads(payloads, _contract_validators(schemas, registry), emit, spec=spec)
         verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
@@ -426,6 +440,16 @@ def _validate_stored_delivery_payloads(
         if not isinstance(qualifying_reference, dict) or qualifying_reference.get("path") != "qualifying-summary.json":
             raise BrowserDeliveryPublicationError("manifest qualifying summary reference is invalid")
         expected_paths.add("qualifying-summary.json")
+    qualifying_lap_status_reference = manifest.get("qualifyingLapStatus")
+    if qualifying_lap_status_reference is not None:
+        if (
+            not isinstance(qualifying_lap_status_reference, dict)
+            or qualifying_lap_status_reference.get("path") != "qualifying-lap-status.json"
+        ):
+            raise BrowserDeliveryPublicationError(
+                "manifest qualifying lap status reference is invalid"
+            )
+        expected_paths.add("qualifying-lap-status.json")
     total = (
         len(chunk_refs) + 2
         + (1 if timeline_reference is not None else 0)
@@ -434,6 +458,7 @@ def _validate_stored_delivery_payloads(
         + (1 if pit_loss_reference is not None else 0)
         + (1 if penalty_reference is not None else 0)
         + (1 if qualifying_reference is not None else 0)
+        + (1 if qualifying_lap_status_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -508,6 +533,25 @@ def _validate_stored_delivery_payloads(
             raise BrowserDeliveryPublicationError("qualifying summary disagrees with the manifest")
         completed += 1
         _emit_validation_progress(emit, completed, total, "qualifying summary schema")
+    if qualifying_lap_status_reference is not None:
+        qualifying_lap_status = json.loads(encoded["qualifying-lap-status.json"])
+        if not isinstance(qualifying_lap_status, dict):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status sidecar must be a JSON object"
+            )
+        _validate_schema_instance(
+            validators["qualifying-lap-status"],
+            qualifying_lap_status,
+            "qualifying lap status sidecar",
+            spec,
+        )
+        _validate_qualifying_lap_status_contract(
+            qualifying_lap_status, manifest, spec,
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying lap status sidecar schema",
+        )
     if set(encoded) != expected_paths:
         raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
 
@@ -530,6 +574,12 @@ def _prepared_artifacts(
     stint_summary = delivery.stint_summary
     pit_loss_model = delivery.pit_loss_model if spec.version == "v1" or race_semantics else None
     penalty_sidecar = delivery.penalty_sidecar
+    qualifying_like = spec.version == "v2" and mode in {
+        "qualifying", "sprint-qualifying", "sprint-shootout",
+    }
+    qualifying_lap_status = _build_qualifying_lap_status(
+        delivery, enabled=qualifying_like,
+    )
     total = (
         2 * len(chunks) + 4
         + (2 if summary is not None else 0)
@@ -539,10 +589,10 @@ def _prepared_artifacts(
         + (2 if penalty_sidecar is not None else 0)
         + (
             2
-            if spec.version == "v2"
-            and mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}
+            if qualifying_like
             else 0
         )
+        + (2 if qualifying_lap_status is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = _manifest_contract(delivery, spec, mode)
@@ -619,6 +669,30 @@ def _prepared_artifacts(
         _emit_validation_progress(emit, completed, total, "penalty sidecar")
         completed += 1
         _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
+
+    qualifying_lap_status_artifact: PreparedArtifact | None = None
+    qualifying_lap_status_contract = None
+    if qualifying_lap_status is not None:
+        qualifying_lap_status_contract = _versioned_payload(
+            qualifying_lap_status.as_dict(), spec,
+        )
+        _validate_schema_instance(
+            validators["qualifying-lap-status"],
+            qualifying_lap_status_contract,
+            "qualifying lap status sidecar",
+            spec,
+        )
+        qualifying_lap_status_artifact = _prepare_artifact(
+            "qualifying-lap-status.json", qualifying_lap_status_contract,
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying lap status sidecar",
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying lap status sidecar schema",
+        )
 
     previous = None
     chunk_artifacts = []
@@ -704,6 +778,19 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest penalty sidecar reference has no penalty sidecar payload"
         )
+    if qualifying_lap_status_artifact is not None:
+        manifest["qualifyingLapStatus"] = {
+            "path": qualifying_lap_status_artifact.path,
+            "schemaId": spec.schema_ids["qualifying-lap-status"],
+            "sha256": qualifying_lap_status_artifact.sha256,
+        }
+        cast(dict[str, object], manifest["schemas"])["qualifyingLapStatus"] = (
+            spec.schema_ids["qualifying-lap-status"]
+        )
+    elif "qualifyingLapStatus" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest qualifying lap status reference has no sidecar payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest, spec)
     if sidecar_contract is not None:
@@ -714,6 +801,10 @@ def _prepared_artifacts(
         _validate_pit_loss_model_contract(pit_loss_contract, manifest, spec)
     if penalty_contract is not None:
         _validate_penalty_sidecar_contract(penalty_contract, manifest, spec)
+    if qualifying_lap_status_contract is not None:
+        _validate_qualifying_lap_status_contract(
+            qualifying_lap_status_contract, manifest, spec,
+        )
     qualifying_artifact = _qualifying_artifact(delivery, manifest, mode, spec)
     if qualifying_artifact is not None:
         _validate_schema_instance(
@@ -730,7 +821,8 @@ def _prepared_artifacts(
         schemas["qualifyingSummary"] = spec.schema_ids["qualifying-summary"]
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
-        pit_loss_artifact, penalty_artifact, qualifying_artifact, spec=spec,
+        pit_loss_artifact, penalty_artifact, qualifying_artifact,
+        qualifying_lap_status_artifact, spec=spec,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest", spec)
@@ -744,6 +836,7 @@ def _prepared_artifacts(
         *((pit_loss_artifact,) if pit_loss_artifact is not None else ()),
         *((penalty_artifact,) if penalty_artifact is not None else ()),
         *((qualifying_artifact,) if qualifying_artifact is not None else ()),
+        *((qualifying_lap_status_artifact,) if qualifying_lap_status_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -787,6 +880,33 @@ def _versioned_payload(value: object, spec: _BrowserContractSpec) -> object:
         payload = dict(payload)
         payload["contractVersion"] = "v2"
     return payload
+
+
+def _build_qualifying_lap_status(
+    delivery: BrowserDeliveryBuild, *, enabled: bool,
+) -> BrowserQualifyingLapStatusSidecar | None:
+    if not enabled:
+        return None
+    if delivery.qualifying_lap_status_sidecar is not None:
+        return delivery.qualifying_lap_status_sidecar
+    frame_names = frozenset(delivery.source.frames)
+    required = frozenset({"drivers", "laps", "race_control_messages"})
+    if not required <= frame_names:
+        if not (frame_names & {"drivers", "race_control_messages"}):
+            return None
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap-status inputs are incomplete"
+        )
+    if not has_qualifying_lap_status_messages(
+        delivery.source.frames["race_control_messages"]
+    ):
+        return None
+    try:
+        return build_qualifying_lap_status_sidecar(delivery.source)
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap-status sidecar cannot be reconciled"
+        ) from error
 
 
 def _qualifying_artifact(
@@ -855,7 +975,9 @@ def _artifact_payloads(
     """Prepare fully validated artifacts for focused tests."""
     spec = _resolve_contract_spec(schema_root, None)
     schemas, registry = _load_contract_schemas(
-        schema_root, include_qualifying_summary=spec.version == "v2",
+        schema_root,
+        include_qualifying_summary=spec.version == "v2",
+        include_qualifying_lap_status=spec.version == "v2",
     )
     return _prepared_artifacts(version, delivery, _contract_validators(schemas, registry), spec=spec)
 
@@ -891,8 +1013,12 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("pit-loss-model.json")
     if delivery.penalty_sidecar is not None:
         expected_paths.add("penalty-sidecar.json")
-    if spec.version == "v2" and mode == "qualifying":
+    if spec.version == "v2" and mode in {
+        "qualifying", "sprint-qualifying", "sprint-shootout",
+    }:
         expected_paths.add("qualifying-summary.json")
+        if {"drivers", "laps", "race_control_messages"} <= set(delivery.source.frames):
+            expected_paths.add("qualifying-lap-status.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -907,6 +1033,7 @@ def _validate_manifest_contract(
     pit_loss_artifact: PreparedArtifact | None = None,
     penalty_artifact: PreparedArtifact | None = None,
     qualifying_artifact: PreparedArtifact | None = None,
+    qualifying_lap_status_artifact: PreparedArtifact | None = None,
     *,
     spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
 ) -> None:
@@ -974,6 +1101,29 @@ def _validate_manifest_contract(
         "sha256": qualifying_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("qualifying summary reference disagrees with its payload")
+    qualifying_lap_status_reference = manifest.get("qualifyingLapStatus")
+    if qualifying_lap_status_artifact is None:
+        if qualifying_lap_status_reference is not None:
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status reference has no sidecar payload"
+            )
+    elif qualifying_lap_status_reference != {
+        "path": qualifying_lap_status_artifact.path,
+        "schemaId": spec.schema_ids["qualifying-lap-status"],
+        "sha256": qualifying_lap_status_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status reference disagrees with its payload"
+        )
+    if qualifying_lap_status_artifact is not None and (
+        spec.version != "v2"
+        or manifest.get("sessionMode") not in {
+            "qualifying", "sprint-qualifying", "sprint-shootout",
+        }
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status sidecar is valid only for qualifying-like modes"
+        )
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -1080,6 +1230,174 @@ def _validate_penalty_sidecar_contract(
         raise BrowserDeliveryPublicationError("penalty sidecar driver IDs disagree with the manifest")
 
 
+def _validate_qualifying_lap_status_contract(
+    sidecar, manifest, spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
+) -> None:
+    """Validate immutable identity, aligned columns, and causal event order."""
+    qualifying_modes = {"qualifying", "sprint-qualifying", "sprint-shootout"}
+    if (
+        spec.version != "v2"
+        or manifest.get("sessionMode") not in qualifying_modes
+        or sidecar.get("contractVersion") != "v2"
+        or sidecar.get("fixtureId") != manifest.get("fixtureId")
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status sidecar disagrees with the manifest"
+        )
+    schemas = manifest.get("schemas")
+    if not isinstance(schemas, dict) or schemas.get("qualifyingLapStatus") != spec.schema_ids[
+        "qualifying-lap-status"
+    ]:
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status schema registry entry is invalid"
+        )
+    drivers = sidecar.get("drivers")
+    manifest_drivers = manifest.get("drivers")
+    if not isinstance(drivers, dict) or not isinstance(manifest_drivers, list):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status sidecar drivers are invalid"
+        )
+    driver_ids = {driver.get("id") for driver in manifest_drivers if isinstance(driver, dict)}
+    if set(drivers) != driver_ids:
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status sidecar drivers disagree with the manifest"
+        )
+    if list(drivers) != sorted(drivers):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status drivers are not deterministically ordered"
+        )
+    lap_numbers: dict[str, set[int]] = {}
+    for driver_id, record in drivers.items():
+        if not isinstance(driver_id, str) or not isinstance(record, dict):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status driver record is invalid"
+            )
+        column_values = tuple(
+            record.get(name)
+            for name in ("lapNumber", "lapStartMs", "lapEndMs", "status", "deletedReason")
+        )
+        if any(not isinstance(column, list) for column in column_values):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status driver columns are invalid"
+            )
+        columns = cast(
+            tuple[list[object], list[object], list[object], list[object], list[object]],
+            column_values,
+        )
+        if len({len(column) for column in columns}) != 1:
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status driver columns are not aligned"
+            )
+        laps, starts, ends, statuses, reasons = columns
+        if any(type(lap) is not int or lap < 1 for lap in laps):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status lap numbers are not deterministically ordered"
+            )
+        lap_values = cast(list[int], laps)
+        if lap_values != sorted(set(lap_values)):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status lap numbers are not deterministically ordered"
+            )
+        start_values = cast(list[int], starts)
+        end_values = cast(list[int], ends)
+        if any(
+            type(value) is not int or not 0 <= value <= MAX_INT64
+            for values in (starts, ends) for value in values
+        ) or any(end <= start for start, end in zip(start_values, end_values, strict=True)):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status lap bounds are invalid"
+            )
+        if any(status not in {"valid", "deleted"} for status in statuses):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status values are invalid"
+            )
+        if any(
+            reason is not None and (not isinstance(reason, str) or not reason.strip())
+            for reason in reasons
+        ) or any(status == "valid" and reason is not None for status, reason in zip(statuses, reasons, strict=True)):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status deleted reasons are invalid"
+            )
+        lap_numbers[driver_id] = set(lap_values)
+
+    events = sidecar.get("events")
+    if not isinstance(events, list):
+        raise BrowserDeliveryPublicationError("qualifying lap status events are invalid")
+    for event in events:
+        if not isinstance(event, dict):
+            raise BrowserDeliveryPublicationError("qualifying lap status event is invalid")
+        driver_id, lap_number, event_time = (
+            event.get("driverId"), event.get("lapNumber"), event.get("eventTimeMs")
+        )
+        if (
+            not isinstance(driver_id, str)
+            or driver_id not in lap_numbers
+            or type(lap_number) is not int
+            or lap_number not in lap_numbers[driver_id]
+            or type(event_time) is not int
+            or not 0 <= event_time <= MAX_INT64
+            or event.get("status") not in {"deleted", "reinstated"}
+            or not isinstance(event.get("rawMessage"), str)
+            or not event["rawMessage"].strip()
+        ):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status event identity is invalid"
+            )
+        reason = event.get("reason")
+        if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+            raise BrowserDeliveryPublicationError(
+                "qualifying lap status event reason is invalid"
+            )
+    semantic_event_keys = tuple(
+        (
+            event["driverId"], event["lapNumber"], event["eventTimeMs"],
+            event["status"], event.get("reason"),
+        )
+        for event in events
+    )
+    if len(set(semantic_event_keys)) != len(semantic_event_keys):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status events contain semantic duplicates"
+        )
+    same_time_statuses: dict[tuple[str, int, int], set[str]] = {}
+    for event in events:
+        same_time_statuses.setdefault(
+            (event["driverId"], event["lapNumber"], event["eventTimeMs"]),
+            set(),
+        ).add(cast(str, event["status"]))
+    if any(len(statuses) > 1 for statuses in same_time_statuses.values()):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status events contain contradictory same-time statuses"
+        )
+    event_key = lambda event: (
+        event["eventTimeMs"], event["driverId"], event["lapNumber"],
+        event["status"], event.get("reason") or "", event["rawMessage"],
+    )
+    if events != sorted(events, key=event_key):
+        raise BrowserDeliveryPublicationError(
+            "qualifying lap status events are not deterministically ordered"
+        )
+    effective_status = {
+        (driver_id, lap_number): "valid"
+        for driver_id, laps in lap_numbers.items()
+        for lap_number in laps
+    }
+    for event in events:
+        effective_status[(event["driverId"], event["lapNumber"])] = (
+            "deleted" if event["status"] == "deleted" else "valid"
+        )
+    for driver_id, record in drivers.items():
+        for lap_number, status in zip(
+            cast(list[object], record["lapNumber"]),
+            cast(list[object], record["status"]),
+            strict=True,
+        ):
+            if effective_status[(driver_id, cast(int, lap_number))] != status:
+                raise BrowserDeliveryPublicationError(
+                    "qualifying lap status events disagree with final status"
+                )
+
+
 def _validate_stint_summary_contract(
     summary, manifest, spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
 ) -> None:
@@ -1180,6 +1498,7 @@ def _load_contract_schemas(
     schema_root: Path,
     *,
     include_qualifying_summary: bool = False,
+    include_qualifying_lap_status: bool = False,
 ) -> tuple[dict[str, Mapping[str, object]], jsonschema_rs.Registry]:
     if not isinstance(schema_root, Path):
         raise TypeError("schema_root must be a pathlib.Path")
@@ -1191,9 +1510,15 @@ def _load_contract_schemas(
         ]
         if include_qualifying_summary:
             names.append("qualifying-summary")
+        if include_qualifying_lap_status:
+            names.append("qualifying-lap-status")
         for name in names:
+            filename = (
+                "browser-qualifying-lap-status"
+                if name == "qualifying-lap-status" else name
+            )
             guarded = read_regular_file_no_follow(
-                schema_root / f"{name}.schema.json", f"browser {name} schema"
+                schema_root / f"{filename}.schema.json", f"browser {name} schema"
             )
             schema = cast(Mapping[str, object], json.loads(guarded.data))
             schemas[name] = schema
@@ -1444,6 +1769,7 @@ def _delivery_result(
         generation / "pit-loss-model.json" if "pit-loss-model.json" in digests else None,
         generation / "penalty-sidecar.json" if "penalty-sidecar.json" in digests else None,
         generation / "qualifying-summary.json" if "qualifying-summary.json" in digests else None,
+        generation / "qualifying-lap-status.json" if "qualifying-lap-status.json" in digests else None,
     )
 
 

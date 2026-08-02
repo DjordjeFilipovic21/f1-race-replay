@@ -22,6 +22,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserLapStart,
     BrowserPenaltySidecar,
     BrowserPitLossModel,
+    BrowserQualifyingLapStatusSidecar,
     BrowserStintSummary,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
@@ -31,6 +32,10 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
 from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
+from f1_replay_pipeline.delivery.browser.browser_lap_status import (
+    build_qualifying_lap_status_sidecar,
+    has_qualifying_lap_status_messages,
+)
 from f1_replay_pipeline.delivery.browser.browser_penalty_sidecar import build_penalty_sidecar
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import build_pit_loss_timeline
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
@@ -67,6 +72,9 @@ _STARTUP_PROJECTION_WINDOW_MS = 5_000
 _MAX_SHIFTED_STARTUP_SPAN_FRACTION = 0.2
 _NON_STARTER_RESULT_STATUSES = frozenset({"dns", "didnotstart"})
 _RACE_SESSION_MODES = frozenset({"race", "sprint"})
+_QUALIFYING_SESSION_MODES = frozenset({
+    "qualifying", "sprint-qualifying", "sprint-shootout",
+})
 
 
 @dataclass(frozen=True)
@@ -108,6 +116,7 @@ class BrowserDeliveryBuild:
     stint_summary: BrowserStintSummary | None = None
     pit_loss_model: BrowserPitLossModel | None = None
     penalty_sidecar: BrowserPenaltySidecar | None = None
+    qualifying_lap_status_sidecar: BrowserQualifyingLapStatusSidecar | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -124,6 +133,13 @@ class BrowserDeliveryBuild:
             raise TypeError("pit_loss_model must be a BrowserPitLossModel or None")
         if self.penalty_sidecar is not None and not isinstance(self.penalty_sidecar, BrowserPenaltySidecar):
             raise TypeError("penalty_sidecar must be a BrowserPenaltySidecar or None")
+        if self.qualifying_lap_status_sidecar is not None and not isinstance(
+            self.qualifying_lap_status_sidecar, BrowserQualifyingLapStatusSidecar,
+        ):
+            raise TypeError(
+                "qualifying_lap_status_sidecar must be a "
+                "BrowserQualifyingLapStatusSidecar or None"
+            )
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -217,6 +233,17 @@ def build_browser_delivery(
         penalty_sidecar = (
             parsed_penalty_sidecar if parsed_penalty_sidecar.penalty_issuances else None
         )
+        # Causal lap status is derived once from canonical final state; publication
+        # reuses this immutable value instead of reparsing the source snapshot.
+        qualifying_lap_status_sidecar = (
+            build_qualifying_lap_status_sidecar(snapshot)
+            if (
+                session_mode in _QUALIFYING_SESSION_MODES
+                and has_qualifying_lap_status_messages(
+                    snapshot.frames["race_control_messages"]
+                )
+            ) else None
+        )
         stint_summary = build_stint_summary(snapshot)
         if race_semantics and assessment is not None:
             observations = extract_eligible_pit_loss_observations(
@@ -244,7 +271,7 @@ def build_browser_delivery(
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
-        stint_summary, pit_loss_model, penalty_sidecar,
+        stint_summary, pit_loss_model, penalty_sidecar, qualifying_lap_status_sidecar,
     )
 
 

@@ -4,7 +4,9 @@ This v1 contract defines the immutable browser replay artifact. Canonical
 Parquet remains unchanged, preserves each native source cadence, and is never
 rewritten as part of delivery. Track distance, cumulative race progress,
 position, dynamic leaderboard order, and gaps are browser-derived rather than
-canonical observations.
+canonical observations. The v1 surface below stays frozen; the optional v2
+qualifying lap-status sidecar is a separate, Python-only artifact documented in
+its own section and adds no v1 field.
 
 ## Time and chunks
 
@@ -415,6 +417,112 @@ resolution for non-adjacent candidates within a 5 m residual difference.
 `geometric-wrap-v1` requires final/initial track ratios of 90%/10% and a
 minimum 80% circuit-length decrease, with at most one wrap per timing lap.
 Timing-lap boundaries and geometric origin may differ.
+
+### Optional v2 qualifying lap-status sidecar
+
+V2 qualifying-like deliveries (`sessionMode` `qualifying`,
+`sprint-qualifying`, or `sprint-shootout`) may include a compact, optional
+`qualifyingLapStatus` manifest reference to a causal deletion/reinstatement
+artifact:
+
+```json
+"qualifyingLapStatus": {
+  "path": "qualifying-lap-status.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `qualifying-lap-status.json` is a `v2` object carrying both the
+final reconciled lap state and the causal events that produced it:
+
+```json
+{
+  "contractVersion": "v2",
+  "fixtureId": "monza-2026",
+  "drivers": {
+    "HAM": {
+      "lapNumber": [1, 2, 3],
+      "lapStartMs": [0, 90000, 180000],
+      "lapEndMs": [90000, 180000, 270000],
+      "status": ["valid", "deleted", "valid"],
+      "deletedReason": [null, "TRACK LIMITS", null]
+    }
+  },
+  "events": [
+    {
+      "driverId": "HAM",
+      "lapNumber": 2,
+      "eventTimeMs": 185000,
+      "status": "deleted",
+      "reason": "TRACK LIMITS",
+      "rawMessage": "CAR 44 TIME 1:30.000 DELETED - TRACK LIMITS"
+    },
+    {
+      "driverId": "HAM",
+      "lapNumber": 2,
+      "eventTimeMs": 190000,
+      "status": "reinstated",
+      "reason": null,
+      "rawMessage": "CAR 44 TIME 1:30.000 REINSTATED"
+    },
+    {
+      "driverId": "HAM",
+      "lapNumber": 2,
+      "eventTimeMs": 195000,
+      "status": "deleted",
+      "reason": "TRACK LIMITS",
+      "rawMessage": "CAR 44 TIME 1:30.000 DELETED - TRACK LIMITS"
+    }
+  ]
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`); records
+  hold aligned columns sorted by strictly increasing `lapNumber`. Drivers
+  without canonical status rows publish empty aligned arrays.
+- `status` is the final canonical state, `valid` or `deleted`. `deletedReason`
+  is nullable and present only for deleted laps; a valid lap never carries a
+  reason, and a deleted lap without a source reason keeps `null`.
+- `events` are immutable causal records: `driverId`, `lapNumber`,
+  `eventTimeMs`, `status` (`deleted` or `reinstated`), nullable `reason`, and
+  `rawMessage`. Every event references a published driver and lap.
+- FastF1 3.8.3 does not populate deletion through the structured
+  `RacingNumber`/`Lap` columns, so the pipeline parses the raw race-control
+  text (`TIME <m:ss.mmm> DELETED` and `... REINSTATED`). Reinstatement is
+  parsed because FastF1 can unmark laps through a look-ahead pass. The final
+  canonical `laps.deleted` column is authoritative and is never rewritten:
+  without a replay boundary the reconciled event state must exactly equal it,
+  and any contradiction fails closed.
+- Effective state is causal: a consumer applies an event when
+  `eventTimeMs <= replayTimeMs`. Playback and arbitrary seeks use the same
+  comparison; reinstatement restores the lap to `valid` when its event time is
+  reached.
+- Events are deterministic and idempotent: duplicate semantic messages
+  collapse to one value, and publication orders events by `eventTimeMs`,
+  `driverId`, `lapNumber`, `status`, `reason`, `rawMessage`.
+- Matching fails closed. An explicit deletion/reinstatement message with a
+  missing canonical timestamp, unsupported form, contradictory status markers,
+  ambiguous or missing driver identity, contradictory lap fields, or no
+  unambiguous canonical lap raises an error instead of publishing a guessed
+  lap or timestamp. The message lap is a soft hint; canonical timing and
+  duration evidence resolve the lap, and tied candidates are rejected.
+- Publication validates the sidecar against
+  `browser-qualifying-lap-status.schema.json`, verifies its SHA-256 digest
+  against the manifest reference, and enforces semantic rules: fixture and
+  driver-set identity with the manifest, aligned columns, deterministic
+  ordering, event identity, and agreement between the event-derived effective
+  state and the final status column.
+- The reference is v2-only and qualifying-like-only. V1 manifests reject
+  `qualifyingLapStatus`, and v2 non-qualifying session modes reject it too.
+  The sidecar is published only when the race-control table contains an
+  explicit status marker; otherwise the reference is absent and older
+  deliveries remain valid and loadable. Strict parsers must explicitly allow
+  its absence.
+- **Scope**: Python-only. Canonical Parquet, v1 chunks, and v1 contracts
+  remain frozen and unchanged, and this artifact embeds nothing into chunk
+  payloads. No web implementation is included; the sidecar exists to drive
+  historical lap invalidation in a later web integration.
 
 ## Derived ranking and status semantics
 

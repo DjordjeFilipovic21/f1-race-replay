@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status",
+  "title": "Browser delivery v2 qualifying lap-status sidecar",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "fixtureId", "drivers", "events"],
+  "$comment": "Column arrays are aligned by driver and event references are validated against the published driver/lap set by the immutable model.",
+  "$defs": {
+    "driver": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,4}$"
+    },
+    "time": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "lap": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "enum": ["valid", "deleted"]
+    },
+    "eventStatus": {
+      "enum": ["deleted", "reinstated"]
+    },
+    "nullableReason": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lapNumber", "lapStartMs", "lapEndMs", "status", "deletedReason"],
+      "properties": {
+        "lapNumber": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lap"
+          }
+        },
+        "lapStartMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/time"
+          }
+        },
+        "lapEndMs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/time"
+          }
+        },
+        "status": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/status"
+          }
+        },
+        "deletedReason": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nullableReason"
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driverId", "lapNumber", "eventTimeMs", "status", "reason", "rawMessage"],
+      "properties": {
+        "driverId": {
+          "$ref": "#/$defs/driver"
+        },
+        "lapNumber": {
+          "$ref": "#/$defs/lap"
+        },
+        "eventTimeMs": {
+          "$ref": "#/$defs/time"
+        },
+        "status": {
+          "$ref": "#/$defs/eventStatus"
+        },
+        "reason": {
+          "$ref": "#/$defs/nullableReason"
+        },
+        "rawMessage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v2"
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/driver"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    }
+  }
+}

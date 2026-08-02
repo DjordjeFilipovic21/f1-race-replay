@@ -31,11 +31,18 @@ V2_TRACK_ASSETS_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}track-assets"
 V2_TIMELINE_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}timeline-summary"
 V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}browser-lap-sector-sidecar"
 V2_PENALTY_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}penalty-sidecar"
+V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}browser-qualifying-lap-status"
+# The shorter aliases follow the v2-only qualifying-summary naming convention.
+V2_QUALIFYING_LAP_STATUS_SCHEMA_ID = V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID
+QUALIFYING_LAP_STATUS_SCHEMA_ID = V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID
+BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID = V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID
 V2_STINT_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}stint-summary"
 V2_PIT_LOSS_MODEL_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}pit-loss-model"
 QUALIFYING_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}qualifying-summary"
 ContractVersion = Literal["v1", "v2"]
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
+QualifyingLapStatusEventKind = Literal["deleted", "reinstated"]
+QualifyingLapStatus = Literal["valid", "deleted"]
 
 
 def _validate_contract_version(value: object) -> ContractVersion:
@@ -314,6 +321,220 @@ class BrowserPenaltySidecar:
             "fixtureId": self.fixture_id,
             "penaltyIssuances": [issuance.as_dict() for issuance in self.penalty_issuances],
         }
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingLapStatusEvent:
+    """One causal qualifying-lap deletion or reinstatement event."""
+
+    driver_id: str
+    lap_number: int
+    event_time_ms: int
+    status: QualifyingLapStatusEventKind
+    reason: str | None
+    raw_message: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.driver_id, str) or not _DRIVER_ID.fullmatch(self.driver_id):
+            raise ValueError("qualifying lap status event driver_id must match the canonical identifier pattern")
+        if type(self.lap_number) is not int or self.lap_number < 1:
+            raise ValueError("qualifying lap status event lap_number must be a positive integer")
+        if type(self.event_time_ms) is not int or not 0 <= self.event_time_ms <= MAX_INT64:
+            raise ValueError("qualifying lap status event event_time_ms must be a non-negative signed Int64 integer")
+        if self.status not in {"deleted", "reinstated"}:
+            raise ValueError("qualifying lap status event status is invalid")
+        if self.reason is not None and (not isinstance(self.reason, str) or not self.reason.strip()):
+            raise ValueError("qualifying lap status event reason must be a non-empty string or null")
+        if not isinstance(self.raw_message, str) or not self.raw_message.strip():
+            raise ValueError("qualifying lap status event raw_message must be a non-empty string")
+
+    @property
+    def event_type(self) -> QualifyingLapStatusEventKind:
+        """Compatibility name for consumers that call status changes events."""
+        return self.status
+
+    @property
+    def session_time_ms(self) -> int:
+        """Canonical-time alias shared by the other browser event models."""
+        return self.event_time_ms
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "driverId": self.driver_id,
+            "lapNumber": self.lap_number,
+            "eventTimeMs": self.event_time_ms,
+            "status": self.status,
+            "reason": self.reason,
+            "rawMessage": self.raw_message,
+        }
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingLapStatusRecord:
+    """Aligned final-state lap-status columns for one qualifying driver."""
+
+    lap_number: tuple[int, ...]
+    lap_start_ms: tuple[int, ...]
+    lap_end_ms: tuple[int, ...]
+    status: tuple[QualifyingLapStatus, ...]
+    deleted_reason: tuple[str | None, ...]
+
+    def __post_init__(self) -> None:
+        columns = (
+            tuple(self.lap_number),
+            tuple(self.lap_start_ms),
+            tuple(self.lap_end_ms),
+            tuple(self.status),
+            tuple(self.deleted_reason),
+        )
+        object.__setattr__(self, "lap_number", columns[0])
+        object.__setattr__(self, "lap_start_ms", columns[1])
+        object.__setattr__(self, "lap_end_ms", columns[2])
+        object.__setattr__(self, "status", columns[3])
+        object.__setattr__(self, "deleted_reason", columns[4])
+        if any(not isinstance(column, tuple) for column in columns):
+            raise TypeError("qualifying lap status columns must be sequences")
+        size = len(self.lap_number)
+        if any(len(column) != size for column in columns[1:]):
+            raise ValueError("qualifying lap status columns must be aligned")
+        if any(type(value) is not int or value < 1 for value in self.lap_number):
+            raise ValueError("qualifying lap status lap_number must contain positive integers")
+        if any(
+            following <= current
+            for current, following in zip(self.lap_number, self.lap_number[1:], strict=False)
+        ):
+            raise ValueError("qualifying lap status lap_number must be strictly increasing")
+        for field_name, values in (
+            ("lap_start_ms", self.lap_start_ms),
+            ("lap_end_ms", self.lap_end_ms),
+        ):
+            if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in values):
+                raise TypeError(f"{field_name} must contain non-negative signed Int64 integers")
+        if any(
+            end_ms <= start_ms
+            for start_ms, end_ms in zip(self.lap_start_ms, self.lap_end_ms, strict=False)
+        ):
+            raise ValueError("qualifying lap status lap end times must follow lap start times")
+        if any(value not in {"valid", "deleted"} for value in self.status):
+            raise ValueError("qualifying lap status status values are invalid")
+        if any(
+            value is not None and (not isinstance(value, str) or not value.strip())
+            for value in self.deleted_reason
+        ):
+            raise ValueError("qualifying lap status deleted reasons must be non-empty strings or null")
+        if any(
+            status == "valid" and reason is not None
+            for status, reason in zip(self.status, self.deleted_reason, strict=False)
+        ):
+            raise ValueError("valid qualifying laps must not contain a deleted reason")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "lapNumber": list(self.lap_number),
+            "lapStartMs": list(self.lap_start_ms),
+            "lapEndMs": list(self.lap_end_ms),
+            "status": list(self.status),
+            "deletedReason": list(self.deleted_reason),
+        }
+
+    @property
+    def lap_start_time_ms(self) -> tuple[int, ...]:
+        """Compatibility name matching canonical lap column terminology."""
+        return self.lap_start_ms
+
+    @property
+    def lap_end_time_ms(self) -> tuple[int, ...]:
+        """Compatibility name matching canonical lap column terminology."""
+        return self.lap_end_ms
+
+    @property
+    def final_status(self) -> tuple[QualifyingLapStatus, ...]:
+        """Explicit alias for the reconciled, final status column."""
+        return self.status
+
+    @property
+    def deleted(self) -> tuple[bool, ...]:
+        """Boolean view used by canonical-lap reconciliation callers."""
+        return tuple(value == "deleted" for value in self.status)
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingLapStatusSidecar:
+    """Immutable V2 causal status data for one qualifying-like replay."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserQualifyingLapStatusRecord]
+    events: tuple[BrowserQualifyingLapStatusEvent, ...] = ()
+    contract_version: ContractVersion = "v2"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("qualifying lap status fixture_id must be a non-empty string")
+        if self.contract_version != "v2":
+            raise ValueError("qualifying lap status sidecar is available only in contract version v2")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("qualifying lap status drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("qualifying lap status driver IDs are invalid")
+        if any(not isinstance(value, BrowserQualifyingLapStatusRecord) for value in self.drivers.values()):
+            raise TypeError("qualifying lap status drivers have invalid records")
+        events = tuple(self.events)
+        if any(not isinstance(event, BrowserQualifyingLapStatusEvent) for event in events):
+            raise TypeError("qualifying lap status events must contain event values")
+        driver_ids = frozenset(self.drivers)
+        if any(event.driver_id not in driver_ids for event in events):
+            raise ValueError("qualifying lap status events must reference a published driver")
+        if any(
+            event.lap_number not in self.drivers[event.driver_id].lap_number
+            for event in events
+        ):
+            raise ValueError("qualifying lap status events must reference a published lap")
+        semantic_keys = tuple(
+            (
+                event.driver_id, event.lap_number, event.event_time_ms,
+                event.status, event.reason,
+            )
+            for event in events
+        )
+        if len(set(semantic_keys)) != len(semantic_keys):
+            raise ValueError(
+                "qualifying lap status events must not contain duplicates (semantic duplicates)"
+            )
+        same_time_statuses: dict[tuple[str, int, int], set[str]] = {}
+        for event in events:
+            same_time_statuses.setdefault(
+                (event.driver_id, event.lap_number, event.event_time_ms),
+                set(),
+            ).add(event.status)
+        if any(len(statuses) > 1 for statuses in same_time_statuses.values()):
+            raise ValueError(
+                "qualifying lap status events must not contain contradictory same-time statuses"
+            )
+        if events != tuple(sorted(events, key=_qualifying_lap_status_event_sort_key)):
+            events = tuple(sorted(events, key=_qualifying_lap_status_event_sort_key))
+        if len(set(events)) != len(events):
+            raise ValueError("qualifying lap status events must not contain duplicates")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+        object.__setattr__(self, "events", events)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v2",
+            "fixtureId": self.fixture_id,
+            "drivers": {
+                driver_id: record.as_dict() for driver_id, record in self.drivers.items()
+            },
+            "events": [event.as_dict() for event in self.events],
+        }
+
+
+def _qualifying_lap_status_event_sort_key(
+    event: BrowserQualifyingLapStatusEvent,
+) -> tuple[object, ...]:
+    return (
+        event.event_time_ms, event.driver_id, event.lap_number,
+        event.status, event.reason or "", event.raw_message,
+    )
 
 
 @dataclass(frozen=True)
@@ -694,6 +915,16 @@ class BrowserQualifyingSummaryReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserQualifyingLapStatusReference(BrowserArtifactReference):
+    """Immutable manifest reference for the qualifying lap-status sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "qualifying-lap-status.json" or self.schema_id != V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID:
+            raise ValueError("qualifying lap status reference is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserQualifyingDriverSummary:
     """Aligned qualifying result columns for one driver.
 
@@ -793,6 +1024,7 @@ class BrowserManifest:
     qualifying_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     session_mode: SessionMode | None = None
     contract_version: ContractVersion = "v1"
+    qualifying_lap_status: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -930,8 +1162,29 @@ class BrowserManifest:
             )
         elif qualifying_summary is not None:
             raise TypeError("qualifying_summary must be a BrowserArtifactReference or mapping")
+        qualifying_lap_status = self.qualifying_lap_status
+        if isinstance(qualifying_lap_status, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(qualifying_lap_status) != required:
+                raise ValueError("qualifying_lap_status must contain path, schemaId, and sha256")
+            qualifying_lap_status = BrowserQualifyingLapStatusReference(
+                cast(str, qualifying_lap_status["path"]),
+                cast(str, qualifying_lap_status["schemaId"]),
+                cast(str, qualifying_lap_status["sha256"]),
+            )
+        elif isinstance(qualifying_lap_status, BrowserArtifactReference):
+            qualifying_lap_status = BrowserQualifyingLapStatusReference(
+                qualifying_lap_status.path,
+                qualifying_lap_status.schema_id,
+                qualifying_lap_status.sha256,
+            )
+        elif qualifying_lap_status is not None:
+            raise TypeError("qualifying_lap_status must be a BrowserArtifactReference or mapping")
         if contract_version == "v2":
-            references = (timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model, penalty_sidecar, qualifying_summary)
+            references = (
+                timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model,
+                penalty_sidecar, qualifying_summary, qualifying_lap_status,
+            )
             if any(reference is not None and ":v1:" in reference.schema_id for reference in references):
                 raise ValueError("v2 manifests must reference v2 artifacts")
             if self.session_mode in {
@@ -944,6 +1197,14 @@ class BrowserManifest:
                 "qualifying", "sprint-qualifying", "sprint-shootout",
             } and qualifying_summary is not None:
                 raise ValueError("qualifying_summary is valid only for qualifying-like modes")
+            if self.session_mode not in {
+                "qualifying", "sprint-qualifying", "sprint-shootout",
+            } and qualifying_lap_status is not None:
+                raise ValueError(
+                    "qualifying_lap_status is valid only for qualifying-like modes"
+                )
+        elif qualifying_lap_status is not None:
+            raise ValueError("qualifying lap status is available only in contract version v2")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
@@ -954,6 +1215,7 @@ class BrowserManifest:
         object.__setattr__(self, "qualifying_summary", qualifying_summary)
         object.__setattr__(self, "season_metadata", season_metadata)
         object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
+        object.__setattr__(self, "qualifying_lap_status", qualifying_lap_status)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -1004,6 +1266,7 @@ class BrowserManifest:
                 "pitLossModel": V2_PIT_LOSS_MODEL_SCHEMA_ID,
                 "penaltySidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
                 "qualifyingSummary": QUALIFYING_SUMMARY_SCHEMA_ID,
+                "qualifyingLapStatus": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
             }
             for field_name, schema_id in optional_schemas.items():
                 if getattr(self, _camel_to_snake(field_name)) is not None:
@@ -1011,6 +1274,10 @@ class BrowserManifest:
         if self.qualifying_summary is not None:
             value["qualifyingSummary"] = cast(
                 BrowserArtifactReference, self.qualifying_summary,
+            ).as_dict()
+        if self.qualifying_lap_status is not None:
+            value["qualifyingLapStatus"] = cast(
+                BrowserArtifactReference, self.qualifying_lap_status,
             ).as_dict()
         return value
 
@@ -1046,12 +1313,29 @@ def _freeze_telemetry_capabilities(value: Mapping[str, object] | None) -> Mappin
     return cast(Mapping[str, object], frozen)
 
 
+# Keep the shorter names available to parser code while retaining the explicit
+# qualifying prefix for the public V2 artifact classes.
+BrowserLapStatusEvent = BrowserQualifyingLapStatusEvent
+BrowserLapStatusRecord = BrowserQualifyingLapStatusRecord
+BrowserLapStatusReference = BrowserQualifyingLapStatusReference
+BrowserLapStatusSidecar = BrowserQualifyingLapStatusSidecar
+BrowserLapStatus = BrowserQualifyingLapStatusSidecar
+BrowserQualifyingLapStatus = BrowserQualifyingLapStatusSidecar
+BrowserQualifyingLapStatusSidecarReference = BrowserQualifyingLapStatusReference
+
+
 __all__ = [
     "BrowserArtifactReference", "BrowserDnfMarker", "BrowserDriverFields",
     "BrowserDriverLapSector", "BrowserDriverStintSummary", "BrowserLapSectorSidecar",
     "BrowserLapSectorSidecarReference",
     "BrowserLapStart", "BrowserManifest", "BrowserPenaltyIssuance", "BrowserPenaltySidecar",
     "BrowserPenaltySidecarReference",
+    "BrowserLapStatusEvent", "BrowserLapStatusRecord", "BrowserLapStatusReference",
+    "BrowserLapStatus", "BrowserLapStatusSidecar",
+    "BrowserQualifyingLapStatusSidecarReference",
+    "BrowserQualifyingLapStatusEvent", "BrowserQualifyingLapStatusRecord",
+    "BrowserQualifyingLapStatus", "BrowserQualifyingLapStatusReference",
+    "BrowserQualifyingLapStatusSidecar",
     "BrowserQualifyingDriverSummary", "BrowserQualifyingSummary", "BrowserQualifyingSummaryReference",
     "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
@@ -1059,12 +1343,16 @@ __all__ = [
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
     "V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "V2_CHUNK_SCHEMA_ID", "V2_MANIFEST_SCHEMA_ID",
-    "V2_PIT_LOSS_MODEL_SCHEMA_ID", "V2_PENALTY_SIDECAR_SCHEMA_ID", "V2_STINT_SUMMARY_SCHEMA_ID",
+    "BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID", "QUALIFYING_LAP_STATUS_SCHEMA_ID",
+    "V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID", "V2_QUALIFYING_LAP_STATUS_SCHEMA_ID",
+    "V2_PIT_LOSS_MODEL_SCHEMA_ID",
+    "V2_PENALTY_SIDECAR_SCHEMA_ID", "V2_STINT_SUMMARY_SCHEMA_ID",
     "V2_TIMELINE_SUMMARY_SCHEMA_ID", "V2_TRACK_ASSETS_SCHEMA_ID", "QUALIFYING_SUMMARY_SCHEMA_ID",
     "ContractVersion",
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
     "STINT_SUMMARY_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",
+    "QualifyingLapStatus", "QualifyingLapStatusEventKind",
     "TimelineSummaryKind",
     "deep_freeze_json",
 ]
