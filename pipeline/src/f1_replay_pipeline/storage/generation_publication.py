@@ -31,10 +31,18 @@ from f1_replay_pipeline.domain.dataset_manifest import (
     ManifestValidationError,
     parse_current_pointer,
 )
+from f1_replay_pipeline.domain.canonical_contract import (
+    CANONICAL_PARQUET_V1,
+    CANONICAL_PARQUET_V2,
+)
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 
 
-FORMAT_VERSION = "canonical-parquet-v1"
+FORMAT_VERSION_V1 = CANONICAL_PARQUET_V1
+FORMAT_VERSION_V2 = CANONICAL_PARQUET_V2
+# The unqualified publication API is the active v2 boundary.  The v1 constant
+# remains available solely for parsing/serializing frozen historical records.
+FORMAT_VERSION = FORMAT_VERSION_V2
 STAGING_PREFIX = ".canonical-parquet-staging-"
 CANONICAL_TABLE_NAMES = (
     "session_metadata", "drivers", "car_telemetry", "position_telemetry", "laps",
@@ -224,9 +232,10 @@ class LocalFilesystem:
         os.fsync(descriptor)
 
     def fsync_directory(self, path: Path) -> bool:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         try:
-            descriptor = os.open(path, flags)
+            # Directory durability must not turn into a symlink traversal when
+            # a pathname is replaced between publication phases.
+            descriptor = _open_directory_no_follow(path)
         except OSError as error:
             if error.errno in _UNSUPPORTED_DIRECTORY_FSYNC:
                 return False
@@ -606,6 +615,7 @@ def _pointer_temporary(
 
 def _pointer_selects(
     target_parent_descriptor: int, generation_id: str, manifest_sha256: str,
+    format_version: str,
 ) -> bool:
     """Conservatively reconcile an ambiguous replacement result at the commit point."""
     try:
@@ -615,7 +625,8 @@ def _pointer_selects(
             target_parent_descriptor, "current.json", pointer_file, "current pointer",
         )
         return (
-            pointer.generation_id == generation_id
+            pointer.format_version == format_version
+            and pointer.generation_id == generation_id
             and pointer.manifest_sha256 == manifest_sha256
             and pointer.manifest_path == f"generations/{generation_id}/manifest.json"
         )
@@ -728,12 +739,19 @@ class StagedGenerationWriter:
         return parent_path / relative.name
 
 
-def deterministic_pointer_bytes(generation_id: str, manifest_sha256: str) -> bytes:
+def deterministic_pointer_bytes(
+    generation_id: str,
+    manifest_sha256: str,
+    *,
+    format_version: str = FORMAT_VERSION,
+) -> bytes:
     """Return the exact bytes written to ``current.json`` for a generation."""
     generation_id = _safe_generation_id(generation_id)
     _require_sha256(manifest_sha256, "manifest_sha256")
+    if format_version not in {FORMAT_VERSION_V1, FORMAT_VERSION_V2}:
+        raise GenerationPublicationError("unsupported current-pointer format_version")
     pointer = {
-        "format_version": FORMAT_VERSION,
+        "format_version": format_version,
         "generation_id": generation_id,
         "manifest_path": f"generations/{generation_id}/manifest.json",
         "manifest_sha256": manifest_sha256,
@@ -760,9 +778,11 @@ def validate_generation(
     expected_generation_id = _safe_generation_id(
         generation_path.name if expected_generation_id is None else expected_generation_id
     )
-    from f1_replay_pipeline.storage.canonical_generation_validation import validate_complete_canonical_generation
-
+    if expected_manifest_sha256 is not None:
+        _require_sha256(expected_manifest_sha256, "expected_manifest_sha256")
     try:
+        from f1_replay_pipeline.storage.canonical_generation_validation import validate_complete_canonical_generation
+
         manifest = validate_complete_canonical_generation(
             generation_path,
             expected_generation_id=expected_generation_id,
@@ -771,7 +791,10 @@ def validate_generation(
         )
     except (GenerationPublicationError, ManifestValidationError, ValueError) as error:
         raise GenerationPublicationError("canonical generation validation failed") from error
-    validate_manifest(manifest, generation_path)
+    try:
+        validate_manifest(manifest, generation_path)
+    except (GenerationPublicationError, ManifestValidationError, ValueError) as error:
+        raise GenerationPublicationError(f"canonical generation validation failed: {error}") from error
     return manifest
 
 
@@ -796,8 +819,13 @@ def resolve_current_generation(target_parent: Path, *, validate_manifest: Manife
         expected_generation_id=generation_id,
         expected_manifest_sha256=manifest_sha256,
     )
+    if pointer.format_version != manifest.format_version:
+        raise GenerationPublicationError("current pointer and manifest format versions disagree")
     if validate_manifest is not None:
-        _require_manifest_validator(validate_manifest)(manifest, generation_path)
+        try:
+            _require_manifest_validator(validate_manifest)(manifest, generation_path)
+        except (GenerationPublicationError, ManifestValidationError, ValueError) as error:
+            raise GenerationPublicationError(f"canonical generation validation failed: {error}") from error
     verify_regular_file_identity(pointer_path, pointer_file, "current pointer")
     return GenerationPublicationResult(generation_path, manifest_path, pointer_path, manifest_sha256)
 
@@ -901,6 +929,7 @@ def write_generation(
     checkpoint: Checkpoint | None = None,
     pointer_temp_name: Callable[[], str] | None = None,
     recovery_lock: RecoveryLock | None = None,
+    format_version: str = FORMAT_VERSION,
 ) -> GenerationPublicationResult:
     """Materialize, validate, rename, and make one generation current last.
 
@@ -912,6 +941,8 @@ def write_generation(
     checkpoint = checkpoint or _noop
     pointer_temp_name = pointer_temp_name or (lambda: f"{STAGING_PREFIX}pointer-{uuid.uuid4().hex}")
     validate_manifest = _require_manifest_validator(validate_manifest)
+    if format_version not in {FORMAT_VERSION_V1, FORMAT_VERSION_V2}:
+        raise GenerationPublicationError("unsupported publication format_version")
     generation_id = _safe_generation_id(generation_id)
     directory_fsyncs: list[DirectoryFsyncStatus] = []
     target_parent = _absolute_path(target_parent)
@@ -1015,7 +1046,13 @@ def write_generation(
         with os.fdopen(pointer_descriptor, "wb") as pointer_file:
             checkpoint("after_exclusive_create:current_pointer")
             checkpoint("before_write:current.json")
-            _write_all(pointer_file.fileno(), deterministic_pointer_bytes(generation_id, manifest_sha256), filesystem)
+            _write_all(
+                pointer_file.fileno(),
+                deterministic_pointer_bytes(
+                    generation_id, manifest_sha256, format_version=format_version,
+                ),
+                filesystem,
+            )
             pointer_file.flush()
             filesystem.fsync_file(pointer_file.fileno())
         checkpoint("after_file_fsync:current.json")
@@ -1029,7 +1066,9 @@ def write_generation(
                 dst_dir_fd=target_parent_descriptor,
             )
         except BaseException:
-            if _pointer_selects(target_parent_descriptor, generation_id, manifest_sha256):
+            if _pointer_selects(
+                target_parent_descriptor, generation_id, manifest_sha256, format_version,
+            ):
                 result = GenerationPublicationResult(
                     generation_path,
                     generation_path / "manifest.json",
@@ -1137,7 +1176,8 @@ def _attach_cleanup_errors(primary_error: BaseException, cleanup_errors: list[Ba
 
 
 __all__ = [
-    "CANONICAL_TABLE_NAMES", "DirectoryFsyncStatus", "FORMAT_VERSION", "STAGING_PREFIX", "Filesystem", "GuardedFile",
+    "CANONICAL_TABLE_NAMES", "DirectoryFsyncStatus", "FORMAT_VERSION", "FORMAT_VERSION_V1",
+    "FORMAT_VERSION_V2", "STAGING_PREFIX", "Filesystem", "GuardedFile",
     "GenerationPublicationError", "GenerationPublicationResult", "LocalFilesystem",
     "LocalRecoveryLock", "RecoveryLease", "RecoveryLock", "RecoveryOwnershipError",
     "PublicationCleanupError", "PublicationCommittedError", "PublicationDurabilityUncertainError",

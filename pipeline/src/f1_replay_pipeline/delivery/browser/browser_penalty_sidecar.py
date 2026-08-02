@@ -1,4 +1,4 @@
-"""Build the optional issued-penalty sidecar from canonical race control data."""
+"""Build the optional mode-neutral issued-penalty sidecar from race control."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ def build_penalty_sidecar(snapshot: CanonicalGenerationSnapshot) -> BrowserPenal
     """Return deterministic issued-penalty data for one canonical snapshot.
 
     An empty sidecar is valid and lets orchestration decide whether to publish the
-    optional artifact.  The parser receives only canonical race-control messages
-    and driver metadata, so pit data cannot introduce an inferred served state.
+    optional artifact.  Penalty issuances are not inherently race-only, so this
+    builder does not infer a session mode or discard non-race messages. The parser
+    receives only canonical race-control messages and driver metadata, so pit data
+    cannot introduce an inferred served state.
     """
     session = snapshot.frames["session_metadata"].row(0, named=True)
     fixture_id = cast(str, session["session_id"])

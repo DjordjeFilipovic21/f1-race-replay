@@ -26,7 +26,12 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     validate_browser_delivery_pointer,
 )
 from f1_replay_pipeline.domain.dataset_manifest import parse_current_pointer, parse_manifest
-from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
+from f1_replay_pipeline.domain.generation_identity import (
+    GenerationIdentityError,
+    build_v2_generation_id,
+    validate_generation_id,
+)
+from f1_replay_pipeline.domain.session_modes import normalize_session_identity
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
     PublicationCommittedError,
@@ -41,6 +46,7 @@ from f1_replay_pipeline.app.catalog_v2_schema import (
     CatalogV2RaceRecord,
     CatalogV2SessionRecord,
     session_code_from_generation_id,
+    validate_active_catalog,
 )
 from f1_replay_pipeline.app.catalog_visuals import create_circuit_preview, resolve_venue_coordinates
 from f1_replay_pipeline.app.session_pointer_publication import (
@@ -180,7 +186,7 @@ def deterministic_race_id(year: int, round_number: int) -> str:
 
 
 def deterministic_generation_id(year: int, round_number: int, session: str) -> str:
-    return f"{deterministic_race_id(year, round_number)}-{session.casefold()}"
+    return build_v2_generation_id(year, round_number, session)
 
 
 def event_folder_id(year: int, round_number: int, event_name: str) -> str:
@@ -481,7 +487,18 @@ def _outputs_valid(canonical: Path, browser: Path) -> bool:
 
 
 def _session_code(request: BatchRequest) -> str:
-    return request.session.strip().casefold()
+    identity = normalize_session_identity(request.session)
+    return {
+        "practice-1": "fp1",
+        "practice-2": "fp2",
+        "practice-3": "fp3",
+        "qualifying": "q",
+        "race": "r",
+        "sprint": "s",
+        "sprint-qualifying": "sq",
+        "sprint-shootout": "ss",
+        "testing": "testing",
+    }[identity]
 
 
 def _session_name(session_code: str) -> str:
@@ -591,7 +608,9 @@ def _browser_output_valid(
             return False
         manifest = json.loads(manifest_file.data)
         if (
-            manifest.get("deliveryVersion") != version
+            manifest.get("formatVersion") != "browser-delivery-v2"
+            or manifest.get("contractVersion") != "v2"
+            or manifest.get("deliveryVersion") != version
             or manifest.get("sourceGenerationId") != canonical.generation_path.name
             or manifest.get("sourceManifestSha256") != canonical.manifest_sha256
         ):
@@ -626,7 +645,9 @@ def _shallow_browser_output_valid(
         manifest = json.loads(manifest_file.data)
         chunks = manifest.get("chunks")
         if (
-            manifest.get("deliveryVersion") != version
+            manifest.get("formatVersion") != "browser-delivery-v2"
+            or manifest.get("contractVersion") != "v2"
+            or manifest.get("deliveryVersion") != version
             or manifest.get("sourceGenerationId") != canonical.generation_path.name
             or manifest.get("sourceManifestSha256") != canonical.manifest_sha256
             or not isinstance(chunks, list)
@@ -783,7 +804,7 @@ def _generation_id(request: BatchRequest, canonical: Path, browser: Path, round_
     version = 1
     while (canonical / "generations" / f"{base}-force-{version}").exists() or (browser / "generations" / f"{base}-force-{version}").exists():
         version += 1
-    return f"{base}-force-{version}"
+    return validate_generation_id(f"{base}-force-{version}")
 
 
 def publish_catalog(
@@ -956,7 +977,10 @@ def verify_catalog(
         catalog = json.loads(catalog_file.data)
         if catalog.get("schemaVersion") != CATALOG_SCHEMA_VERSION:
             raise ValueError("season catalog must use schemaVersion 2; migrate the v1 catalog first")
-        if catalog.get("year") != request.year or not isinstance(catalog.get("races"), list):
+        parsed_catalog = validate_active_catalog(catalog)
+        if parsed_catalog.year != request.year:
+            raise ValueError("season catalog is malformed v2")
+        if not isinstance(catalog.get("races"), list):
             raise ValueError("season catalog is malformed v2")
         records = tuple(sorted(catalog["races"], key=_catalog_record_sort_key))
         verify_regular_file_identity(root / "catalog.json", catalog_file, "season catalog")

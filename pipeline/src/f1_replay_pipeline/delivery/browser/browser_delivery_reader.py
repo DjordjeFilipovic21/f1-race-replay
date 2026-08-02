@@ -16,7 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     CanonicalGenerationSnapshot,
 )
 from f1_replay_pipeline.storage.canonical_generation_validation import validate_complete_canonical_generation
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.domain.dataset_manifest import DatasetManifest, TableManifestEntry
 from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationError,
@@ -78,6 +78,7 @@ def read_validated_canonical_generation(
             expected_generation_id=resolved.generation_path.name,
             expected_manifest_sha256=resolved.manifest_sha256,
         )
+        _require_active_v2_manifest(manifest)
         reader = _read_projected_table if dependencies.table_reader is None else dependencies.table_reader
         entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
         frames = {}
@@ -88,6 +89,17 @@ def read_validated_canonical_generation(
     except (GenerationPublicationError, ValueError) as error:
         raise BrowserDeliveryReadError(str(error)) from error
     return CanonicalGenerationSnapshot(resolved.generation_path.name, resolved.manifest_sha256, frames)
+
+
+def _require_active_v2_manifest(manifest: DatasetManifest) -> None:
+    if manifest.format_version != "canonical-parquet-v2" or manifest.manifest_version != 2:
+        raise ValueError(
+            "active browser delivery requires canonical-parquet-v2; "
+            "canonical-parquet-v1 is a deprecated historical reference"
+        )
+    entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
+    if any(entry.schema_version != "v2" for entry in entries):
+        raise ValueError("active browser delivery rejects mixed-version canonical table schemas")
 
 
 def derive_browser_driver_fields(
@@ -130,12 +142,15 @@ def derive_browser_driver_fields(
 def _read_and_verify_table(
     generation_path: Path, entry: TableManifestEntry, reader: TableReader,
 ) -> pl.DataFrame:
-    columns = tuple(CANONICAL_TABLE_SCHEMAS[entry.name])
+    columns = tuple(CANONICAL_TABLE_SCHEMAS_V2[entry.name])
     frame = reader(generation_path / entry.path, columns)
-    if tuple(frame.columns) != columns or frame.schema != CANONICAL_TABLE_SCHEMAS[entry.name]:
+    if tuple(frame.columns) != columns or frame.schema != CANONICAL_TABLE_SCHEMAS_V2[entry.name]:
         raise ValueError(f"{entry.name} reader schema or column order differs from canonical contract")
-    validate_canonical_table(entry.name, frame)
-    if frame.height != entry.row_count or logical_table_sha256(entry.name, frame) != entry.logical_sha256:
+    validate_canonical_table(entry.name, frame, version="v2")
+    if (
+        frame.height != entry.row_count
+        or logical_table_sha256(entry.name, frame, version="v2") != entry.logical_sha256
+    ):
         raise ValueError(f"{entry.name} changed after canonical generation validation")
     return frame
 

@@ -171,7 +171,11 @@ def test_invalid_source_driver_mapping_does_not_call_publisher_and_preserves_sta
 
 def test_validation_failure_prevents_publishing_and_preserves_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     validation_error = ValueError("invalid generation")
-    monkeypatch.setattr(orchestration, "validate_canonical_frames", lambda frames: (_ for _ in ()).throw(validation_error))
+    monkeypatch.setattr(
+        orchestration,
+        "validate_canonical_frames",
+        lambda frames, **kwargs: (_ for _ in ()).throw(validation_error),
+    )
     calls: list[object] = []
 
     with pytest.raises(PipelineValidationError) as raised:

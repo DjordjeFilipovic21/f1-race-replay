@@ -54,12 +54,16 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import (
     build_stint_summary,
 )
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import (
+    CANONICAL_TABLE_SCHEMAS,
+    CANONICAL_TABLE_SCHEMAS_V2,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
 SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
+SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -145,6 +149,23 @@ def _publish(
     return publish_browser_delivery(
         browser_parent=browser, delivery_version="delivery-one",
         delivery=_delivery(stint_summary=stint_summary), schema_root=SCHEMA_ROOT,
+    )
+
+
+def _v2_practice_delivery(
+    stint_summary: BrowserStintSummary | None = None,
+) -> BrowserDeliveryBuild:
+    delivery = _delivery(stint_summary=stint_summary)
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "test-gen", "a" * 64, {"session_metadata": session_metadata},
+        ),
     )
 
 
@@ -1089,6 +1110,52 @@ class TestStintSummaryPublication:
             expected_generation_id="test-gen",
             expected_manifest_sha256="a" * 64,
             schema_root=SCHEMA_ROOT,
+        )
+
+    def test_v2_publication_emits_contract_v2_run_and_tyre_summary(
+        self, tmp_path: Path,
+    ) -> None:
+        """✅ Positive: a v2 practice delivery publishes a v2 stint (run/tyre) summary."""
+        summary = BrowserStintSummary(
+            "test-race",
+            {
+                "HAM": BrowserDriverStintSummary(
+                    stint_number=(1,),
+                    compound=("MEDIUM",),
+                    start_lap=(1,),
+                    end_lap=(None,),
+                    start_time_ms=(0,),
+                    end_time_ms=(None,),
+                    tyre_life_at_start=(0,),
+                    is_fresh_tyre=(True,),
+                    pit_in_time_ms=(None,),
+                    pit_out_time_ms=(None,),
+                ),
+            },
+        )
+
+        result = publish_browser_delivery(
+            browser_parent=tmp_path / "browser",
+            delivery_version="delivery-v2",
+            delivery=_v2_practice_delivery(stint_summary=summary),
+            schema_root=SCHEMA_ROOT_V2,
+            contract_version="v2",
+        )
+        manifest = _load_json(result.manifest_path)
+        stint = _load_json(result.stint_summary_path)  # type: ignore[arg-type]
+
+        assert manifest["sessionMode"] == "practice"
+        assert manifest["stintSummary"]["schemaId"].endswith(":v2:stint-summary")
+        assert manifest["schemas"]["stintSummary"].endswith(":v2:stint-summary")
+        assert stint["contractVersion"] == "v2"
+        assert stint["fixtureId"] == "test-race"
+        assert stint["drivers"]["HAM"]["stintNumber"] == [1]
+        assert stint["drivers"]["HAM"]["compound"] == ["MEDIUM"]
+        validate_complete_browser_delivery(
+            tmp_path / "browser",
+            expected_generation_id="test-gen",
+            expected_manifest_sha256="a" * 64,
+            schema_root=SCHEMA_ROOT_V2,
         )
 
     def test_stint_summary_driver_ids_match_manifest_drivers(

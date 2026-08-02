@@ -1,4 +1,4 @@
-"""Pure causal derivation of the optional browser pit-loss timeline."""
+"""Pure causal derivation of the optional race-only browser pit-loss timeline."""
 
 from __future__ import annotations
 
@@ -114,7 +114,11 @@ def build_pit_loss_timeline(
     baseline_ms: int = BASELINE_MS,
     prior_weight: int = PRIOR_WEIGHT,
 ) -> BrowserPitLossModel:
-    """Build the placeholder-plus-refinement model without future leakage."""
+    """Build the placeholder-plus-refinement model without future leakage.
+
+    The browser orchestration calls this function only for Race and Sprint;
+    Practice and Qualifying never receive inferred race pit-loss semantics.
+    """
     _require_nonnegative_integer(replay_start_ms, "replay_start_ms")
     _require_nonnegative_integer(baseline_ms, "baseline_ms", positive=True)
     _require_nonnegative_integer(prior_weight, "prior_weight", positive=True)

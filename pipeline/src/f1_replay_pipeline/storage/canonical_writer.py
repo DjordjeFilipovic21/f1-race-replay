@@ -8,13 +8,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 import hashlib
 import tempfile
+from typing import cast
 
 import polars as pl
 
-from f1_replay_pipeline.storage.canonical_generation_validation import validate_complete_canonical_generation
+from f1_replay_pipeline.domain.canonical_contract import CANONICAL_PARQUET_V2
 from f1_replay_pipeline.domain.dataset_manifest import (
     DEFAULT_WRITER_SETTINGS,
     DatasetManifest,
@@ -29,13 +31,16 @@ from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
     StagedGenerationWriter,
     resolve_current_generation,
+    read_regular_file_no_follow,
     write_generation,
+    verify_regular_file_identity,
 )
 from f1_replay_pipeline.domain.logical_hashes import logical_table_sha256
 from f1_replay_pipeline.storage.parquet_io import (
     CANONICAL_PARQUET_TABLE_NAMES,
     ensure_native_parquet_compatibility,
     validate_canonical_frames,
+    verify_canonical_parquet_round_trip,
     write_canonical_parquet,
 )
 
@@ -106,6 +111,7 @@ def publish_canonical_generation(
         filesystem=filesystem,
         validate_manifest=_validate_complete_manifest,
         checkpoint=checkpoint,
+        format_version=CANONICAL_PARQUET_V2,
     )
     return _published_metadata(generation_id, result)
 
@@ -113,7 +119,7 @@ def publish_canonical_generation(
 def resolve_published_canonical_generation(target_parent: Path) -> PublishedCanonicalGeneration:
     """Resolve and fully verify the canonical generation selected by ``current.json``."""
     _validate_target_parent(target_parent)
-    result = resolve_current_generation(target_parent)
+    result = resolve_current_generation(target_parent, validate_manifest=_validate_complete_manifest)
     return _published_metadata(result.generation_path.name, result)
 
 
@@ -123,10 +129,10 @@ def _validate_target_parent(target_parent: Path) -> None:
 
 
 def _prepare_table_plans(frames: Mapping[str, pl.DataFrame]) -> tuple[_TablePlan, ...]:
-    validate_canonical_frames(frames)
+    validate_canonical_frames(frames, version="v2")
     ensure_native_parquet_compatibility()
     return tuple(
-        _TablePlan(name, frames[name], logical_table_sha256(name, frames[name]))
+        _TablePlan(name, frames[name], _logical_sha256(name, frames[name]))
         for name in CANONICAL_PARQUET_TABLE_NAMES
     )
 
@@ -139,6 +145,8 @@ def _materialize_generation(
         generation_id=generation_id,
         tables=entries,
         writer_settings=DEFAULT_WRITER_SETTINGS,
+        format_version=CANONICAL_PARQUET_V2,
+        manifest_version=2,
     )
     return serialize_manifest(manifest)
 
@@ -147,22 +155,42 @@ def _materialize_table(plan: _TablePlan, writer: StagedGenerationWriter) -> Tabl
     """Round-trip native Parquet before copying its exact closed bytes into staging."""
     with tempfile.TemporaryDirectory(prefix="canonical-parquet-") as directory:
         temporary_path = Path(directory) / f"{plan.name}.parquet"
-        write_canonical_parquet(plan.name, plan.frame, temporary_path)
+        write_canonical_parquet(plan.name, plan.frame, temporary_path, version="v2")
         payload = temporary_path.read_bytes()
         writer.write_bytes(f"tables/{plan.name}.parquet", payload)
     return TableManifestEntry(
         name=plan.name,
         path=f"tables/{plan.name}.parquet",
         row_count=plan.frame.height,
-        schema=schema_tokens_for(plan.name),
+        schema=schema_tokens_for(plan.name, "v2"),
         logical_sha256=plan.logical_sha256,
         byte_sha256=hashlib.sha256(payload).hexdigest(),
     )
 
 
 def _validate_complete_manifest(manifest: DatasetManifest, generation_path: Path) -> None:
-    """Accept the already-complete canonical snapshot at the policy seam."""
-    del manifest, generation_path
+    """Validate a v2 snapshot after publication's guarded manifest check."""
+    if manifest.format_version != CANONICAL_PARQUET_V2 or manifest.manifest_version != 2:
+        return
+    entries = cast(tuple[TableManifestEntry, ...], manifest.tables)
+    frames: dict[str, pl.DataFrame] = {}
+    for entry in entries:
+        table_path = generation_path / entry.path
+        table_file = read_regular_file_no_follow(table_path, f"manifest table {entry.path}")
+        if hashlib.sha256(table_file.data).hexdigest() != entry.byte_sha256:
+            raise ValueError(f"manifest table checksum disagrees for {entry.name}")
+        frame = pl.read_parquet(BytesIO(table_file.data), use_pyarrow=False)
+        verify_canonical_parquet_round_trip(entry.name, frame, table_file.data, version="v2")
+        frames[entry.name] = frame
+        if frame.height != entry.row_count or _logical_sha256(entry.name, frame) != entry.logical_sha256:
+            raise ValueError(f"manifest logical metadata disagrees for {entry.name}")
+        verify_regular_file_identity(table_path, table_file, f"manifest table {entry.path}")
+    validate_canonical_frames(frames, version="v2")
+
+
+def _logical_sha256(table_name: str, frame: pl.DataFrame) -> str:
+    """Hash the complete v2 logical wire shape used by the active manifest."""
+    return logical_table_sha256(table_name, frame, version="v2")
 
 
 def _published_metadata(

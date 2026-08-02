@@ -70,6 +70,8 @@ def _publication_source(tmp_path: Path) -> R2PublicationSource:
     chunks.mkdir()
     (chunks / "chunk-001.json").write_bytes(chunk_payload)
     manifest = {
+        "formatVersion": "browser-delivery-v2",
+        "contractVersion": "v2",
         "deliveryVersion": delivery,
         "sourceGenerationId": delivery,
         "sourceManifestSha256": "a" * 64,
@@ -88,7 +90,7 @@ def _publication_source(tmp_path: Path) -> R2PublicationSource:
     pointer_directory.mkdir(parents=True)
     (pointer_directory / "browser-current.json").write_bytes(_json_bytes({
         "deliveryVersion": delivery,
-        "formatVersion": "browser-delivery-v1",
+        "formatVersion": "browser-delivery-v2",
         "manifestPath": f"generations/{delivery}/manifest.json",
         "manifestSha256": hashlib.sha256(manifest_payload).hexdigest(),
     }))
@@ -286,3 +288,35 @@ def test_plan_refuses_to_replace_production_with_an_empty_public_catalog(
             source,
             validate_delivery=_skip_deep_validation,
         )
+
+
+def test_plan_rejects_manifest_artifact_checksum_before_any_upload(tmp_path: Path) -> None:
+    source = _publication_source(tmp_path)
+    manifest_path = next((tmp_path / "browser").glob("**/manifest.json"))
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["chunks"][0]["sha256"] = "0" * 64
+    manifest_bytes = _json_bytes(manifest)
+    manifest_path.write_bytes(manifest_bytes)
+    pointer_path = manifest_path.parents[2] / "sessions" / "r" / "browser-current.json"
+    pointer = json.loads(pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    pointer_path.write_bytes(_json_bytes(pointer))
+
+    with pytest.raises(R2PublicationError, match="checksum disagrees"):
+        build_r2_publication_plan(source, validate_delivery=_skip_deep_validation)
+
+
+def test_plan_rejects_traversal_in_a_v2_manifest_reference(tmp_path: Path) -> None:
+    source = _publication_source(tmp_path)
+    manifest_path = next((tmp_path / "browser").glob("**/manifest.json"))
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["trackAssets"]["path"] = "../outside.json"
+    manifest_bytes = _json_bytes(manifest)
+    manifest_path.write_bytes(manifest_bytes)
+    pointer_path = manifest_path.parents[2] / "sessions" / "r" / "browser-current.json"
+    pointer = json.loads(pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    pointer_path.write_bytes(_json_bytes(pointer))
+
+    with pytest.raises(R2PublicationError, match="safe relative POSIX path"):
+        build_r2_publication_plan(source, validate_delivery=_skip_deep_validation)

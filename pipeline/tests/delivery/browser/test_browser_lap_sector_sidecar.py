@@ -55,7 +55,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS, CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.storage.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 
@@ -63,6 +63,7 @@ from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
 SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
+SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
 FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,23 @@ def _publish(  # type: ignore[no-any-unimported]
     return publish_browser_delivery(
         browser_parent=browser, delivery_version="delivery-one",
         delivery=_delivery(sidecar=sidecar), schema_root=SCHEMA_ROOT,
+    )
+
+
+def _v2_practice_delivery(
+    sidecar: BrowserLapSectorSidecar | None = None,
+) -> BrowserDeliveryBuild:
+    delivery = _delivery(sidecar=sidecar)
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "test-gen", "a" * 64, {"session_metadata": session_metadata},
+        ),
     )
 
 
@@ -1281,6 +1299,33 @@ class TestSidecarPublication:
         ).validate(manifest)
         assert "lapSectorSidecar" not in manifest
 
+    def test_v2_publication_emits_contract_v2_lap_sector_sidecar(self, tmp_path: Path) -> None:
+        """✅ Positive: a v2 practice delivery publishes a v2 sidecar artifact."""
+        # Arrange & Act
+        result = publish_browser_delivery(
+            browser_parent=tmp_path / "browser",
+            delivery_version="delivery-v2",
+            delivery=_v2_practice_delivery(_sidecar()),
+            schema_root=SCHEMA_ROOT_V2,
+            contract_version="v2",
+        )
+        manifest = _load_json(result.manifest_path)
+        sidecar = _load_json(result.lap_sector_sidecar_path)  # type: ignore[arg-type]
+
+        # Assert — v2 identity, schema registry entry, and aligned payload
+        assert manifest["sessionMode"] == "practice"
+        assert manifest["lapSectorSidecar"]["schemaId"].endswith(":v2:browser-lap-sector-sidecar")
+        assert manifest["schemas"]["lapSectorSidecar"].endswith(":v2:browser-lap-sector-sidecar")
+        assert sidecar["contractVersion"] == "v2"
+        assert sidecar["fixtureId"] == "test-race"
+        assert sidecar["drivers"]["HAM"]["lapNumber"] == [1]
+        validate_complete_browser_delivery(
+            tmp_path / "browser",
+            expected_generation_id="test-gen",
+            expected_manifest_sha256="a" * 64,
+            schema_root=SCHEMA_ROOT_V2,
+        )
+
     def test_sidecar_artifact_validates_against_sidecar_schema(self, tmp_path: Path) -> None:
         """✅ Positive: sidecar JSON passes its own schema validation."""
         # Arrange & Act
@@ -1447,7 +1492,7 @@ def _empty_driver() -> BrowserDriverLapSector:
 
 def _canonical_row(table: str, **changes: object) -> dict[str, object]:
     """Build one canonical row with all schema fields defaulted to None."""
-    row: dict[str, object] = {column: None for column in CANONICAL_TABLE_SCHEMAS[table]}
+    row: dict[str, object] = {column: None for column in CANONICAL_TABLE_SCHEMAS_V2[table]}
     row.update(
         {
             "session_id": "synthetic-race",
@@ -1458,7 +1503,7 @@ def _canonical_row(table: str, **changes: object) -> dict[str, object]:
         {
             "session_metadata": {
                 "year": 2026, "round_number": 1, "event_name": "Synthetic Grand Prix",
-                "session_name": "Race", "session_type": "R",
+                "session_name": "Race", "session_type": "R", "session_mode": "race",
                 "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
             },
             "drivers": {
@@ -1544,6 +1589,6 @@ def _canonical_frames_with_sectors() -> dict[str, pl.DataFrame]:
     ]
 
     return {
-        name: pl.DataFrame(value, schema=dict(CANONICAL_TABLE_SCHEMAS[name]), strict=True)
+        name: pl.DataFrame(value, schema=dict(CANONICAL_TABLE_SCHEMAS_V2[name]), strict=True)
         for name, value in rows.items()
     }

@@ -15,7 +15,10 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_reader import (
     derive_browser_driver_fields,
     read_validated_canonical_generation,
 )
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import (
+    CANONICAL_TABLE_SCHEMAS,
+    CANONICAL_TABLE_SCHEMAS_V2,
+)
 from f1_replay_pipeline.storage.generation_publication import GenerationPublicationResult
 
 
@@ -81,6 +84,7 @@ def test_timeline_summary_uses_final_result_and_terminal_activity_not_position_s
         "session_id": "race", "driver_id": "HAM", "classified_position": None,
         "grid_position": 1, "status": "Retired", "points": 0.0,
         "laps_completed": 1, "result_time_ms": None,
+        "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None,
     }], schema=dict(CANONICAL_TABLE_SCHEMAS["results"]), strict=True)
     frames["position_telemetry"] = frames["position_telemetry"].with_columns(
         pl.lit("Retired").alias("status"),
@@ -229,6 +233,33 @@ def test_field_mapping_enforces_browser_gear_domain(raw_gear: int, expected: int
     fields = derive_browser_driver_fields(CanonicalGenerationSnapshot("generation", "a" * 64, frames), "HAM")
 
     assert fields.gear[fields.time_ms.index(1020)] == expected
+
+
+@pytest.mark.parametrize("session_mode", ["practice", "qualifying", "sprint-shootout"])
+def test_field_mapping_leaves_race_projection_fields_null_for_non_race_modes(
+    session_mode: str,
+) -> None:
+    # Arrange: a non-race session snapshot whose native cadence has no race order.
+    frames = _frames()
+    frames["session_metadata"] = pl.DataFrame([{
+        "session_id": "practice", "year": 2026, "round_number": 1,
+        "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
+        "session_mode": session_mode,
+        "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+
+    # Act: map the driver fields without any race projection pass.
+    fields = derive_browser_driver_fields(
+        CanonicalGenerationSnapshot("generation", "a" * 64, frames), "HAM",
+    )
+
+    # Assert: race-only derived fields remain null while native fields survive.
+    assert fields.track_distance_meters == (None, None, None)
+    assert fields.gap_to_leader_ms == (None, None, None)
+    assert fields.position == (None, None, None)
+    assert fields.is_finished == (None, None, None)
+    assert fields.time_ms == (1000, 1003, 1012)
+    assert fields.speed == (300.0, None, None)
 
 
 def _frames() -> dict[str, pl.DataFrame]:

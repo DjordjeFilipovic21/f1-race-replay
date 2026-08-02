@@ -1,9 +1,11 @@
-"""Ordered, immutable schemas for Phase 1 canonical session tables."""
+"""Ordered, immutable schemas for versioned canonical session tables."""
 
 from collections.abc import Mapping
 from types import MappingProxyType
 
 import polars as pl
+
+from .canonical_contract import ContractVersion, get_canonical_contract
 
 Schema = Mapping[str, pl.DataType]
 
@@ -37,7 +39,7 @@ POSITION_TELEMETRY_SCHEMA: Schema = MappingProxyType(
     }
 )
 
-SESSION_METADATA_SCHEMA: Schema = MappingProxyType(
+SESSION_METADATA_SCHEMA_V1: Schema = MappingProxyType(
     {
         "session_id": pl.String,
         "year": pl.Int16,
@@ -141,7 +143,7 @@ RACE_CONTROL_MESSAGES_SCHEMA: Schema = MappingProxyType(
     }
 )
 
-RESULTS_SCHEMA: Schema = MappingProxyType(
+RESULTS_SCHEMA_V1: Schema = MappingProxyType(
     {
         "session_id": pl.String,
         "driver_id": pl.String,
@@ -154,40 +156,126 @@ RESULTS_SCHEMA: Schema = MappingProxyType(
     }
 )
 
-CANONICAL_TABLE_SCHEMAS: Mapping[str, Schema] = MappingProxyType(
+CANONICAL_TABLE_SCHEMAS_V1: Mapping[str, Schema] = MappingProxyType(
     {
         "car_telemetry": CAR_TELEMETRY_SCHEMA,
         "position_telemetry": POSITION_TELEMETRY_SCHEMA,
-        "session_metadata": SESSION_METADATA_SCHEMA,
+        "session_metadata": SESSION_METADATA_SCHEMA_V1,
         "drivers": DRIVERS_SCHEMA,
         "laps": LAPS_SCHEMA,
         "stints": STINTS_SCHEMA,
         "weather": WEATHER_SCHEMA,
         "track_status_intervals": TRACK_STATUS_INTERVALS_SCHEMA,
         "race_control_messages": RACE_CONTROL_MESSAGES_SCHEMA,
-        "results": RESULTS_SCHEMA,
+        "results": RESULTS_SCHEMA_V1,
     }
 )
-CANONICAL_TABLE_NAMES = tuple(CANONICAL_TABLE_SCHEMAS)
+CANONICAL_TABLE_NAMES_V1 = tuple(CANONICAL_TABLE_SCHEMAS_V1)
+
+RESULTS_SCHEMA_V2: Schema = MappingProxyType({
+    **RESULTS_SCHEMA_V1,
+    "q1_time_ms": pl.Int64,
+    "q2_time_ms": pl.Int64,
+    "q3_time_ms": pl.Int64,
+})
+
+SESSION_METADATA_SCHEMA_V2: Schema = MappingProxyType({
+    "session_id": pl.String,
+    "year": pl.Int16,
+    "round_number": pl.Int16,
+    "event_name": pl.String,
+    "session_name": pl.String,
+    "session_type": pl.String,
+    "session_mode": pl.String,
+    "session_start_time_utc": pl.Datetime("ms", "UTC"),
+})
+
+CANONICAL_TABLE_SCHEMAS_V2: Mapping[str, Schema] = MappingProxyType({
+    **CANONICAL_TABLE_SCHEMAS_V1,
+    "session_metadata": SESSION_METADATA_SCHEMA_V2,
+    "results": RESULTS_SCHEMA_V2,
+})
+CANONICAL_TABLE_NAMES_V2 = tuple(CANONICAL_TABLE_SCHEMAS_V2)
+
+CAR_TELEMETRY_SCHEMA_V1 = CAR_TELEMETRY_SCHEMA
+POSITION_TELEMETRY_SCHEMA_V1 = POSITION_TELEMETRY_SCHEMA
+DRIVERS_SCHEMA_V1 = DRIVERS_SCHEMA
+LAPS_SCHEMA_V1 = LAPS_SCHEMA
+STINTS_SCHEMA_V1 = STINTS_SCHEMA
+WEATHER_SCHEMA_V1 = WEATHER_SCHEMA
+TRACK_STATUS_INTERVALS_SCHEMA_V1 = TRACK_STATUS_INTERVALS_SCHEMA
+RACE_CONTROL_MESSAGES_SCHEMA_V1 = RACE_CONTROL_MESSAGES_SCHEMA
+CAR_TELEMETRY_SCHEMA_V2 = CAR_TELEMETRY_SCHEMA
+POSITION_TELEMETRY_SCHEMA_V2 = POSITION_TELEMETRY_SCHEMA
+DRIVERS_SCHEMA_V2 = DRIVERS_SCHEMA
+LAPS_SCHEMA_V2 = LAPS_SCHEMA
+STINTS_SCHEMA_V2 = STINTS_SCHEMA
+WEATHER_SCHEMA_V2 = WEATHER_SCHEMA
+TRACK_STATUS_INTERVALS_SCHEMA_V2 = TRACK_STATUS_INTERVALS_SCHEMA
+RACE_CONTROL_MESSAGES_SCHEMA_V2 = RACE_CONTROL_MESSAGES_SCHEMA
+
+# The unversioned names are deliberately the v1 read contract.  Existing
+# adapters, readers, and committed fixtures therefore keep their behavior.
+SESSION_METADATA_SCHEMA = SESSION_METADATA_SCHEMA_V1
+RESULTS_SCHEMA = RESULTS_SCHEMA_V1
+CANONICAL_TABLE_SCHEMAS = CANONICAL_TABLE_SCHEMAS_V1
+CANONICAL_TABLE_NAMES = CANONICAL_TABLE_NAMES_V1
 
 
-def get_canonical_schema(table_name: str) -> Schema:
-    """Return the ordered immutable schema for a canonical table."""
-    return CANONICAL_TABLE_SCHEMAS[table_name]
+def get_canonical_schema(table_name: str, version: ContractVersion | str = "v1") -> Schema:
+    """Return the ordered immutable schema for a table and contract version."""
+    schemas = CANONICAL_TABLE_SCHEMAS_V1 if get_canonical_contract(version).version == "v1" else CANONICAL_TABLE_SCHEMAS_V2
+    return schemas[table_name]
+
+
+def get_canonical_schema_v1(table_name: str) -> Schema:
+    """Return a v1 schema for compatibility readers."""
+    return get_canonical_schema(table_name, "v1")
+
+
+def get_canonical_schema_v2(table_name: str) -> Schema:
+    """Return a v2 schema for new writers and strict v2 readers."""
+    return get_canonical_schema(table_name, "v2")
 
 
 __all__ = [
     "CANONICAL_TABLE_NAMES",
     "CANONICAL_TABLE_SCHEMAS",
+    "CANONICAL_TABLE_NAMES_V1",
+    "CANONICAL_TABLE_NAMES_V2",
+    "CANONICAL_TABLE_SCHEMAS_V1",
+    "CANONICAL_TABLE_SCHEMAS_V2",
     "CAR_TELEMETRY_SCHEMA",
+    "CAR_TELEMETRY_SCHEMA_V1",
+    "CAR_TELEMETRY_SCHEMA_V2",
     "DRIVERS_SCHEMA",
+    "DRIVERS_SCHEMA_V1",
+    "DRIVERS_SCHEMA_V2",
     "LAPS_SCHEMA",
+    "LAPS_SCHEMA_V1",
+    "LAPS_SCHEMA_V2",
     "POSITION_TELEMETRY_SCHEMA",
+    "POSITION_TELEMETRY_SCHEMA_V1",
+    "POSITION_TELEMETRY_SCHEMA_V2",
     "RACE_CONTROL_MESSAGES_SCHEMA",
+    "RACE_CONTROL_MESSAGES_SCHEMA_V1",
+    "RACE_CONTROL_MESSAGES_SCHEMA_V2",
     "RESULTS_SCHEMA",
+    "RESULTS_SCHEMA_V1",
+    "RESULTS_SCHEMA_V2",
     "SESSION_METADATA_SCHEMA",
+    "SESSION_METADATA_SCHEMA_V1",
+    "SESSION_METADATA_SCHEMA_V2",
     "STINTS_SCHEMA",
+    "STINTS_SCHEMA_V1",
+    "STINTS_SCHEMA_V2",
     "TRACK_STATUS_INTERVALS_SCHEMA",
+    "TRACK_STATUS_INTERVALS_SCHEMA_V1",
+    "TRACK_STATUS_INTERVALS_SCHEMA_V2",
     "WEATHER_SCHEMA",
+    "WEATHER_SCHEMA_V1",
+    "WEATHER_SCHEMA_V2",
     "get_canonical_schema",
+    "get_canonical_schema_v1",
+    "get_canonical_schema_v2",
 ]

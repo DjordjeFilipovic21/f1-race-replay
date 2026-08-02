@@ -7,7 +7,7 @@ from typing import cast
 
 import polars as pl
 
-from ...domain.canonical_schema import TRACK_STATUS_INTERVALS_SCHEMA, WEATHER_SCHEMA
+from ...domain.canonical_schema import TRACK_STATUS_INTERVALS_SCHEMA_V2, WEATHER_SCHEMA_V2
 from ...domain.normalizers import (
     NormalizationError,
     canonical_scalar_sort_key,
@@ -34,8 +34,8 @@ def adapt_weather(session: object, session_id: str | None = None) -> pl.DataFram
     canonical_session_id = _session_id(session, session_id)
     rows = [_weather_row(record, canonical_session_id) for record in _records(session, "weather_data")]
     retained = _retain_weather_duplicates(rows)
-    frame = pl.DataFrame(retained, schema=WEATHER_SCHEMA).sort("session_id", "session_time_ms")
-    validate_canonical_table("weather", frame)
+    frame = pl.DataFrame(retained, schema=WEATHER_SCHEMA_V2).sort("session_id", "session_time_ms")
+    validate_canonical_table("weather", frame, version="v2")
     return frame
 
 
@@ -49,8 +49,8 @@ def adapt_track_status_intervals(session: object, session_id: str | None = None)
         {**row, "end_time_ms": ordered[index + 1]["start_time_ms"] if index + 1 < len(ordered) else None}
         for index, row in enumerate(ordered)
     ]
-    frame = pl.DataFrame(intervals, schema=TRACK_STATUS_INTERVALS_SCHEMA)
-    validate_canonical_table("track_status_intervals", frame)
+    frame = pl.DataFrame(intervals, schema=TRACK_STATUS_INTERVALS_SCHEMA_V2)
+    validate_canonical_table("track_status_intervals", frame, version="v2")
     return frame
 
 
@@ -157,7 +157,7 @@ def _retain_weather_duplicates(rows: list[dict[str, object | None]]) -> list[dic
 
 
 def _weather_retention_key(row: Mapping[str, object | None], fields: tuple[str, ...]) -> tuple[object, ...]:
-    values = tuple(canonical_scalar_sort_key(row[field]) for field in WEATHER_SCHEMA)
+    values = tuple(canonical_scalar_sort_key(row[field]) for field in WEATHER_SCHEMA_V2)
     return (-sum(row[field] is not None for field in fields), values)
 
 

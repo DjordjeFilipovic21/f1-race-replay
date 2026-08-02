@@ -23,6 +23,10 @@ CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
 SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
 FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
 
+V2_SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+V2_MANIFEST_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:manifest"
+V2_QUALIFYING_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary"
+
 CONTINUOUS_DRIVER_FIELDS = {
     "x",
     "y",
@@ -86,6 +90,17 @@ def schema_registry(contract_bundle):
     registry = Registry()
 
     for schema in contract_bundle["schemas"].values():
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+
+    return registry
+
+
+@pytest.fixture(scope="module")
+def v2_schema_registry():
+    registry = Registry()
+
+    for name in ("manifest", "qualifying-summary"):
+        schema = load_json(V2_SCHEMA_ROOT / f"{name}.schema.json")
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
 
     return registry
@@ -1081,3 +1096,131 @@ def test_replay_contract_sparse_events_remain_point_in_time_records(contract_bun
     assert event_at_2600[0]["eventType"] == "overtake_completed"
     assert event_at_2500 == []
     assert event_at_2700 == []
+
+
+def test_v1_manifest_schema_remains_frozen_without_session_mode_field():
+    # Arrange / Act: load the frozen v1 manifest schema.
+    manifest_schema = load_json(SCHEMA_ROOT / "manifest.schema.json")
+
+    # Assert: the historical v1 contract carries no session-mode metadata.
+    assert manifest_schema["properties"]["contractVersion"]["const"] == "v1"
+    assert "sessionMode" not in manifest_schema["properties"]
+    assert "sessionType" not in manifest_schema["properties"]
+
+
+def test_v2_contract_schemas_are_valid_json_schema():
+    # Arrange / Act: load the v2 manifest and qualifying-summary schemas.
+    schemas = {
+        "manifest": load_json(V2_SCHEMA_ROOT / "manifest.schema.json"),
+        "qualifying-summary": load_json(V2_SCHEMA_ROOT / "qualifying-summary.schema.json"),
+    }
+
+    # Assert: every v2 schema is valid draft 2020-12 with a v2 identity.
+    for name, schema in schemas.items():
+        Draft202012Validator.check_schema(schema)
+        assert schema["$id"].startswith("urn:f1-cache-replay:schema:replay-data:v2:")
+    assert schemas["manifest"]["$id"] == V2_MANIFEST_SCHEMA_ID
+    assert schemas["qualifying-summary"]["$id"] == V2_QUALIFYING_SUMMARY_SCHEMA_ID
+
+
+def v2_manifest_payload(*, session_mode: str = "qualifying", qualifying_summary: bool = True) -> dict:
+    """Return a minimal schema-valid v2 manifest instance for mode semantics."""
+    manifest = {
+        "contractVersion": "v2",
+        "formatVersion": "browser-delivery-v2",
+        "sessionMode": session_mode,
+        "fixtureId": "2026-australian-qualifying",
+        "fixtureName": "Australian Grand Prix Qualifying",
+        "schemas": {
+            "manifest": V2_MANIFEST_SCHEMA_ID,
+            "chunk": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
+            "trackAssets": "urn:f1-cache-replay:schema:replay-data:v2:track-assets",
+        },
+        "trackAssets": {
+            "path": "track-assets.json",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:track-assets",
+        },
+        "chunks": [{
+            "sequence": 1,
+            "path": "chunks/chunk-001.json",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
+            "startMs": 0,
+            "endMs": 600_000,
+            "overlapWithPreviousMs": 0,
+        }],
+        "drivers": [{
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Ferrari",
+            "colorHex": "#E8002D",
+            "carNumber": "44",
+        }],
+    }
+    if qualifying_summary:
+        manifest["qualifyingSummary"] = {
+            "path": "qualifying-summary.json",
+            "schemaId": V2_QUALIFYING_SUMMARY_SCHEMA_ID,
+            "sha256": "a" * 64,
+        }
+    return manifest
+
+
+def test_v2_manifest_qualifying_summary_reference_is_restricted_to_qualifying_like_modes(
+    v2_schema_registry,
+):
+    # Arrange: build the schema and qualifying-like instances with summaries.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+
+    # Act / Assert: all qualifying-like modes permit a valid summary reference.
+    for mode in ("qualifying", "sprint-qualifying", "sprint-shootout"):
+        validate_instance(
+            manifest_schema,
+            v2_manifest_payload(session_mode=mode, qualifying_summary=True),
+            v2_schema_registry,
+        )
+
+    # Assert: race-shaped sessions must not publish a qualifying summary.
+    race_with_summary = v2_manifest_payload(session_mode="race", qualifying_summary=True)
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, race_with_summary, v2_schema_registry)
+
+    # Assert: a qualifying manifest with an invalid summary digest is rejected.
+    invalid_digest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    invalid_digest["qualifyingSummary"]["sha256"] = "not-a-sha256"
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, invalid_digest, v2_schema_registry)
+
+
+def test_v2_qualifying_summary_payload_validates_against_frozen_schema(v2_schema_registry):
+    # Arrange: a representative qualifying summary with null and populated segments.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-summary.schema.json")
+    payload = {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "drivers": {
+            "HAM": {
+                "qualifyingPosition": [1],
+                "q1TimeMs": [105_123],
+                "q2TimeMs": [104_567],
+                "q3TimeMs": [103_999],
+                "bestLapNumber": [3],
+                "bestLapTimeMs": [103_999],
+            },
+            "VER": {
+                "qualifyingPosition": [2],
+                "q1TimeMs": [105_200],
+                "q2TimeMs": [105_000],
+                "q3TimeMs": [None],
+                "bestLapNumber": [1],
+                "bestLapTimeMs": [105_200],
+            },
+        },
+    }
+
+    # Act / Assert: the populated payload validates against the v2 schema.
+    validate_instance(schema, payload, v2_schema_registry)
+
+    # Assert: a position below the declared minimum is rejected.
+    payload["drivers"]["HAM"]["qualifyingPosition"] = [0]
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)

@@ -192,7 +192,9 @@ def publish_frames(
     if not callable(publisher):
         raise PipelineRequestError("publisher must be callable")
     try:
-        validate_canonical_frames(frames)
+        # Normalization and publication are v2-only.  Historical v1 artifacts
+        # remain frozen and are not an active runtime compatibility path.
+        validate_canonical_frames(frames, version="v2")
     except Exception as error:
         raise PipelineValidationError(
             f"canonical validation failed for {_selection_context(request.selection)}"

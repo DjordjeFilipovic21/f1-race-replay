@@ -4,7 +4,7 @@ import math
 import polars as pl
 import pytest
 
-from f1_replay_pipeline.domain.canonical_schema import get_canonical_schema
+from f1_replay_pipeline.domain.canonical_schema import get_canonical_schema, get_canonical_schema_v2
 from f1_replay_pipeline.domain.logical_hashes import encode_logical_table, logical_table_sha256
 from f1_replay_pipeline.domain.validators import CanonicalValidationError
 
@@ -32,6 +32,16 @@ def _car(**changes: object) -> pl.DataFrame:
     }
     row.update(changes)
     return _frame("car_telemetry", [row])
+
+
+def _v2_metadata(**changes: object) -> pl.DataFrame:
+    row = {
+        "session_id": "2026-03-practice-1", "year": 2026, "round_number": 3,
+        "event_name": "Australian GP", "session_name": "FP1", "session_type": "practice",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }
+    row.update(changes)
+    return pl.DataFrame([row], schema=get_canonical_schema_v2("session_metadata"))
 
 
 @pytest.mark.parametrize(
@@ -68,6 +78,7 @@ def test_logical_hash_changes_for_valid_ordered_value_schema_and_declared_type_c
     schema_changed = _frame("results", [{
         "session_id": "2026-race", "driver_id": "HAM", "classified_position": "1", "grid_position": 1,
         "status": "Finished", "points": 25.0, "laps_completed": 58, "result_time_ms": 5_400_000,
+        "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None,
     }])
 
     assert logical_table_sha256("drivers", _drivers()) != logical_table_sha256("drivers", changed_value)
@@ -88,3 +99,50 @@ def test_public_hash_validates_named_frame_before_encoding():
 def test_nonfinite_float_values_are_rejected_before_encoding(value):
     with pytest.raises(CanonicalValidationError, match="NaN or infinity"):
         encode_logical_table("car_telemetry", _car(speed_kph=value))
+
+
+def test_v2_logical_hash_is_explicitly_distinct_from_the_frozen_v1_hash():
+    # Arrange: use the same logical metadata represented by both contracts.
+    v1 = _frame("session_metadata", [{
+        "session_id": "2026-03-race", "year": 2026, "round_number": 3,
+        "event_name": "Australian GP", "session_name": "Race", "session_type": "R",
+        "session_start_time_utc": None,
+    }])
+    v2 = _v2_metadata(
+        session_id="2026-03-race", session_name="Race", session_type="race", session_mode="race",
+    )
+
+    # Act: encode the same session under explicit contract versions.
+    v1_bytes = encode_logical_table("session_metadata", v1)
+    v2_bytes = encode_logical_table("session_metadata", v2, version="v2")
+
+    # Assert: both the wire identity and digest are version-separated.
+    assert v1_bytes != v2_bytes
+    assert logical_table_sha256("session_metadata", v1) != logical_table_sha256(
+        "session_metadata", v2, version="v2"
+    )
+
+
+def test_v2_logical_hash_changes_when_only_session_mode_changes():
+    # Arrange: retain the event and session identity while changing only mode fields.
+    race = _v2_metadata(session_name="Race", session_type="race", session_mode="race")
+    qualifying = _v2_metadata(
+        session_name="Race",
+        session_type="qualifying", session_mode="qualifying",
+    )
+
+    # Act: hash both complete v2 metadata rows.
+    race_hash = logical_table_sha256("session_metadata", race, version="v2")
+    qualifying_hash = logical_table_sha256("session_metadata", qualifying, version="v2")
+
+    # Assert: normalized session identity and mode participate in the hash.
+    assert race_hash != qualifying_hash
+
+
+def test_v2_logical_hash_rejects_unsafe_session_identity_before_publication():
+    # Arrange: construct a schema-valid row with a path-unsafe identity.
+    frame = _v2_metadata(session_id="2026-03/qualifying")
+
+    # Act / Assert: the v2 boundary rejects it before encoding.
+    with pytest.raises(ValueError, match="safe non-blank identity"):
+        logical_table_sha256("session_metadata", frame, version="v2")

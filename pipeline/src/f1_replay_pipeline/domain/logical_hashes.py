@@ -1,4 +1,4 @@
-"""Pure v1 wire encoding and SHA-256 logical hashes for canonical tables."""
+"""Pure, versioned wire encoding and SHA-256 logical hashes for canonical tables."""
 
 from __future__ import annotations
 
@@ -9,10 +9,12 @@ import struct
 
 import polars as pl
 
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_contract import ContractVersion, get_canonical_contract, schema_dtype_token
+from f1_replay_pipeline.domain.canonical_schema import get_canonical_schema
+from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
+from f1_replay_pipeline.domain.session_modes import normalize_session_mode
 from f1_replay_pipeline.domain.validators import validate_canonical_table
 
-_PREFIX = b"F1RP-LOGICAL-TABLE\0v1\0"
 _INTEGER_WIDTHS = {pl.Int8: 1, pl.Int16: 2, pl.Int32: 4, pl.Int64: 8}
 _DTYPE_TOKENS = {
     pl.String: "String",
@@ -28,29 +30,68 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class LogicalHashEncodingError(ValueError):
-    """Raised when a validated scalar cannot satisfy the v1 wire format."""
+    """Raised when a validated scalar cannot satisfy a logical wire format."""
 
 
-def logical_table_sha256(table_name: str, frame: pl.DataFrame) -> str:
-    """Validate and hash one named canonical frame using the v1 wire format."""
-    return hashlib.sha256(encode_logical_table(table_name, frame)).hexdigest()
+def logical_table_sha256(
+    table_name: str,
+    frame: pl.DataFrame,
+    *,
+    version: ContractVersion | str = "v1",
+) -> str:
+    """Validate and hash one named canonical frame using an explicit wire version."""
+    return hashlib.sha256(encode_logical_table(table_name, frame, version=version)).hexdigest()
 
 
-def encode_logical_table(table_name: str, frame: pl.DataFrame) -> bytes:
-    """Validate and return the exact v1 logical-table wire bytes for ``frame``."""
-    validate_canonical_table(table_name, frame)
-    schema = CANONICAL_TABLE_SCHEMAS[table_name]
-    payload = bytearray(_PREFIX)
+def encode_logical_table(
+    table_name: str,
+    frame: pl.DataFrame,
+    *,
+    version: ContractVersion | str = "v1",
+) -> bytes:
+    """Validate and return version-specific logical-table wire bytes.
+
+    The default deliberately remains v1 so historical hashes and fixtures do
+    not change.  V2 hashes include the complete v2 schema, including
+    ``session_id`` and ``session_mode`` in metadata, rather than projecting
+    those fields away.
+    """
+    contract = get_canonical_contract(version)
+    validate_canonical_table(table_name, frame, version=contract.version)
+    _validate_v2_identity(table_name, frame, contract.version)
+    schema = get_canonical_schema(table_name, contract.version)
+    payload = bytearray(f"F1RP-LOGICAL-TABLE\0{contract.version}\0".encode("ascii"))
     _append_text(payload, table_name)
     _append_u64(payload, len(schema))
     for name, dtype in schema.items():
         _append_text(payload, name)
-        _append_text(payload, _dtype_token(dtype))
+        _append_text(payload, schema_dtype_token(_dtype_token(dtype), contract.version))
     _append_u64(payload, frame.height)
     for row in frame.iter_rows(named=False):
         for value, dtype in zip(row, schema.values(), strict=True):
             _append_cell(payload, value, dtype)
     return bytes(payload)
+
+
+def _validate_v2_identity(
+    table_name: str, frame: pl.DataFrame, version: ContractVersion,
+) -> None:
+    if version != "v2":
+        return
+    for session_id in frame.get_column("session_id"):
+        try:
+            validate_generation_id(session_id)
+        except GenerationIdentityError as error:
+            raise LogicalHashEncodingError(
+                "v2 session_id must be a safe non-blank identity component"
+            ) from error
+    if table_name != "session_metadata":
+        return
+    for mode in frame.get_column("session_mode"):
+        if mode is None or normalize_session_mode(mode) != mode:
+            raise LogicalHashEncodingError(
+                "v2 session_metadata session_mode must be normalized and non-null"
+            )
 
 
 def _append_u64(payload: bytearray, value: int) -> None:

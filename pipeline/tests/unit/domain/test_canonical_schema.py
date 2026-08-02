@@ -5,7 +5,9 @@ from f1_replay_pipeline.domain.canonical_schema import (
     CANONICAL_TABLE_NAMES,
     CANONICAL_TABLE_SCHEMAS,
     get_canonical_schema,
+    get_canonical_schema_v2,
 )
+from f1_replay_pipeline.domain.canonical_contract import schema_dtype_token
 
 
 def test_canonical_table_names_are_exact_and_ordered():
@@ -102,7 +104,7 @@ def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
             ("message", pl.String), ("driver_id", pl.String), ("lap_number", pl.Int16),
         ]),
         ("results", [
-                ("session_id", pl.String), ("driver_id", pl.String), ("classified_position", pl.String),
+            ("session_id", pl.String), ("driver_id", pl.String), ("classified_position", pl.String),
             ("grid_position", pl.Int16), ("status", pl.String), ("points", pl.Float64),
             ("laps_completed", pl.Int16), ("result_time_ms", pl.Int64),
         ]),
@@ -127,3 +129,45 @@ def test_schema_lookup_is_immutable():
 
     with pytest.raises(TypeError):
         schema["new_column"] = pl.String  # type: ignore[index]
+
+
+def test_v2_schema_adds_required_session_mode_without_mutating_v1():
+    assert list(get_canonical_schema("session_metadata").items()) == [
+        ("session_id", pl.String), ("year", pl.Int16), ("round_number", pl.Int16),
+        ("event_name", pl.String), ("session_name", pl.String), ("session_type", pl.String),
+        ("session_start_time_utc", pl.Datetime("ms", "UTC")),
+    ]
+    assert list(get_canonical_schema_v2("session_metadata").items()) == [
+        ("session_id", pl.String), ("year", pl.Int16), ("round_number", pl.Int16),
+        ("event_name", pl.String), ("session_name", pl.String), ("session_type", pl.String),
+        ("session_mode", pl.String), ("session_start_time_utc", pl.Datetime("ms", "UTC")),
+    ]
+
+
+def test_v2_results_keep_nullable_q_segment_int64_columns():
+    schema = get_canonical_schema_v2("results")
+
+    assert list(schema)[-3:] == ["q1_time_ms", "q2_time_ms", "q3_time_ms"]
+    assert all(schema[name] == pl.Int64 for name in list(schema)[-3:])
+    frame = pl.DataFrame([{
+        "session_id": "2026-01-qualifying", "driver_id": "VER", "classified_position": None,
+        "grid_position": None, "status": "", "points": None, "laps_completed": None,
+        "result_time_ms": None, "q1_time_ms": None, "q2_time_ms": 90000, "q3_time_ms": None,
+    }], schema=schema)
+    assert frame.schema == schema
+    assert frame.null_count().row(0)[-3:] == (1, 0, 1)
+
+
+def test_v2_contract_tokens_are_distinct_and_require_explicit_selection():
+    # Arrange: select one shared physical dtype under both contract versions.
+    v1_token = schema_dtype_token("String", "v1")
+    v2_token = schema_dtype_token("String", "v2")
+
+    # Act: inspect the explicit canonical schemas and tokens.
+    v1_schema = get_canonical_schema("drivers", "v1")
+    v2_schema = get_canonical_schema("drivers", "v2")
+
+    # Assert: v2 has its own token namespace without mutating v1.
+    assert v1_token == "String"
+    assert v2_token == "canonical-parquet-v2:String"
+    assert v1_schema == v2_schema

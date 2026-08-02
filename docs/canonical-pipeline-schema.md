@@ -129,7 +129,11 @@ One row describes the loaded session. Its canonical key is `session_id`; a
 normalizer must reject zero or multiple rows for that key. The ordered schema
 is `session_id:String`, `year:Int16`, `round_number:Int16`, `event_name:String`,
 `session_name:String`, `session_type:String`, and
-`session_start_time_utc:Datetime(ms, UTC)`. Only `session_id` is required;
+`session_start_time_utc:Datetime(ms, UTC)`. `session_type` is the normalized
+session mode: `practice`, `qualifying`, `race`, `sprint`,
+`sprint-qualifying`, `sprint-shootout`, or `testing`. FastF1 aliases `FP1`/`FP2`/
+`FP3` map to `practice`; the session identity retains the practice number so
+those sessions do not collide. Only `session_id` is required;
 all descriptive fields are nullable. Row order is `session_id` ascending.
 Testing events preserve `round_number = 0`; select them through FastF1's
 testing-event/session APIs rather than ordinary round lookup.
@@ -230,10 +234,14 @@ Duplicate keys are rejected.
 One row is one driver's classified session result. Its key and ascending row
 order are `(session_id, driver_id)`. The ordered schema is `session_id:String`,
 `driver_id:String`, `classified_position:String`, `grid_position:Int16`,
-`status:String`, `points:Float64`, `laps_completed:Int16`, and
-`result_time_ms:Int64`. The key is required; classification fields are
-nullable. `classified_position` preserves FastF1 values such as `1`, `R`, and
-`D`. `driver_id` must resolve through `drivers`. Duplicate keys are
+`status:String`, `points:Float64`, `laps_completed:Int16`,
+`result_time_ms:Int64`, `q1_time_ms:Int64`, `q2_time_ms:Int64`, and
+`q3_time_ms:Int64`. The key is required; classification and timing fields are
+nullable. `q1_time_ms`, `q2_time_ms`, and `q3_time_ms` are direct FastF1
+qualifying-result durations; absent or `NaT` values remain null. Best-lap
+timing is deliberately not duplicated here and remains derivable from valid
+canonical `laps`. `classified_position` preserves FastF1 values such as `1`,
+`R`, and `D`. `driver_id` must resolve through `drivers`. Duplicate keys are
 rejected.
 
 ## Native cadence and interpolation

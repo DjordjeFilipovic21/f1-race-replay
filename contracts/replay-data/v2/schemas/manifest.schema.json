@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v2:manifest",
+  "title": "Browser delivery v2 manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "formatVersion", "sessionMode", "fixtureId", "fixtureName", "schemas", "trackAssets", "chunks", "drivers"],
+  "$defs": {
+    "driver": {"type":"object","additionalProperties":false,"required":["id","displayName","teamName","colorHex","carNumber"],"properties":{"id":{"type":"string","pattern":"^[A-Z0-9]{2,4}$"},"displayName":{"type":"string","minLength":1},"teamName":{"type":"string","minLength":1},"colorHex":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},"carNumber":{"type":"string","pattern":"^[0-9]{1,2}$"}}},
+    "ref": {"type":"object","additionalProperties":false,"required":["path","schemaId","sha256"],"properties":{"path":{"type":"string","minLength":1},"schemaId":{"type":"string","pattern":"^urn:f1-cache-replay:schema:replay-data:v2:"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}},
+    "trackRef": {"type":"object","additionalProperties":false,"required":["path","schemaId"],"properties":{"path":{"const":"track-assets.json"},"schemaId":{"const":"urn:f1-cache-replay:schema:replay-data:v2:track-assets"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}},
+    "chunkRef": {"type":"object","additionalProperties":false,"required":["sequence","path","schemaId","startMs","endMs","overlapWithPreviousMs"],"properties":{"sequence":{"type":"integer","minimum":1,"maximum":9223372036854775807},"path":{"type":"string","pattern":"^chunks/chunk-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})\\.json$"},"schemaId":{"const":"urn:f1-cache-replay:schema:replay-data:v2:chunk"},"startMs":{"$ref":"#/$defs/time"},"endMs":{"$ref":"#/$defs/time"},"overlapWithPreviousMs":{"$ref":"#/$defs/time"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}},
+    "time": {"type":"integer","minimum":0,"maximum":9223372036854775807},
+    "season": {"type":"object","additionalProperties":false,"required":["year"],"properties":{"year":{"type":"integer","minimum":1,"maximum":9999}}},
+    "capabilities": {"type":"object","additionalProperties":false,"required":["drs","overtakeMode","activeAero","ersReplacement"],"properties":{"drs":{"enum":["available","not-published"]},"overtakeMode":{"enum":["available","not-published"]},"activeAero":{"enum":["available","not-published"]},"ersReplacement":{"enum":["available","not-published"]}}}
+  },
+  "properties": {
+    "contractVersion":{"const":"v2"},"formatVersion":{"const":"browser-delivery-v2"},
+    "sessionMode":{"enum":["race","practice","qualifying","sprint","sprint-qualifying","sprint-shootout","testing"]},
+    "fixtureId":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"fixtureName":{"type":"string","minLength":1},"description":{"type":"string"},
+    "deliveryVersion":{"type":"string","minLength":1},"sourceGenerationId":{"type":"string","minLength":1},"sourceManifestSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "seasonMetadata":{"$ref":"#/$defs/season"},"telemetryCapabilities":{"$ref":"#/$defs/capabilities"},
+    "schemas":{"type":"object","additionalProperties":false,"required":["manifest","chunk","trackAssets"],"properties":{"manifest":{"const":"urn:f1-cache-replay:schema:replay-data:v2:manifest"},"chunk":{"const":"urn:f1-cache-replay:schema:replay-data:v2:chunk"},"trackAssets":{"const":"urn:f1-cache-replay:schema:replay-data:v2:track-assets"},"timelineSummary":{"const":"urn:f1-cache-replay:schema:replay-data:v2:timeline-summary"},"lapSectorSidecar":{"const":"urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar"},"stintSummary":{"const":"urn:f1-cache-replay:schema:replay-data:v2:stint-summary"},"pitLossModel":{"const":"urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model"},"penaltySidecar":{"const":"urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar"},"qualifyingSummary":{"const":"urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary"}}},
+    "trackAssets":{"$ref":"#/$defs/trackRef"},"chunks":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/chunkRef"}},"drivers":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/driver"}},
+    "lapStarts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["lap","startMs"],"properties":{"lap":{"type":"integer","minimum":1},"startMs":{"$ref":"#/$defs/time"}}}},"createdAt":{"type":"string","format":"date-time"},
+    "timelineSummary":{"$ref":"#/$defs/ref"},"lapSectorSidecar":{"$ref":"#/$defs/ref"},"stintSummary":{"$ref":"#/$defs/ref"},"pitLossModel":{"$ref":"#/$defs/ref"},"penaltySidecar":{"$ref":"#/$defs/ref"},"qualifyingSummary":{"$ref":"#/$defs/ref"}
+  },
+  "allOf": [
+    {"if":{"properties":{"sessionMode":{"enum":["practice","qualifying","sprint-qualifying","sprint-shootout","testing"]}}},"then":{"properties":{"timelineSummary":{"not":{}},"pitLossModel":{"not":{}}}}},
+    {"if":{"properties":{"sessionMode":{"enum":["qualifying","sprint-qualifying","sprint-shootout"]}}},"then":{"properties":{"qualifyingSummary":{"$ref":"#/$defs/ref"}}},"else":{"properties":{"qualifyingSummary":{"not":{}}}}}
+  ]
+}

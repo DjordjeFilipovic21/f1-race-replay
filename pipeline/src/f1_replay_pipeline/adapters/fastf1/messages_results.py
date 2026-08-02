@@ -9,7 +9,7 @@ import re
 
 import polars as pl
 
-from ...domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA, RESULTS_SCHEMA
+from ...domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA_V2, RESULTS_SCHEMA_V2
 from ...domain.normalizers import (
     NormalizationError,
     normalize_nullable_scalar,
@@ -34,8 +34,8 @@ def adapt_race_control_messages(
     rows.sort(key=_message_sort_key)
     for index, row in enumerate(rows):
         row["message_index"] = index
-    frame = pl.DataFrame(rows, schema=RACE_CONTROL_MESSAGES_SCHEMA)
-    validate_canonical_table("race_control_messages", frame)
+    frame = pl.DataFrame(rows, schema=RACE_CONTROL_MESSAGES_SCHEMA_V2)
+    validate_canonical_table("race_control_messages", frame, version="v2")
     return frame
 
 
@@ -52,8 +52,11 @@ def adapt_results(
         for record in _records(session_or_results, "results")
     ]
     _reject_duplicate_results(rows)
-    frame = pl.DataFrame(sorted(rows, key=lambda row: (row["session_id"], row["driver_id"])), schema=RESULTS_SCHEMA)
-    validate_canonical_table("results", frame)
+    frame = pl.DataFrame(
+        sorted(rows, key=lambda row: (row["session_id"], row["driver_id"])),
+        schema=RESULTS_SCHEMA_V2,
+    )
+    validate_canonical_table("results", frame, version="v2")
     return frame
 
 
@@ -90,6 +93,9 @@ def _result_row(record: Mapping[str, object], session_id: str, driver_lookup: "D
         "points": _nullable_float(_value(record, "Points"), "points"),
         "laps_completed": _nullable_int16(_value(record, "Laps"), "laps completed"),
         "result_time_ms": _nullable_time(_value(record, "Time"), "result time"),
+        "q1_time_ms": _nullable_time(_value(record, "Q1"), "q1 time"),
+        "q2_time_ms": _nullable_time(_value(record, "Q2"), "q2 time"),
+        "q3_time_ms": _nullable_time(_value(record, "Q3"), "q3 time"),
     }
 
 

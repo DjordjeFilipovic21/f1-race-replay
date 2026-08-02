@@ -7,7 +7,7 @@ from typing import cast
 
 import polars as pl
 
-from ...domain.canonical_schema import POSITION_TELEMETRY_SCHEMA
+from ...domain.canonical_schema import POSITION_TELEMETRY_SCHEMA_V2
 from ...domain.normalizers import (
     NormalizationError,
     normalize_nullable_scalar,
@@ -39,11 +39,11 @@ def adapt_position_telemetry(
     ]
     normalized = sort_and_deduplicate_rows(
         rows,
-        column_order=tuple(POSITION_TELEMETRY_SCHEMA),
+        column_order=tuple(POSITION_TELEMETRY_SCHEMA_V2),
         measurement_fields=_MEASUREMENT_FIELDS,
     )
-    frame = pl.DataFrame(normalized, schema=POSITION_TELEMETRY_SCHEMA, strict=True)
-    validate_canonical_table("position_telemetry", frame)
+    frame = pl.DataFrame(normalized, schema=POSITION_TELEMETRY_SCHEMA_V2, strict=True)
+    validate_canonical_table("position_telemetry", frame, version="v2")
     return frame
 
 

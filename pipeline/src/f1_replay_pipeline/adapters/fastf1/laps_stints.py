@@ -10,7 +10,7 @@ from typing import cast
 
 import polars as pl
 
-from ...domain.canonical_schema import LAPS_SCHEMA, STINTS_SCHEMA
+from ...domain.canonical_schema import LAPS_SCHEMA_V2, STINTS_SCHEMA_V2
 from ...domain.normalizers import NormalizationError, normalize_nullable_scalar, normalize_session_time_ms
 from ...domain.validators import validate_canonical_table
 
@@ -28,8 +28,8 @@ def adapt_laps(session: object, session_id: str, driver_ids: Mapping[str, str]) 
     _require_session_id(session_id)
     rows = [_lap_row(record, session_id, driver_ids) for record in _records(session)]
     _reject_duplicate_laps(rows)
-    frame = pl.DataFrame(sorted(rows, key=_lap_key), schema=LAPS_SCHEMA, strict=True)
-    validate_canonical_table("laps", frame)
+    frame = pl.DataFrame(sorted(rows, key=_lap_key), schema=LAPS_SCHEMA_V2, strict=True)
+    validate_canonical_table("laps", frame, version="v2")
     return frame
 
 
@@ -50,8 +50,8 @@ def adapt_stints(
         for _, driver_laps in groupby(laps, key=lambda row: (row["session_id"], row["driver_id"]))
         for _, group in _contiguous_stint_groups(list(driver_laps))
     ]
-    frame = pl.DataFrame(sorted(stints, key=_stint_key), schema=STINTS_SCHEMA, strict=True)
-    validate_canonical_table("stints", frame)
+    frame = pl.DataFrame(sorted(stints, key=_stint_key), schema=STINTS_SCHEMA_V2, strict=True)
+    validate_canonical_table("stints", frame, version="v2")
     return frame
 
 

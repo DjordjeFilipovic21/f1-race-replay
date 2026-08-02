@@ -1,4 +1,4 @@
-"""Pure, deterministic derivation of the compact browser stint summary."""
+"""Pure, deterministic derivation of the mode-neutral browser stint summary."""
 
 from __future__ import annotations
 
@@ -17,7 +17,12 @@ _PitTimes = tuple[int | None, int | None]
 
 
 def build_stint_summary(snapshot: CanonicalGenerationSnapshot) -> BrowserStintSummary:
-    """Build null-preserving stint and exact pit-transition data from a snapshot."""
+    """Build null-preserving run/tyre and exact pit-transition data from a snapshot.
+
+    Session mode is intentionally not consulted here: whether this optional
+    summary is published is an orchestration/contract decision, while canonical
+    run data remains useful for Practice and Qualifying analysis.
+    """
     fixture_id = cast(
         str,
         snapshot.frames["session_metadata"].row(0, named=True)["session_id"],

@@ -5,7 +5,11 @@ import polars as pl
 import pytest
 
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_NAMES, get_canonical_schema
-from f1_replay_pipeline.domain.validators import CanonicalValidationError, validate_canonical_table
+from f1_replay_pipeline.domain.validators import (
+    CanonicalValidationError,
+    validate_canonical_frames,
+    validate_canonical_table,
+)
 
 
 def _frame(table_name: str, rows: list[Mapping[str, object]] | None = None) -> pl.DataFrame:
@@ -19,7 +23,7 @@ def _frame(table_name: str, rows: list[Mapping[str, object]] | None = None) -> p
         "weather": {"session_id": "2026-race", "session_time_ms": 1, "air_temperature_c": 20.0, "humidity_pct": 50.0, "pressure_mbar": 1000.0, "rainfall": False, "track_temperature_c": 30.0, "wind_direction_deg": 180.0, "wind_speed_mps": 2.0},
         "track_status_intervals": {"session_id": "2026-race", "start_time_ms": 1, "end_time_ms": 2, "status": "1", "message": None},
         "race_control_messages": {"session_id": "2026-race", "session_time_ms": 1, "message_index": 0, "category": None, "flag": None, "scope": None, "message": "Track clear", "driver_id": None, "lap_number": None},
-        "results": {"session_id": "2026-race", "driver_id": "HAM", "classified_position": "1", "grid_position": 1, "status": "Finished", "points": 25.0, "laps_completed": 58, "result_time_ms": 5400000},
+        "results": {"session_id": "2026-race", "driver_id": "HAM", "classified_position": "1", "grid_position": 1, "status": "Finished", "points": 25.0, "laps_completed": 58, "result_time_ms": 5400000, "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None},
     }
     return pl.DataFrame(rows if rows is not None else [defaults[table_name]], schema=get_canonical_schema(table_name))
 
@@ -126,3 +130,114 @@ def test_validate_canonical_table_rejects_inconsistent_intervals(table_name):
     frame = _frame(table_name).with_columns(pl.lit(0).cast(pl.Int64).alias(end_column))
     with pytest.raises(CanonicalValidationError, match="must not precede"):
         validate_canonical_table(table_name, frame)
+
+
+def _v2_frames() -> dict[str, pl.DataFrame]:
+    frames = {
+        table_name: pl.DataFrame(schema=get_canonical_schema(table_name, "v2"))
+        for table_name in CANONICAL_TABLE_NAMES
+    }
+    frames["session_metadata"] = pl.DataFrame([{
+        "session_id": "2026-example-practice-1", "year": 2026, "round_number": 1,
+        "event_name": "Example GP", "session_name": "FP1", "session_type": "FP1",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }], schema=get_canonical_schema("session_metadata", "v2"))
+    frames["drivers"] = pl.DataFrame([{
+        "session_id": "2026-example-practice-1", "driver_id": "HAM",
+        "source_driver_key": "44", "driver_number": 44, "full_name": "Hamilton",
+        "team_name": "Ferrari", "team_colour": "ff0000",
+    }], schema=get_canonical_schema("drivers", "v2"))
+    return frames
+
+
+def _v2_results(**changes: object) -> pl.DataFrame:
+    row: dict[str, object] = {
+        "session_id": "2026-example-race", "driver_id": "HAM",
+        "classified_position": None, "grid_position": None, "status": None,
+        "points": None, "laps_completed": None, "result_time_ms": None,
+        "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None,
+    }
+    row.update(changes)
+    return pl.DataFrame([row], schema=get_canonical_schema("results", "v2"))
+
+
+def test_v2_frame_boundary_rejects_missing_session_mode_and_unsafe_identity():
+    frames = _v2_frames()
+
+    with pytest.raises(CanonicalValidationError, match="session_mode.*normalized"):
+        validate_canonical_frames({
+            **frames,
+            "session_metadata": frames["session_metadata"].with_columns(
+                pl.lit(None, dtype=pl.String).alias("session_mode")
+            ),
+        }, version="v2")
+
+    with pytest.raises(CanonicalValidationError, match="safe non-blank identity"):
+        validate_canonical_frames({
+            **frames,
+            "session_metadata": frames["session_metadata"].with_columns(
+                pl.lit("2026/example").alias("session_id")
+            ),
+        }, version="v2")
+
+
+def test_v2_frame_boundary_rejects_cross_table_identity_and_unknown_driver():
+    frames = _v2_frames()
+    frames["results"] = pl.DataFrame([{
+        "session_id": "other-session", "driver_id": "VER", "classified_position": None,
+        "grid_position": None, "status": None, "points": None, "laps_completed": None,
+        "result_time_ms": None, "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None,
+    }], schema=get_canonical_schema("results", "v2"))
+
+    with pytest.raises(CanonicalValidationError, match="session_id must match"):
+        validate_canonical_frames(frames, version="v2")
+
+    frames["results"] = frames["results"].with_columns(
+        pl.lit("2026-example-practice-1").alias("session_id")
+    )
+    with pytest.raises(CanonicalValidationError, match="undeclared driver_id"):
+        validate_canonical_frames(frames, version="v2")
+
+
+def test_v2_results_rejects_negative_qualifying_time_values():
+    # Arrange: a schema-valid v2 result whose Q1 value is negative.
+    frame = _v2_results(q1_time_ms=-1)
+
+    # Act / Assert: qualifying times must be non-negative integer milliseconds.
+    with pytest.raises(CanonicalValidationError, match="non-negative integer milliseconds"):
+        validate_canonical_table("results", frame, version="v2")
+
+
+def test_v2_frame_boundary_rejects_non_normalized_session_mode():
+    # Arrange: an otherwise valid v2 generation whose mode token is not normalized.
+    frames = _v2_frames()
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("FP1").alias("session_mode")
+    )
+
+    # Act / Assert: the v2 boundary requires the canonical normalized mode value.
+    with pytest.raises(CanonicalValidationError, match="session_mode must be normalized"):
+        validate_canonical_frames(frames, version="v2")
+
+
+def test_v2_frame_boundary_rejects_undeclared_driver_in_race_control_messages():
+    # Arrange: a message references a driver absent from the generation roster.
+    frames = _v2_frames()
+    frames["race_control_messages"] = pl.DataFrame([{
+        "session_id": "2026-example-practice-1", "session_time_ms": 1_000,
+        "message_index": 0, "category": None, "flag": None, "scope": None,
+        "message": "Track clear", "driver_id": "VER", "lap_number": None,
+    }], schema=get_canonical_schema("race_control_messages", "v2"))
+
+    # Act / Assert: cross-table driver references must be declared by the generation.
+    with pytest.raises(CanonicalValidationError, match="undeclared driver_id"):
+        validate_canonical_frames(frames, version="v2")
+
+
+def test_v1_validation_rejects_v2_results_qualifying_columns():
+    # Arrange: a v2 result frame carrying the qualifying-only segment columns.
+    frame = _v2_results(q1_time_ms=105_123)
+
+    # Act / Assert: the frozen v1 results schema must reject v2-only columns.
+    with pytest.raises(CanonicalValidationError, match="unexpected columns"):
+        validate_canonical_table("results", frame, version="v1")

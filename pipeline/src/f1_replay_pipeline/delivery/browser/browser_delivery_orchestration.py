@@ -58,6 +58,7 @@ from f1_replay_pipeline.analysis.live_position.live_position_quality import (
 )
 from f1_replay_pipeline.analysis.live_position.live_position_ranking import DriverProgressInput, RankingTimelineFrame, rank_timeline
 from f1_replay_pipeline.app.track_assets_generator import TrackAssetsGenerationError
+from f1_replay_pipeline.domain.session_modes import SessionMode, normalize_session_mode
 
 
 ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], ProjectionQualityAssessment]
@@ -65,6 +66,7 @@ ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, 
 _STARTUP_PROJECTION_WINDOW_MS = 5_000
 _MAX_SHIFTED_STARTUP_SPAN_FRACTION = 0.2
 _NON_STARTER_RESULT_STATUSES = frozenset({"dns", "didnotstart"})
+_RACE_SESSION_MODES = frozenset({"race", "sprint"})
 
 
 @dataclass(frozen=True)
@@ -138,73 +140,95 @@ def build_browser_delivery(
 ) -> BrowserDeliveryBuild:
     """Derive all contract fields without rereading or mutating canonical data."""
     pit_loss_model: BrowserPitLossModel | None = None
+    assessment: ProjectionQualityAssessment | None = None
     try:
         session = snapshot.frames["session_metadata"].row(0, named=True)
         fixture_id = cast(str, session["session_id"])
+        session_mode = _session_mode(session)
+        if session_mode == "testing":
+            raise ValueError(
+                "testing sessions are not supported by the active browser delivery boundary"
+            )
+        race_semantics = session_mode in _RACE_SESSION_MODES
         season_metadata, telemetry_capabilities = _telemetry_metadata(session)
         _validate_track_assets(track_assets, fixture_id)
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
-        race_start_ms = _race_start_time_ms(snapshot)
-        timeline = _delivery_timeline(snapshot, race_start_ms)
+        replay_start_ms = _session_start_time_ms(snapshot, session_mode)
+        timeline = _delivery_timeline(snapshot, replay_start_ms)
         if not timeline:
-            raise ValueError("a browser delivery requires a canonical timestamp at or after the Lap 1 start")
+            raise ValueError("a browser delivery requires a canonical timestamp at or after the session boundary")
         drivers = {
             driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
             for driver_id in driver_ids
         }
-        terminal_end_times = _terminal_end_times(snapshot, race_start_ms)
-        drivers = {
-            driver_id: _with_terminal_status(fields, terminal_end_times.get(driver_id))
-            for driver_id, fields in drivers.items()
-        }
-        finish_end_times = _finished_end_times(snapshot, race_start_ms)
-        drivers = {
-            driver_id: _with_finished_state(fields, finish_end_times.get(driver_id))
-            for driver_id, fields in drivers.items()
-        }
-        assessment = _assess_quality(snapshot, track_assets, quality_assessor)
-        if assessment.passed:
+        terminal_end_times: Mapping[str, int] = {}
+        finish_end_times: Mapping[str, int] = {}
+        dynamic_orders: tuple[tuple[str, ...] | None, ...] | None = None
+        if race_semantics:
+            terminal_end_times = _terminal_end_times(snapshot, replay_start_ms)
+            drivers = {
+                driver_id: _with_terminal_status(fields, terminal_end_times.get(driver_id))
+                for driver_id, fields in drivers.items()
+            }
+            finish_end_times = _finished_end_times(snapshot, replay_start_ms)
+            drivers = {
+                driver_id: _with_finished_state(fields, finish_end_times.get(driver_id))
+                for driver_id, fields in drivers.items()
+            }
+            assessment = _assess_quality(snapshot, track_assets, quality_assessor)
+        if race_semantics and assessment is not None and assessment.passed:
             geometry = _projection_geometry(track_assets)
-            pit_lane_starts = _pit_lane_starter_pit_out_times(snapshot, race_start_ms)
+            pit_lane_starts = _pit_lane_starter_pit_out_times(snapshot, replay_start_ms)
             startup_plan = _startup_seed_plan(
-                snapshot.frames["results"].to_dicts(), drivers, geometry, race_start_ms,
+                snapshot.frames["results"].to_dicts(), drivers, geometry, replay_start_ms,
                 excluded_driver_ids=frozenset(pit_lane_starts),
             )
             drivers, dynamic_orders = _derive_live_fields(
                 snapshot, geometry, drivers, timeline, terminal_end_times, finish_end_times,
                 startup_plan=startup_plan, pit_lane_starts=pit_lane_starts,
             )
-        else:
-            dynamic_orders = None
-        globals_ = _global_fields(snapshot, timeline, driver_ids, dynamic_orders)
-        lap_starts = _leader_lap_starts(timeline, drivers, globals_.leaderboard_order)
+        globals_ = _global_fields(
+            snapshot, timeline, driver_ids, dynamic_orders,
+            include_ranking=race_semantics,
+        )
+        # BrowserLapStart historically means “the displayed race leader started a
+        # lap”.  Non-race sessions have no such leader; lap/sector navigation is
+        # supplied by the dedicated sidecar instead of inventing one here.
+        lap_starts = (
+            _leader_lap_starts(timeline, drivers, globals_.leaderboard_order)
+            if race_semantics else ()
+        )
         events = _events(snapshot)
         chunks = build_browser_chunks(
             drivers,
             globals_,
             events,
-            start_ms=race_start_ms,
+            start_ms=replay_start_ms,
             end_ms=timeline[-1] + 1,
             chunk_duration_ms=chunk_duration_ms,
             overlap_ms=overlap_ms,
         )
-        timeline_summary = build_timeline_summary(snapshot, race_start_ms, timeline[-1] + 1)
+        timeline_summary = (
+            build_timeline_summary(snapshot, replay_start_ms, timeline[-1] + 1)
+            if race_semantics else None
+        )
         lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
         parsed_penalty_sidecar = build_penalty_sidecar(snapshot)
         penalty_sidecar = (
             parsed_penalty_sidecar if parsed_penalty_sidecar.penalty_issuances else None
         )
         stint_summary = build_stint_summary(snapshot)
-        observations = extract_eligible_pit_loss_observations(
-            stint_summary=stint_summary,
-            drivers=drivers,
-            leaderboard_order=globals_.leaderboard_order,
-            track_status_code=globals_.track_status_code,
-            quality_gate_passed=assessment.passed,
-        )
-        pit_loss_model = build_pit_loss_timeline(
-            race_start_ms, observations, fixture_id=fixture_id,
-        )
+        if race_semantics and assessment is not None:
+            observations = extract_eligible_pit_loss_observations(
+                stint_summary=stint_summary,
+                drivers=drivers,
+                leaderboard_order=globals_.leaderboard_order,
+                track_status_code=globals_.track_status_code,
+                quality_gate_passed=assessment.passed,
+            )
+            pit_loss_model = build_pit_loss_timeline(
+                replay_start_ms, observations, fixture_id=fixture_id,
+            )
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
@@ -221,6 +245,51 @@ def build_browser_delivery(
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
         stint_summary, pit_loss_model, penalty_sidecar,
+    )
+
+
+def _session_mode(session: Mapping[str, object]) -> SessionMode:
+    """Normalize the canonical mode, retaining legacy direct race snapshots."""
+    value = session.get("session_mode")
+    if value is None:
+        return "race"
+    return normalize_session_mode(value)
+
+
+def _session_start_time_ms(snapshot: CanonicalGenerationSnapshot, mode: SessionMode) -> int:
+    """Choose a mode-appropriate replay boundary without fabricating Lap 1."""
+    if mode in _RACE_SESSION_MODES:
+        return _race_start_time_ms(snapshot)
+    primary_columns = (
+        ("car_telemetry", "session_time_ms"),
+        ("position_telemetry", "session_time_ms"),
+        ("laps", "lap_start_time_ms"),
+        ("laps", "pit_in_time_ms"),
+        ("laps", "pit_out_time_ms"),
+    )
+    values = _timestamp_values(snapshot, primary_columns)
+    if values:
+        return min(values)
+    fallback_columns = (
+        ("weather", "session_time_ms"),
+        ("track_status_intervals", "start_time_ms"),
+        ("race_control_messages", "session_time_ms"),
+    )
+    values = _timestamp_values(snapshot, fallback_columns)
+    if not values:
+        raise ValueError("a non-race browser delivery requires usable telemetry or timing data")
+    return min(values)
+
+
+def _timestamp_values(
+    snapshot: CanonicalGenerationSnapshot,
+    columns: Sequence[tuple[str, str]],
+) -> tuple[int, ...]:
+    return tuple(
+        cast(int, time_ms)
+        for table, column in columns
+        for time_ms in snapshot.frames[table].get_column(column).drop_nulls().to_list()
+        if type(time_ms) is int and time_ms >= 0
     )
 
 
@@ -255,7 +324,7 @@ def _telemetry_metadata(session: Mapping[str, object]) -> tuple[Mapping[str, obj
 
 
 def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int) -> tuple[int, ...]:
-    """Return the sorted unique canonical timestamp union at the race boundary."""
+    """Return the sorted unique canonical timestamp union at the replay boundary."""
     timestamp_columns = (
         ("car_telemetry", "session_time_ms"),
         ("position_telemetry", "session_time_ms"),
@@ -347,14 +416,25 @@ def _validate_summary_bounds(replay_start_ms: int, replay_end_ms: int) -> None:
         raise ValueError("timeline summary bounds must be a non-empty interval")
 
 
-def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[str, ...] | None, ...] | None = None) -> BrowserGlobalFields:
+def _global_fields(
+    snapshot,
+    timeline,
+    driver_ids,
+    dynamic_orders: tuple[tuple[str, ...] | None, ...] | None = None,
+    *,
+    include_ranking: bool = True,
+) -> BrowserGlobalFields:
     results = snapshot.frames["results"].to_dicts()
-    ranked = sorted(driver_ids, key=lambda driver_id: (_result_rank(results, driver_id), driver_id))
     statuses = snapshot.frames["track_status_intervals"].to_dicts()
     weather = snapshot.frames["weather"].to_dicts()
+    if not include_ranking:
+        leaderboard_order = (None,) * len(timeline)
+    else:
+        ranked = sorted(driver_ids, key=lambda driver_id: (_result_rank(results, driver_id), driver_id))
+        leaderboard_order = (tuple(ranked),) * len(timeline) if dynamic_orders is None else dynamic_orders
     return BrowserGlobalFields(
         timeline,
-        (tuple(ranked),) * len(timeline) if dynamic_orders is None else dynamic_orders,
+        leaderboard_order,
         tuple(_track_status(statuses, time_ms) for time_ms in timeline),
         tuple(_weather_state(weather, time_ms) for time_ms in timeline),
     )

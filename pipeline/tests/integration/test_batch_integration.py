@@ -43,7 +43,7 @@ from fixtures.fake_fastf1_session import FakeFastF1Session, build_complete_sessi
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1" / "schemas"
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
 
 
 @pytest.fixture(autouse=True)

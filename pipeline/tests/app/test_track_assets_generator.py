@@ -103,6 +103,34 @@ def test_reference_lap_selector_matches_the_generator_source_policy():
     assert reference.points_meters[0] == reference.points_meters[-1]
 
 
+@pytest.mark.parametrize("session_mode", ["practice", "qualifying", "sprint-shootout"])
+def test_non_race_track_assets_use_a_non_lap_one_reference_boundary(session_mode: str):
+    # Arrange: the only usable run is a representative non-race lap 2.
+    source = _snapshot()
+    non_race = CanonicalGenerationSnapshot(
+        source.generation_id,
+        source.manifest_sha256,
+        {
+            **source.frames,
+            "session_metadata": source.frames["session_metadata"].with_columns(
+                pl.lit(session_mode).alias("session_mode"),
+            ),
+            "laps": source.frames["laps"].filter(pl.col("driver_id") == "BBB"),
+            "position_telemetry": source.frames["position_telemetry"].filter(
+                pl.col("driver_id") == "BBB",
+            ),
+        },
+    )
+
+    # Act: generate assets without any Lap 1 row or race-start calibration.
+    first = generate_track_assets(non_race, centerline_points=8)
+    second = generate_track_assets(non_race, centerline_points=8)
+
+    # Assert: the representative non-race geometry remains deterministic.
+    assert first == second
+    assert first["fixtureId"] == source.frames["session_metadata"]["session_id"][0]
+
+
 def test_generator_rejects_degenerate_position_geometry():
     snapshot = _snapshot(points=((1000.0, 0.0),) * 4)
 

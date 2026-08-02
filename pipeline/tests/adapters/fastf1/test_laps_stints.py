@@ -1,12 +1,20 @@
 from datetime import timedelta
 import math
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from fixtures.fake_fastf1_session import (
+    build_practice_session,
+    build_qualifying_session,
+    build_qualifying_session_with_cancelled_q3,
+)
 from f1_replay_pipeline.domain.canonical_schema import LAPS_SCHEMA, STINTS_SCHEMA
 from f1_replay_pipeline.adapters.fastf1.laps_stints import adapt_laps, adapt_stints
 from f1_replay_pipeline.domain.normalizers import NormalizationError
+
+PRACTICE_DRIVER_IDS = {"44": "HAM", "1": "VER"}
 
 
 class LapsOnlySession:
@@ -284,3 +292,91 @@ def test_adapt_laps_sector_values_are_deterministic_regardless_of_input_order():
     assert ordered_rows[1]["sector_1_duration_ms"] == 28_500
     assert ordered_rows[1]["sector_2_duration_ms"] == 35_200
     assert ordered_rows[1]["sector_3_duration_ms"] == 27_800
+
+
+# ── Practice and Qualifying fixture laps ──
+
+
+def test_practice_fixture_laps_normalize_with_valid_times_and_compounds():
+    # Arrange: the FP fixture keeps valid timed laps and no per-lap live order.
+    session = build_practice_session(1)
+
+    # Act: normalize the practice laps through the public adapter.
+    frame = adapt_laps(session, "2026-03-practice-1", PRACTICE_DRIVER_IDS)
+
+    # Assert: both drivers keep their valid lap durations and compounds.
+    assert list(frame.schema.items()) == list(LAPS_SCHEMA.items())
+    assert frame.select("driver_id", "lap_duration_ms", "compound").to_dicts() == [
+        {"driver_id": "HAM", "lap_duration_ms": 92_500, "compound": "SOFT"},
+        {"driver_id": "VER", "lap_duration_ms": 93_200, "compound": "MEDIUM"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_qualifying_session, build_qualifying_session_with_cancelled_q3],
+)
+def test_qualifying_fixture_laps_normalize_with_valid_times(builder):
+    # Arrange: qualifying flying laps remain valid in every qualifying fixture variant.
+    session = builder()
+
+    # Act: normalize the qualifying laps through the public adapter.
+    frame = adapt_laps(session, "2026-03-qualifying", PRACTICE_DRIVER_IDS)
+
+    # Assert: both drivers keep their deterministic flying-lap durations.
+    assert frame.select("driver_id", "lap_duration_ms").to_dicts() == [
+        {"driver_id": "HAM", "lap_duration_ms": 105_123},
+        {"driver_id": "VER", "lap_duration_ms": 105_200},
+    ]
+
+
+def test_practice_fixture_stints_stay_empty_without_stint_labels():
+    # Arrange / Act: the practice fixture carries no source Stint labels.
+    frame = adapt_stints(build_practice_session(1), "2026-03-practice-1", PRACTICE_DRIVER_IDS)
+
+    # Assert: no stint summaries are fabricated from a stintless practice source.
+    assert frame.is_empty()
+    assert list(frame.schema.items()) == list(STINTS_SCHEMA.items())
+
+
+def test_adapt_laps_returns_typed_empty_frame_when_session_laps_is_none():
+    # Arrange: a loaded session may expose no laps table at all.
+    session = LapsOnlySession(None)
+
+    # Act: normalize the missing table through the public adapter.
+    frame = adapt_laps(session, "2026-03-practice-1", PRACTICE_DRIVER_IDS)
+
+    # Assert: an absent table becomes a typed empty frame, not a fabricated lap.
+    assert frame.is_empty()
+    assert list(frame.schema.items()) == list(LAPS_SCHEMA.items())
+
+
+def test_adapt_laps_requires_laps_attribute():
+    # Arrange: a session-shaped object without a laps attribute at all.
+    session = SimpleNamespace()
+
+    # Act / Assert: the adapter fails explicitly instead of fabricating rows.
+    with pytest.raises(NormalizationError, match="missing required laps"):
+        adapt_laps(session, "2026-03-practice-1", PRACTICE_DRIVER_IDS)
+
+
+def test_adapt_laps_rejects_negative_lap_start_time():
+    # Arrange: a lap whose start time precedes the session origin.
+    session = LapsOnlySession([_lap(LapStartTime=timedelta(seconds=-1))])
+
+    # Act / Assert: negative session-relative timing is rejected explicitly.
+    with pytest.raises(NormalizationError, match="invalid lap start time"):
+        adapt_laps(session, "2026-03-race", {"44": "HAM"})
+
+
+def test_qualifying_fixture_laps_keep_absent_optional_flags_null():
+    # Arrange / Act: normalize the deterministic qualifying fixture laps.
+    frame = adapt_laps(build_qualifying_session(), "2026-03-qualifying", PRACTICE_DRIVER_IDS)
+
+    # Assert: optional FastF1 flags absent from the fixture stay typed null rather
+    # than being invented, matching FastF1's nullable sector/deletion semantics.
+    selected = frame.select(
+        "is_accurate", "deleted", "deleted_reason",
+        "sector_1_duration_ms", "sector_2_duration_ms", "sector_3_duration_ms",
+    )
+    assert selected.null_count().row(0) == (2, 2, 2, 2, 2, 2)

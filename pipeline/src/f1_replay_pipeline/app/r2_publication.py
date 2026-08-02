@@ -8,13 +8,14 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import urlparse
 
 from f1_replay_pipeline.app.catalog_v2_schema import (
     CatalogV2Payload,
     CatalogV2RaceRecord,
     CatalogV2SessionRecord,
+    validate_active_catalog,
 )
 from f1_replay_pipeline.app.session_pointer_publication import (
     browser_session_pointer_path,
@@ -27,6 +28,7 @@ from f1_replay_pipeline.storage.generation_publication import (
     read_regular_file_no_follow,
     verify_regular_file_identity,
 )
+from f1_replay_pipeline.domain.generation_identity import validate_generation_id
 
 
 IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -208,23 +210,28 @@ def build_r2_publication_plan(
     emit = progress or (lambda _event: None)
     catalog_path = source.season_root / "catalog.json"
     catalog = _read_json_object(catalog_path, "season catalog")
-    if (
-        catalog.get("schemaVersion") != 2
-        or catalog.get("year") != source.year
-        or not isinstance(catalog.get("races"), list)
-    ):
+    try:
+        parsed_catalog = validate_active_catalog(catalog)
+    except (TypeError, ValueError) as error:
+        raise R2PublicationError(
+            "season catalog is malformed, mixed-version, or belongs to another season"
+        ) from error
+    if parsed_catalog.year != source.year:
         raise R2PublicationError("season catalog is malformed or belongs to another season")
+    raw_races = catalog.get("races")
+    if not isinstance(raw_races, list):
+        raise R2PublicationError("season catalog races must be an array")
 
     immutable: list[R2ObjectSpec] = []
     pointers: list[R2ObjectSpec] = []
     visuals: list[R2ObjectSpec] = []
     public_races: list[CatalogV2RaceRecord] = []
     seen_keys: set[str] = set()
-    validation_total = _validated_session_count(catalog["races"])
+    validation_total = _validated_session_count(raw_races)
     validation_completed = 0
     emit(R2ProgressEvent("r2_validating", 0, validation_total))
 
-    for record in catalog["races"]:
+    for record in raw_races:
         race, race_immutable, race_pointers = _plan_public_race(
             source, record, validate_delivery=validate_delivery,
         )
@@ -339,6 +346,10 @@ def _plan_public_race(
     race_id = record.get("race_id")
     if not isinstance(race_id, str):
         raise R2PublicationError("catalog race_id must be a string")
+    try:
+        validate_generation_id(race_id)
+    except ValueError as error:
+        raise R2PublicationError("catalog race_id must be a safe path component") from error
 
     sessions: list[CatalogV2SessionRecord] = []
     immutable: list[R2ObjectSpec] = []
@@ -364,8 +375,8 @@ def _plan_public_race(
     try:
         race = CatalogV2RaceRecord(
             race_id=race_id,
-            round_number=record.get("round_number"),
-            event_name=record.get("event_name"),
+            round_number=cast(int, record.get("round_number")),
+            event_name=cast(str, record.get("event_name")),
             sessions=tuple(sessions),
             country=record.get("country"),
             location=record.get("location"),
@@ -387,18 +398,27 @@ def _plan_public_session(
     validate_delivery: DeliveryValidator,
 ) -> tuple[CatalogV2SessionRecord, tuple[R2ObjectSpec, ...], R2ObjectSpec]:
     try:
+        session_code = value.get("session_code")
+        session_name = value.get("session_name")
+        generation_id = value.get("generation_id")
+        delivery_version = value.get("delivery_version")
+        outcome = value.get("outcome")
+        browser_pointer = value.get("browser_pointer")
         session = CatalogV2SessionRecord(
-            session_code=value.get("session_code"),
-            session_name=value.get("session_name"),
-            generation_id=value.get("generation_id"),
-            delivery_version=value.get("delivery_version"),
-            outcome=value.get("outcome"),
+            session_code=session_code,  # type: ignore[arg-type]
+            session_name=session_name,  # type: ignore[arg-type]
+            generation_id=generation_id,  # type: ignore[arg-type]
+            delivery_version=delivery_version,  # type: ignore[arg-type]
+            outcome=outcome,  # type: ignore[arg-type]
             validated=True,
             canonical_pointer=None,
-            browser_pointer=value.get("browser_pointer"),
+            browser_pointer=browser_pointer,  # type: ignore[arg-type]
         )
     except (AttributeError, TypeError, ValueError) as error:
         raise R2PublicationError(f"validated catalog session for {race_id} is malformed") from error
+    assert session.delivery_version is not None
+    assert session.generation_id is not None
+    assert session.browser_pointer is not None
 
     expected_pointer = (
         f"browser/{race_id}/sessions/{session.session_code}/browser-current.json"
@@ -422,9 +442,11 @@ def _plan_public_session(
         pointer.delivery_version != session.delivery_version
         or manifest_sha256 != pointer.manifest_sha256
         or not isinstance(manifest, dict)
+        or manifest.get("formatVersion") != "browser-delivery-v2"
+        or manifest.get("contractVersion") != "v2"
         or manifest.get("deliveryVersion") != session.delivery_version
         or manifest.get("sourceGenerationId") != session.generation_id
-        or not isinstance(manifest.get("sourceManifestSha256"), str)
+        or not _is_sha256(manifest.get("sourceManifestSha256"))
     ):
         raise R2PublicationError(
             f"validated browser session for {race_id}/{session.session_code} disagrees with its catalog"
@@ -455,21 +477,34 @@ def _plan_public_session(
             immutable=True,
         )
     ]
+    chunks = manifest.get("chunks")
+    if not isinstance(chunks, list):
+        raise R2PublicationError("browser manifest chunks must be an array")
+    track_assets = manifest.get("trackAssets")
+    if not isinstance(track_assets, dict):
+        raise R2PublicationError("browser manifest trackAssets reference is required")
     references = [manifest.get(field) for field in _REFERENCE_FIELDS]
-    references.extend(manifest.get("chunks") if isinstance(manifest.get("chunks"), list) else ())
-    for reference in references:
+    references.extend(chunks)
+    for index, reference in enumerate(references):
         if reference is None:
+            if index >= len(_REFERENCE_FIELDS):
+                raise R2PublicationError("browser manifest chunk reference must be an object")
             continue
         if not isinstance(reference, dict):
             raise R2PublicationError("browser manifest artifact reference must be an object")
         relative = _safe_relative_path(reference.get("path"), "browser artifact path")
         digest = reference.get("sha256")
-        if not isinstance(digest, str):
-            raise R2PublicationError("browser manifest artifact SHA-256 must be a string")
+        if not _is_sha256(digest):
+            raise R2PublicationError("browser manifest artifact SHA-256 must be lowercase hexadecimal")
+        expected_digest = cast(str, digest)
+        artifact_path = generation_root.joinpath(*relative.parts)
+        artifact_payload = _read_guarded(artifact_path, f"R2 source {relative}")
+        if hashlib.sha256(artifact_payload).hexdigest() != expected_digest:
+            raise R2PublicationError(f"browser manifest artifact checksum disagrees: {relative}")
         objects.append(R2ObjectSpec(
             key=_object_key(source, generation_relative / relative),
-            local_path=generation_root.joinpath(*relative.parts),
-            expected_sha256=digest,
+            local_path=artifact_path,
+            expected_sha256=expected_digest,
             cache_control=IMMUTABLE_CACHE_CONTROL,
             immutable=True,
         ))
@@ -638,7 +673,17 @@ def _safe_relative_path(value: object, label: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if path.is_absolute() or "." in path.parts or ".." in path.parts:
         raise R2PublicationError(f"{label} must be a safe relative POSIX path")
+    if any(not part or part in {".", ".."} for part in str(value).split("/")):
+        raise R2PublicationError(f"{label} must be a safe relative POSIX path")
     return path
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _object_key(source: R2PublicationSource, relative: PurePosixPath) -> str:

@@ -6,7 +6,7 @@ from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     MAX_INT64,
@@ -16,6 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 
 
 FieldValue = TypeVar("FieldValue")
+ContractVersion = Literal["v1", "v2"]
 
 
 CHUNK_DURATION_MS = 10_000
@@ -133,6 +134,7 @@ class BrowserChunk:
     track_status_code: tuple[int | None, ...]
     weather_state: tuple[str | None, ...]
     events: tuple[BrowserEvent, ...]
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "time_ms", tuple(self.time_ms))
@@ -142,6 +144,8 @@ class BrowserChunk:
         object.__setattr__(self, "track_status_code", tuple(self.track_status_code))
         object.__setattr__(self, "weather_state", tuple(self.weather_state))
         object.__setattr__(self, "events", tuple(self.events))
+        if self.contract_version not in {"v1", "v2"}:
+            raise ValueError("contract_version must be v1 or v2")
         if self.chunk_id != f"chunk-{self.sequence:03d}" or self.sequence < 1:
             raise ValueError("chunk identity and sequence disagree")
         if type(self.start_ms) is not int or type(self.end_ms) is not int or not 0 <= self.start_ms < self.end_ms <= MAX_INT64:
@@ -172,6 +176,61 @@ class BrowserChunk:
         if any(not self.start_ms <= event.session_time_ms < self.end_ms for event in self.events):
             raise ValueError("events must belong to the authoritative half-open interval")
         object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self, fixture_id: str) -> dict[str, object]:
+        """Serialize a chunk with an explicit contract version.
+
+        Publication code may continue using its historical v1 serializer; the
+        model serializer is version-aware so new v2 writers cannot silently
+        emit v1 identifiers.
+        """
+        return {
+            "contractVersion": self.contract_version,
+            "fixtureId": fixture_id,
+            "chunkId": self.chunk_id,
+            "sequence": self.sequence,
+            "startMs": self.start_ms,
+            "endMs": self.end_ms,
+            "overlap": {
+                "kind": self.overlap.kind,
+                "previousChunkPath": self.overlap.previous_chunk_path,
+                "range": None if self.overlap.range_start_ms is None else {
+                    "startMs": self.overlap.range_start_ms, "endMs": self.overlap.range_end_ms,
+                },
+                "authoritativeFromMs": self.overlap.authoritative_from_ms,
+            },
+            "timeMs": list(self.time_ms),
+            "authoritativeStartIndex": self.authoritative_start_index,
+            "drivers": {
+                driver_id: _driver_dict(fields) for driver_id, fields in self.drivers.items()
+            },
+            "leaderboardOrder": [None if row is None else list(row) for row in self.leaderboard_order],
+            "trackStatusCode": list(self.track_status_code),
+            "weatherState": list(self.weather_state),
+            "events": [_event_dict(event) for event in self.events],
+        }
+
+
+def _driver_dict(fields: BrowserDriverFields) -> dict[str, object]:
+    return {
+        "x": list(fields.x), "y": list(fields.y), "trackDistanceMeters": list(fields.track_distance_meters),
+        "speed": list(fields.speed), "rpm": list(fields.rpm), "throttle": list(fields.throttle),
+        "brake": list(fields.brake), "gapToLeaderMs": list(fields.gap_to_leader_ms),
+        "lap": list(fields.lap), "position": list(fields.position), "gear": list(fields.gear),
+        "drs": list(fields.drs), "tyreCompound": list(fields.tyre_compound), "tyreAge": list(fields.tyre_age),
+        "status": list(fields.status), "isInPitLane": list(fields.is_in_pit_lane),
+        "isFinished": list(fields.is_finished),
+    }
+
+
+def _event_dict(event: BrowserEvent) -> dict[str, object]:
+    value: dict[str, object] = {
+        "sessionTimeMs": event.session_time_ms, "eventType": event.event_type,
+        "description": event.description, "driverId": event.driver_id,
+    }
+    if event.payload is not None:
+        value["payload"] = event.payload
+    return value
 
 
 def _validate_live_leaderboard_rows(
@@ -212,9 +271,12 @@ def build_browser_chunks(
     end_ms: int,
     chunk_duration_ms: int = CHUNK_DURATION_MS,
     overlap_ms: int = HANDOFF_OVERLAP_MS,
+    contract_version: ContractVersion = "v1",
 ) -> tuple[BrowserChunk, ...]:
     """Partition exact observations without resampling or interpolating source rows."""
     _validate_bounds(start_ms, end_ms, chunk_duration_ms, overlap_ms)
+    if contract_version not in {"v1", "v2"}:
+        raise ValueError("contract_version must be v1 or v2")
     _validate_drivers(driver_fields)
     ordered_events = tuple(sorted(events, key=_event_sort_key))
     timeline = _shared_timeline(driver_fields, global_fields)
@@ -230,7 +292,7 @@ def build_browser_chunks(
     intervals = _chunk_intervals(timeline, start_ms, end_ms, chunk_duration_ms)
     return tuple(
         _build_chunk(sequence, chunk_start, chunk_end, timeline,
-                     aligned_drivers, aligned_globals, ordered_events, overlap_ms)
+                     aligned_drivers, aligned_globals, ordered_events, overlap_ms, contract_version)
         for sequence, (chunk_start, chunk_end) in enumerate(intervals, start=1)
     )
 
@@ -239,6 +301,7 @@ def _build_chunk(
     sequence: int, start_ms: int, end_ms: int, timeline: tuple[int, ...],
     driver_fields: Mapping[str, BrowserDriverFields], global_fields: BrowserGlobalFields,
     events: tuple[BrowserEvent, ...], overlap_ms: int,
+    contract_version: ContractVersion = "v1",
 ) -> BrowserChunk:
     overlap_start = start_ms if sequence == 1 else start_ms - overlap_ms
     left = bisect_left(timeline, overlap_start)
@@ -257,6 +320,7 @@ def _build_chunk(
         track_status_code=global_fields.track_status_code[left:right],
         weather_state=global_fields.weather_state[left:right],
         events=tuple(event for event in events if start_ms <= event.session_time_ms < end_ms),
+        contract_version=contract_version,
     )
 
 

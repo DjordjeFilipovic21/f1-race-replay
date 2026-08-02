@@ -7,7 +7,7 @@ import pytest
 
 from fixtures.fake_fastf1_session import build_complete_session
 from f1_replay_pipeline.adapters.fastf1.resolver import FastF1SessionResolver
-from f1_replay_pipeline.app.orchestration import RaceSelection, SessionResolutionError
+from f1_replay_pipeline.app.orchestration import RaceSelection, SelectionError, SessionResolutionError
 from f1_replay_pipeline.app.orchestration import TestingSelection as PipelineTestingSelection
 
 
@@ -73,6 +73,64 @@ def test_supported_race_session_aliases_are_case_insensitive(session_name: str) 
     assert FastF1SessionResolver(lambda: module)(
         RaceSelection(year=2026, round_number=1, session=session_name)
     ) is session
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "FP1", "FP2", "FP3",
+        "Practice 1", "Practice 2", "Practice 3",
+        "Q", "Qualifying",
+    ],
+)
+def test_practice_and_qualifying_aliases_use_the_injected_loader_exactly_once(alias: str) -> None:
+    # Arrange: a session whose load() records the exact requested data categories.
+    session = build_complete_session()
+    module = FakeFastF1Module(FakeEvent(session), session)
+
+    # Act: resolve every supported practice/qualifying alias through the resolver.
+    resolved = FastF1SessionResolver(lambda: module)(
+        RaceSelection(year=2026, round_number=1, session=alias)
+    )
+
+    # Assert: the alias reaches get_session verbatim and load() runs exactly once
+    # with laps, telemetry, weather, and messages all enabled.
+    assert resolved is session
+    assert module.event.requested_identifiers == [alias]
+    assert session.load_calls == [{"laps": True, "telemetry": True, "weather": True, "messages": True}]
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "S", "SS", "SQ",
+        "Sprint", "Sprint Shootout", "Sprint Qualifying",
+    ],
+)
+def test_sprint_aliases_use_the_injected_loader_exactly_once(alias: str) -> None:
+    # Arrange: a session whose load() records the exact requested data categories.
+    session = build_complete_session()
+    module = FakeFastF1Module(FakeEvent(session), session)
+
+    # Act: resolve every supported sprint alias through the resolver.
+    resolved = FastF1SessionResolver(lambda: module)(
+        RaceSelection(year=2026, round_number=1, session=alias)
+    )
+
+    # Assert: the alias reaches get_session verbatim and load() runs exactly once
+    # with laps, telemetry, weather, and messages all enabled.
+    assert resolved is session
+    assert module.event.requested_identifiers == [alias]
+    assert session.load_calls == [{"laps": True, "telemetry": True, "weather": True, "messages": True}]
+
+
+def test_ambiguous_bare_practice_token_is_rejected_before_module_factory_call() -> None:
+    # Arrange: "practice" without a run number is ambiguous and unsupported by the resolver.
+    selection = RaceSelection(year=2026, round_number=1, session="practice")
+
+    # Act / Assert: validation fails before FastF1 or the injected loader is consulted.
+    with pytest.raises(SessionResolutionError, match="unsupported session"):
+        FastF1SessionResolver(lambda: pytest.fail("FastF1 must not be loaded"))(selection)
 
 
 def test_exact_event_none_reports_an_actionable_resolution_reason() -> None:
@@ -156,3 +214,67 @@ def test_importing_resolver_does_not_import_fastf1() -> None:
     __import__("f1_replay_pipeline.adapters.fastf1.resolver")
 
     assert "fastf1" not in sys.modules
+
+
+def test_whitespace_padded_alias_validates_then_reaches_fastf1_verbatim() -> None:
+    # Arrange: validation strips the alias for the supported-token check only.
+    session = build_complete_session()
+    module = FakeFastF1Module(FakeEvent(session), session)
+
+    # Act: resolve a padded practice alias through the injected loader.
+    resolved = FastF1SessionResolver(lambda: module)(
+        RaceSelection(year=2026, round_number=1, session="  FP1  ")
+    )
+
+    # Assert: validation is tolerant while FastF1 receives the exact alias and
+    # load() runs exactly once with all four data categories.
+    assert resolved is session
+    assert module.event.requested_identifiers == ["  FP1  "]
+    assert session.load_calls == [{"laps": True, "telemetry": True, "weather": True, "messages": True}]
+
+
+def test_backend_is_normalized_and_propagated_to_fastf1() -> None:
+    # Arrange: FastF1 backends are normalized case-insensitively at the boundary.
+    session = build_complete_session()
+    module = FakeFastF1Module(FakeEvent(session), session)
+
+    # Act: resolve with an uppercase backend token.
+    resolved = FastF1SessionResolver(lambda: module)(
+        RaceSelection(year=2026, round_number=1, session="Q", backend="FASTF1")
+    )
+
+    # Assert: the normalized backend reaches the event selector and the loader.
+    assert resolved is session
+    assert module.event_calls == [(2026, 1, "fastf1", False)]
+    assert module.event.requested_identifiers == ["Q"]
+
+
+def test_unsupported_backend_is_rejected_before_module_factory_call() -> None:
+    # Arrange / Act / Assert: an invalid backend fails selection construction,
+    # so FastF1 and the injected loader are never consulted.
+    with pytest.raises(SelectionError, match="backend must be one of"):
+        RaceSelection(year=2026, round_number=1, session="Q", backend="wheel")
+
+
+def test_fastf1_initialization_failure_reports_initialization_context() -> None:
+    # Arrange: the module factory itself fails without producing a module.
+    def failing_factory() -> object:
+        raise RuntimeError("private import detail")
+
+    # Act / Assert: the resolver reports an actionable initialization context.
+    with pytest.raises(SessionResolutionError, match="could not initialize FastF1.*year=2026.*round=1") as raised:
+        FastF1SessionResolver(failing_factory)(RaceSelection(year=2026, round_number=1, session="R"))
+
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_testing_selection_with_missing_session_reports_no_testing_session() -> None:
+    # Arrange: the dedicated testing API returns no session for the selection.
+    module = FakeFastF1Module(FakeEvent(build_complete_session()), build_complete_session())
+    module.get_testing_session = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    # Act / Assert: a missing testing session is an actionable resolution failure.
+    with pytest.raises(SessionResolutionError, match="no testing session found"):
+        FastF1SessionResolver(lambda: module)(
+            PipelineTestingSelection(year=2026, test_number=1, session_number=2, backend="f1timing")
+        )

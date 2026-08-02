@@ -15,6 +15,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 import jsonschema_rs
+import polars as pl
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChunk, BrowserEvent, BrowserOverlap
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
@@ -25,7 +26,9 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserTimelineInterval,
     BrowserTimelineSummary,
     CanonicalGenerationSnapshot,
+    QUALIFYING_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
+    V2_TIMELINE_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 import f1_replay_pipeline.delivery.browser.browser_delivery_publication as publication
@@ -33,11 +36,14 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryCleanupError, BrowserDeliveryDurabilityUncertainError,
     BrowserDeliveryPublicationError, BrowserValidationProgress, _artifact_payloads,
     _contract_validators, _load_contract_schemas, _prepared_artifacts,
-    _validate_delivery_payloads, publish_browser_delivery, validate_complete_browser_delivery,
+    _validate_delivery_payloads, publish_browser_delivery, validate_browser_delivery_pointer,
+    validate_complete_browser_delivery,
 )
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 
 
 SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v1" / "schemas"
+SCHEMA_ROOT_V2 = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v2" / "schemas"
 
 
 def _snapshot() -> CanonicalGenerationSnapshot:
@@ -94,8 +100,296 @@ def _timeline_summary() -> BrowserTimelineSummary:
 def _publish(browser: Path):
     return publish_browser_delivery(
         browser_parent=browser, delivery_version="delivery-one", delivery=_delivery(),
-        schema_root=SCHEMA_ROOT,
+        schema_root=SCHEMA_ROOT, contract_version="v1",
     )
+
+
+def _v2_delivery() -> BrowserDeliveryBuild:
+    delivery = _delivery()
+    session_metadata = pl.DataFrame([{
+        "session_id": "race-one", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_mode": "race", "session_start_time_utc": None,
+    }], schema={
+        "session_id": pl.String, "year": pl.Int16, "round_number": pl.Int16,
+        "event_name": pl.String, "session_name": pl.String, "session_type": pl.String,
+        "session_mode": pl.String, "session_start_time_utc": pl.Datetime("ms", "UTC"),
+    })
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "canonical-one", "a" * 64, {"session_metadata": session_metadata},
+        ),
+    )
+
+
+def _v2_qualifying_delivery(session_mode: str = "qualifying") -> BrowserDeliveryBuild:
+    delivery = _delivery()
+    session_metadata = pl.DataFrame([{
+        "session_id": "race-one", "year": 2026, "round_number": 1,
+        "event_name": "Qualifying", "session_name": "Qualifying", "session_type": "Q",
+        "session_mode": session_mode, "session_start_time_utc": None,
+    }], schema={
+        "session_id": pl.String, "year": pl.Int16, "round_number": pl.Int16,
+        "event_name": pl.String, "session_name": pl.String, "session_type": pl.String,
+        "session_mode": pl.String, "session_start_time_utc": pl.Datetime("ms", "UTC"),
+    })
+    results = pl.DataFrame([{
+        "session_id": "race-one", "driver_id": "HAM", "classified_position": "1",
+        "grid_position": 1, "status": "Finished", "points": 0.0,
+        "laps_completed": 2, "result_time_ms": None,
+        "q1_time_ms": 90_000, "q2_time_ms": 88_500, "q3_time_ms": 87_200,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["results"]), strict=True)
+    lap_schema = dict(CANONICAL_TABLE_SCHEMAS_V2["laps"])
+
+    def _lap(number: int, start_ms: int, end_ms: int, duration_ms: int) -> dict[str, object]:
+        row: dict[str, object] = {column: None for column in lap_schema}
+        row.update({
+            "session_id": "race-one", "driver_id": "HAM", "lap_number": number,
+            "lap_start_time_ms": start_ms, "lap_end_time_ms": end_ms,
+            "lap_duration_ms": duration_ms, "compound": "MEDIUM",
+        })
+        return row
+
+    laps = pl.DataFrame([
+        _lap(1, 0, 90_000, 90_000),
+        _lap(2, 90_000, 178_500, 88_500),
+    ], schema=lap_schema, strict=True)
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "canonical-one", "a" * 64,
+            {"session_metadata": session_metadata, "results": results, "laps": laps},
+        ),
+    )
+
+
+def test_v2_publication_emits_versioned_manifest_and_pointer(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    pointer = json.loads(result.pointer_path.read_bytes())
+
+    assert manifest["contractVersion"] == "v2"
+    assert manifest["formatVersion"] == "browser-delivery-v2"
+    assert manifest["sessionMode"] == "race"
+    assert manifest["schemas"]["chunk"].endswith(":v2:chunk")
+    assert manifest["schemas"]["trackAssets"].endswith(":v2:track-assets")
+    assert "track-assets" not in manifest["schemas"]
+    assert pointer["formatVersion"] == "browser-delivery-v2"
+    assert manifest["chunks"][0]["schemaId"].endswith(":v2:chunk")
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def test_v2_pointer_validation_accepts_canonical_shape_and_rejects_mixed_format(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    pointer = json.loads(result.pointer_path.read_bytes())
+
+    assert validate_browser_delivery_pointer(pointer, contract_version="v2") == "delivery-v2"
+
+    mixed = dict(pointer)
+    mixed["formatVersion"] = "browser-delivery-v1"
+    with pytest.raises(BrowserDeliveryPublicationError, match="format version disagrees"):
+        validate_browser_delivery_pointer(mixed, contract_version="v2")
+
+
+@pytest.mark.parametrize("session_mode", ["qualifying", "sprint-qualifying", "sprint-shootout"])
+def test_v2_qualifying_like_publication_emits_qualifying_summary(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_delivery(session_mode),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert manifest["sessionMode"] == session_mode
+    assert manifest["qualifyingSummary"]["path"] == "qualifying-summary.json"
+    assert manifest["qualifyingSummary"]["schemaId"] == QUALIFYING_SUMMARY_SCHEMA_ID
+    assert manifest["schemas"]["qualifyingSummary"] == QUALIFYING_SUMMARY_SCHEMA_ID
+
+    qualifying = json.loads(result.qualifying_summary_path.read_bytes())  # type: ignore[union-attr]
+    assert qualifying["drivers"]["HAM"] == {
+        "qualifyingPosition": [1],
+        "q1TimeMs": [90_000],
+        "q2TimeMs": [88_500],
+        "q3TimeMs": [87_200],
+        "bestLapNumber": [2],
+        "bestLapTimeMs": [88_500],
+    }
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def test_v2_qualifying_summary_rejects_partial_rankings(tmp_path: Path) -> None:
+    delivery = _v2_qualifying_delivery()
+    empty_results = delivery.source.frames["results"].filter(pl.col("driver_id") == "MISSING")
+    source = replace(
+        delivery.source,
+        frames={**delivery.source.frames, "results": empty_results},
+    )
+
+    with pytest.raises(
+        BrowserDeliveryPublicationError, match="driver IDs disagree with the manifest",
+    ):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+            delivery=replace(delivery, source=source),
+            schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+        )
+    assert not (tmp_path / "browser").exists()
+
+
+def test_v2_manifest_rejects_race_only_sidecars_for_non_race_modes() -> None:
+    drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+                "colorHex": "#000000", "carNumber": "44"},)
+    reference = {
+        "path": "timeline-summary.json",
+        "schemaId": V2_TIMELINE_SUMMARY_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+    for mode in ("practice", "qualifying", "sprint-shootout"):
+        with pytest.raises(ValueError, match="race-only browser sidecars are invalid"):
+            BrowserManifest(
+                "race-one", "Race One", drivers, timeline_summary=reference,
+                session_mode=mode, contract_version="v2",
+            )
+
+
+def test_v2_manifest_rejects_v1_artifact_references() -> None:
+    drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+                "colorHex": "#000000", "carNumber": "44"},)
+    reference = {
+        "path": "lap-sector-sidecar.json",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(ValueError, match="v2 manifests must reference v2 artifacts"):
+        BrowserManifest(
+            "race-one", "Race One", drivers, lap_sector_sidecar=reference,
+            session_mode="practice", contract_version="v2",
+        )
+
+
+def test_v2_manifest_rejects_qualifying_summary_for_non_qualifying_mode() -> None:
+    drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+                "colorHex": "#000000", "carNumber": "44"},)
+    reference = {
+        "path": "qualifying-summary.json",
+        "schemaId": QUALIFYING_SUMMARY_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(ValueError, match="qualifying_summary is valid only for qualifying-like modes"):
+        BrowserManifest(
+            "race-one", "Race One", drivers, qualifying_summary=reference,
+            session_mode="race", contract_version="v2",
+        )
+
+
+@pytest.mark.parametrize(("schema_root", "contract_version"), [
+    (SCHEMA_ROOT, "v2"),
+    (SCHEMA_ROOT_V2, "v1"),
+])
+def test_publication_rejects_mixed_contract_schema_roots(
+    tmp_path: Path, schema_root: Path, contract_version: str,
+) -> None:
+    with pytest.raises(BrowserDeliveryPublicationError, match="schema registry|schema validation"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+            delivery=_v2_delivery(), schema_root=schema_root,
+            contract_version=contract_version,  # type: ignore[arg-type]
+        )
+    assert not (tmp_path / "browser").exists()
+
+
+def test_complete_validator_rejects_unsafe_v2_artifact_path(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["chunks"][0]["path"] = "../escape.json"
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "escapes its delivery" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_v2_chunk_checksum_mismatch(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    chunk_path = result.chunk_paths[0]
+    chunk_path.write_bytes(chunk_path.read_bytes().replace(b'"startMs":0', b'"startMs":1'))
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "checksum disagrees for chunks/chunk-001.json" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_v2_pointer_manifest_checksum_mismatch(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    manifest_path = result.manifest_path
+    manifest_path.write_bytes(manifest_path.read_bytes().replace(b'"fixtureName"', b'"fixtureNameX"'))
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "pointer manifest checksum disagrees" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_a_symlinked_v2_generation(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    result.generation_path.rename(outside / "real")
+    result.generation_path.symlink_to(outside / "real", target_is_directory=True)
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed"):
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
 
 
 def test_publication_is_byte_identical(tmp_path: Path) -> None:
@@ -642,6 +936,25 @@ def test_publication_rejects_a_symlinked_root(tmp_path: Path) -> None:
         _publish(browser)
 
     assert tuple(outside.iterdir()) == ()
+
+
+def test_complete_validator_rejects_pointer_path_outside_delivery_root(tmp_path: Path) -> None:
+    # Arrange
+    browser = tmp_path / "browser"
+    result = publish_browser_delivery(
+        browser_parent=browser, delivery_version="delivery-v2",
+        delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+
+    # Act / Assert
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed"):
+        validate_complete_browser_delivery(
+            browser,
+            expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64,
+            schema_root=SCHEMA_ROOT_V2,
+            pointer_path=result.pointer_path.parent.parent / "outside" / "browser-current.json",
+        )
 
 
 def test_publication_rejects_a_symlinked_generations_directory(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import cast
 
 import polars as pl
@@ -31,9 +32,10 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryPublicationError,
     publish_browser_delivery,
+    validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress, read_validated_canonical_generation
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2 as CANONICAL_TABLE_SCHEMAS
 from f1_replay_pipeline.storage.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 from f1_replay_pipeline.domain.validators import CanonicalValidationError
@@ -42,6 +44,7 @@ from f1_replay_pipeline.analysis.live_position.live_position_quality import Proj
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
+CONTRACT_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2"
 FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
 
 
@@ -402,6 +405,352 @@ def test_browser_delivery_fails_closed_without_lap_one_rows(tmp_path: Path) -> N
         build_browser_delivery(read_validated_canonical_generation(canonical_parent), _track_assets())
 
 
+@pytest.mark.parametrize("session_mode", ["practice", "qualifying", "sprint-qualifying", "sprint-shootout"])
+def test_non_race_browser_delivery_uses_native_boundary_without_race_artifacts(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    # Arrange: the session has no Lap 1, but native telemetry begins at zero.
+    frames = _canonical_frames(lap_number=2, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit(session_mode).alias("session_mode"),
+    )
+    canonical_parent = tmp_path / session_mode
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive browser fields from the earliest usable non-race boundary.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+
+    # Assert: raw observations remain available while race projections stay null.
+    assert delivery.chunks[0].start_ms == 0
+    assert all(order is None for chunk in delivery.chunks for order in chunk.leaderboard_order)
+    assert all(
+        value is None
+        for chunk in delivery.chunks
+        for fields in chunk.drivers.values()
+        for value in fields.track_distance_meters + fields.gap_to_leader_ms + fields.position
+    )
+    assert all(
+        value is None
+        for chunk in delivery.chunks
+        for fields in chunk.drivers.values()
+        for value in fields.is_finished
+    )
+    assert delivery.projection_quality_assessment is None
+    assert delivery.timeline_summary is None
+    assert delivery.pit_loss_model is None
+    assert delivery.manifest.lap_starts == ()
+    assert delivery.lap_sector_sidecar is not None
+    assert delivery.stint_summary is not None
+
+    published_browser = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-v2",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+    manifest = _load_json(published_browser.manifest_path)
+    assert manifest["formatVersion"] == "browser-delivery-v2"
+    assert "timelineSummary" not in manifest
+    assert "pitLossModel" not in manifest
+    assert manifest["lapSectorSidecar"]["schemaId"].endswith(":v2:browser-lap-sector-sidecar")
+    assert manifest["stintSummary"]["schemaId"].endswith(":v2:stint-summary")
+    if session_mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}:
+        assert manifest["qualifyingSummary"]["schemaId"].endswith(":v2:qualifying-summary")
+    else:
+        assert "qualifyingSummary" not in manifest
+    # Assert: every v2 reference is safe, digest-bound, and every chunk column aligns.
+    assert manifest["trackAssets"]["path"] == "track-assets.json"
+    assert manifest["trackAssets"]["schemaId"].endswith(":v2:track-assets")
+    assert re.fullmatch(r"[0-9a-f]{64}", str(manifest["trackAssets"]["sha256"])) is not None
+    for reference in manifest["chunks"]:
+        assert reference["path"].startswith("chunks/chunk-")
+        assert reference["schemaId"].endswith(":v2:chunk")
+        assert re.fullmatch(r"[0-9a-f]{64}", str(reference["sha256"])) is not None
+    for chunk in (_load_json(path) for path in published_browser.chunk_paths):
+        times = chunk["timeMs"]
+        aligned = (chunk["leaderboardOrder"], chunk["trackStatusCode"], chunk["weatherState"])
+        aligned += tuple(column for fields in chunk["drivers"].values() for column in fields.values())
+        assert all(len(column) == len(times) for column in aligned)
+    validate_complete_browser_delivery(
+        tmp_path / "browser-v2",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
+def test_testing_browser_delivery_is_rejected_at_the_active_boundary(tmp_path: Path) -> None:
+    # Arrange: testing is a recognized canonical mode but has no browser semantics.
+    frames = _canonical_frames(lap_number=2, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("testing").alias("session_mode"),
+    )
+    canonical_parent = tmp_path / "testing"
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v2")
+
+    # Act / Assert: the active builder fails explicitly instead of projecting a race.
+    with pytest.raises(BrowserDeliveryBuildError, match="testing sessions are not supported"):
+        build_browser_delivery(
+            read_validated_canonical_generation(canonical_parent), _track_assets(),
+        )
+
+
+@pytest.mark.parametrize("session_mode", ["practice", "qualifying", "sprint-shootout"])
+def test_non_race_delivery_uses_the_earliest_native_telemetry_boundary(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    # Arrange: there is no Lap 1 and native telemetry does not begin at zero.
+    frames = _canonical_frames(lap_number=2, lap_one_start_ms=5_000)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit(session_mode).alias("session_mode"),
+    )
+    frames["car_telemetry"] = frames["car_telemetry"].with_columns(
+        (pl.col("session_time_ms") + 5_000).alias("session_time_ms"),
+    )
+    frames["position_telemetry"] = frames["position_telemetry"].with_columns(
+        (pl.col("session_time_ms") + 5_000).alias("session_time_ms"),
+    )
+    canonical_parent = tmp_path / session_mode
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive the browser delivery from the earliest usable non-race sample.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+
+    # Assert: the replay boundary is the earliest native observation, not zero.
+    assert delivery.chunks[0].start_ms == delivery.chunks[0].time_ms[0] == 5_000
+    assert all(
+        time_ms >= 5_000
+        for chunk in delivery.chunks
+        for time_ms in chunk.time_ms
+    )
+
+
+def test_qualifying_summary_publishes_q1_q2_q3_and_best_lap_data(tmp_path: Path) -> None:
+    # Arrange: a qualifying session with segment times and two timed runs.
+    frames = _canonical_frames(lap_number=2, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("qualifying").alias("session_mode"),
+    )
+    frames["results"] = frames["results"].with_columns(
+        pl.lit(90_000, dtype=pl.Int64).alias("q1_time_ms"),
+        pl.lit(88_500, dtype=pl.Int64).alias("q2_time_ms"),
+        pl.lit(87_200, dtype=pl.Int64).alias("q3_time_ms"),
+    )
+    frames["laps"] = pl.DataFrame([
+        _row(
+            "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
+            lap_end_time_ms=90_000, lap_duration_ms=90_000, compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
+            lap_end_time_ms=178_500, lap_duration_ms=88_500, compound="MEDIUM",
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    canonical_parent = tmp_path / "canonical-qualifying"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: publish the derived v2 delivery with its qualifying-only artifact.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-qualifying",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: the summary carries aligned segment and best-lap columns in order.
+    manifest = _load_json(published.manifest_path)
+    qualifying = _load_json(published.qualifying_summary_path)
+    assert manifest["qualifyingSummary"]["path"] == "qualifying-summary.json"
+    assert manifest["qualifyingSummary"]["schemaId"].endswith(":v2:qualifying-summary")
+    assert qualifying["drivers"]["HAM"] == {
+        "qualifyingPosition": [1],
+        "q1TimeMs": [90_000],
+        "q2TimeMs": [88_500],
+        "q3TimeMs": [87_200],
+        "bestLapNumber": [2],
+        "bestLapTimeMs": [88_500],
+    }
+    validate_complete_browser_delivery(
+        tmp_path / "browser-qualifying",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
+def test_qualifying_summary_best_lap_ignores_deleted_and_null_duration_runs(tmp_path: Path) -> None:
+    # Arrange: qualifying runs include a deleted lap, a null-duration lap, and
+    # two valid timed laps so the fastest valid run wins deterministically.
+    frames = _canonical_frames(lap_number=4, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("qualifying").alias("session_mode"),
+    )
+    frames["results"] = frames["results"].with_columns(
+        pl.lit(95_000, dtype=pl.Int64).alias("q1_time_ms"),
+        pl.lit(None, dtype=pl.Int64).alias("q2_time_ms"),
+        pl.lit(None, dtype=pl.Int64).alias("q3_time_ms"),
+    )
+    frames["laps"] = pl.DataFrame([
+        _row(
+            "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
+            lap_end_time_ms=90_000, lap_duration_ms=90_000, deleted=True, compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
+            lap_end_time_ms=180_000, lap_duration_ms=None, compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=3, lap_start_time_ms=180_000,
+            lap_end_time_ms=275_000, lap_duration_ms=95_000, compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=4, lap_start_time_ms=275_000,
+            lap_end_time_ms=369_000, lap_duration_ms=94_000, compound="MEDIUM",
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    canonical_parent = tmp_path / "canonical-qualifying-runs"
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: publish the delivery with the qualifying summary.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-qualifying-runs",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: only the fastest valid run is published as the best lap.
+    qualifying = _load_json(published.qualifying_summary_path)
+    assert qualifying["drivers"]["HAM"]["bestLapNumber"] == [4]
+    assert qualifying["drivers"]["HAM"]["bestLapTimeMs"] == [94_000]
+
+
+def test_practice_lap_pace_semantics_are_published_in_sidecar_without_race_lap_starts(
+    tmp_path: Path,
+) -> None:
+    # Arrange: a practice session has two completed timed runs and no race start.
+    frames = _canonical_frames(lap_number=2, lap_one_start_ms=0)
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("practice").alias("session_mode"),
+    )
+    frames["laps"] = pl.DataFrame([
+        _row(
+            "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
+            lap_end_time_ms=90_000, lap_duration_ms=90_000, compound="MEDIUM",
+        ),
+        _row(
+            "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
+            lap_end_time_ms=178_500, lap_duration_ms=88_500, compound="MEDIUM",
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
+    canonical_parent = tmp_path / "canonical-practice"
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive the practice delivery and publish it as v2.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-practice",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: pace comes from the lap/sector sidecar, never fabricated lap starts
+    # or race-only timeline/pit-loss artifacts.
+    assert delivery.manifest.lap_starts == ()
+    sidecar = delivery.lap_sector_sidecar
+    assert sidecar is not None
+    assert sidecar.drivers["HAM"].lap_number == (1, 2)
+    assert sidecar.drivers["HAM"].lap_duration_ms == (90_000, 88_500)
+    assert delivery.timeline_summary is None
+    assert delivery.pit_loss_model is None
+    assert delivery.projection_quality_assessment is None
+    manifest = _load_json(published.manifest_path)
+    assert manifest["sessionMode"] == "practice"
+    assert "lapStarts" not in manifest
+    assert "timelineSummary" not in manifest
+    assert "pitLossModel" not in manifest
+    assert manifest["lapSectorSidecar"]["path"] == "lap-sector-sidecar.json"
+
+
+def test_v1_browser_delivery_is_rejected_at_the_v2_validation_boundary(tmp_path: Path) -> None:
+    # Arrange: a valid v1 browser delivery is published against the frozen v1 schemas.
+    canonical_parent = tmp_path / "canonical"
+    published_canonical = publish_canonical_generation(
+        frames=_canonical_frames(), target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    browser_parent = tmp_path / "browser-v1"
+    publish_browser_delivery(
+        browser_parent=browser_parent, delivery_version="delivery-v1", delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+    # Act / Assert: the same artifact is rejected at the active v2 boundary.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            browser_parent,
+            expected_generation_id="canonical-v1",
+            expected_manifest_sha256=published_canonical.manifest_sha256,
+            schema_root=CONTRACT_ROOT_V2 / "schemas",
+        )
+    assert error.value.__cause__ is not None
+    assert "schema validation" in str(error.value.__cause__)
+
+
+def test_v2_browser_delivery_is_rejected_at_the_v1_validation_boundary(tmp_path: Path) -> None:
+    # Arrange: a valid v2 race delivery is published against the v2 schemas.
+    canonical_parent = tmp_path / "canonical-v2"
+    published_canonical = publish_canonical_generation(
+        frames=_canonical_frames(), target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    browser_parent = tmp_path / "browser-v2"
+    publish_browser_delivery(
+        browser_parent=browser_parent, delivery_version="delivery-v2", delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas", contract_version="v2",
+    )
+
+    # Act / Assert: v2 artifacts cannot be verified through the frozen v1 schemas.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed"):
+        validate_complete_browser_delivery(
+            browser_parent,
+            expected_generation_id="canonical-v2",
+            expected_manifest_sha256=published_canonical.manifest_sha256,
+            schema_root=CONTRACT_ROOT / "schemas",
+        )
+
+
 def test_delivery_timeline_unions_canonical_timestamps_and_filters_pre_race_values() -> None:
     frames = _canonical_frames(lap_one_start_ms=5_501, include_pre_race=True)
     frames["car_telemetry"] = pl.DataFrame([
@@ -508,6 +857,20 @@ def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compati
     assert {snapshot["id"] for snapshot in golden["snapshots"]} >= {
         "overlap-ownership-at-1500", "interpolated-sparse-event-at-2600"
     }
+    # Assert: the explicit v1 historical contract remains frozen with no v2
+    # session-mode metadata or v2 schema identifiers leaking into the fixture.
+    assert manifest["contractVersion"] == "v1"
+    assert "sessionMode" not in manifest
+    assert "formatVersion" not in manifest
+    assert manifest["schemas"]["manifest"] == "urn:f1-cache-replay:schema:replay-data:v1:manifest"
+    assert manifest["trackAssets"]["path"] == "track-assets.json"
+    assert manifest["goldenSnapshots"]["path"] == "golden-snapshots.json"
+    assert track_assets["contractVersion"] == "v1"
+    assert all(chunk.get("contractVersion") == "v1" for chunk in chunks)
+    assert all(
+        reference["schemaId"].startswith("urn:f1-cache-replay:schema:replay-data:v1:")
+        for reference in manifest["chunks"]
+    )
 
 
 def test_passing_quality_assessment_derives_dynamic_positions_gaps_and_overlap_without_new_timestamps(tmp_path: Path, monkeypatch) -> None:
@@ -1013,7 +1376,7 @@ def _row(table: str, **changes: object) -> dict[str, object]:
     row = {column: None for column in CANONICAL_TABLE_SCHEMAS[table]}
     row.update({"session_id": "synthetic-race", "driver_id": "HAM"})
     row.update({
-        "session_metadata": {"year": 2026, "round_number": 1, "event_name": "Synthetic Grand Prix", "session_name": "Race", "session_type": "R", "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+        "session_metadata": {"year": 2026, "round_number": 1, "event_name": "Synthetic Grand Prix", "session_name": "Race", "session_type": "R", "session_mode": "race", "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc)},
         "drivers": {"source_driver_key": "44", "driver_number": 44, "full_name": "Lewis Hamilton", "team_name": "Mercedes", "team_colour": "00D2BE"},
         "car_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "car"},
         "position_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "pos"},

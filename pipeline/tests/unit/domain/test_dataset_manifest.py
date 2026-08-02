@@ -21,6 +21,9 @@ from f1_replay_pipeline.domain.dataset_manifest import (
     serialize_current_pointer,
     serialize_deterministic_json,
     serialize_manifest,
+    FORMAT_VERSION_V2,
+    MANIFEST_VERSION_V2,
+    schema_tokens_for_version,
 )
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 
@@ -115,6 +118,68 @@ def test_manifest_rejects_table_schema_that_does_not_preserve_canonical_tokens()
         TableManifestEntry(
             "drivers", "tables/drivers.parquet", 0,
             tuple(reversed(schema_tokens_for("drivers"))), _DIGEST, "b" * 64,
+        )
+
+
+def test_v2_contract_exposes_versioned_manifest_and_table_tokens():
+    manifest = DatasetManifest(
+        "2026-07-15T120000Z-abc",
+        {name: TableManifestEntry(
+            name=name,
+            path=f"tables/{name}.parquet",
+            row_count=0,
+            schema=schema_tokens_for_version(name, "v2"),
+            logical_sha256=_DIGEST,
+            byte_sha256="b" * 64,
+        ) for name in CANONICAL_MANIFEST_TABLE_NAMES},
+        DEFAULT_WRITER_SETTINGS,
+        format_version=FORMAT_VERSION_V2,
+        manifest_version=MANIFEST_VERSION_V2,
+    )
+
+    assert manifest.schema_token == "canonical-parquet-v2:manifest"
+    assert cast(tuple[TableManifestEntry, ...], manifest.tables)[0].schema_token == (
+        "canonical-parquet-v2:table:session_metadata"
+    )
+    assert manifest.to_dict()["format_version"] == FORMAT_VERSION_V2
+
+
+def test_v2_manifest_rejects_v1_table_schema_tokens():
+    entries = {
+        name: TableManifestEntry(
+            name=name,
+            path=f"tables/{name}.parquet",
+            row_count=0,
+            schema=schema_tokens_for(name),
+            logical_sha256=_DIGEST,
+            byte_sha256="b" * 64,
+        ) for name in CANONICAL_MANIFEST_TABLE_NAMES
+    }
+
+    with pytest.raises(ManifestValidationError, match="mixed-version"):
+        DatasetManifest(
+            "2026-07-15T120000Z-abc", entries, DEFAULT_WRITER_SETTINGS,
+            format_version=FORMAT_VERSION_V2, manifest_version=MANIFEST_VERSION_V2,
+        )
+
+
+def test_manifest_rejects_an_explicit_unknown_table_schema_version():
+    with pytest.raises(ManifestValidationError, match="schema_version must be v1 or v2"):
+        TableManifestEntry(
+            name="drivers", path="tables/drivers.parquet", row_count=0,
+            schema=schema_tokens_for("drivers"), logical_sha256=_DIGEST,
+            byte_sha256="b" * 64, schema_version="",  # type: ignore[arg-type]
+        )
+
+
+def test_manifest_versions_cannot_be_mixed():
+    with pytest.raises(ManifestValidationError, match="mixed"):
+        DatasetManifest(
+            "2026-07-15T120000Z-abc",
+            {name: _entry(name) for name in CANONICAL_MANIFEST_TABLE_NAMES},
+            DEFAULT_WRITER_SETTINGS,
+            format_version=FORMAT_VERSION_V2,
+            manifest_version=MANIFEST_VERSION_V2,
         )
 
 

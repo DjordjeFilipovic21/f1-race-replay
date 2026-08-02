@@ -60,7 +60,7 @@ def test_browser_pointer_uses_existing_browser_pointer_shape(tmp_path: Path) -> 
     successor_digest = hashlib.sha256((successor / "manifest.json").read_bytes()).hexdigest()
     path = write_session_browser_pointer(browser, "r", "delivery", digest)
     pointer = json.loads(path.read_bytes())
-    assert pointer["formatVersion"] == "browser-delivery-v1"
+    assert pointer["formatVersion"] == "browser-delivery-v2"
     assert "manifestPath" in pointer
     write_session_browser_pointer(browser, "r", "delivery-browser-1", successor_digest)
     assert json.loads((browser / "sessions" / "r" / "browser-current.json").read_bytes())["deliveryVersion"] == "delivery-browser-1"
@@ -194,3 +194,35 @@ def test_optional_session_pointer_returns_immutable_existing_bytes(tmp_path: Pat
     pointer.write_bytes(payload)
 
     assert read_optional_session_pointer(root, "r", "current.json") == payload
+
+
+@pytest.mark.parametrize("session_code", ["../escape", "/absolute", "nested/code", "nested\\code", "nul\x00code"])
+def test_session_pointer_writers_reject_malicious_session_components(
+    tmp_path: Path, session_code: str,
+) -> None:
+    # Arrange
+    root = tmp_path / "canonical"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="safe path component"):
+        write_session_canonical_pointer(root, session_code, "generation", "a" * 64)
+    assert not root.exists()
+
+
+def test_session_browser_reader_rejects_historical_v1_manifest(tmp_path: Path) -> None:
+    # Arrange
+    browser = tmp_path / "browser"
+    generation = browser / "generations" / "delivery"
+    generation.mkdir(parents=True)
+    manifest = json.dumps({
+        "formatVersion": "browser-delivery-v1",
+        "contractVersion": "v1",
+        "deliveryVersion": "delivery",
+    }, separators=(",", ":")).encode() + b"\n"
+    (generation / "manifest.json").write_bytes(manifest)
+    digest = hashlib.sha256(manifest).hexdigest()
+    write_session_browser_pointer(browser, "r", "delivery", digest)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="contract identity"):
+        read_session_browser_pointer(browser, "r")

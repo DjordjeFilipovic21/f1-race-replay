@@ -11,6 +11,8 @@ from typing import Literal, cast
 
 import polars as pl
 
+from f1_replay_pipeline.domain.session_modes import SessionMode, normalize_session_mode
+
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DRIVER_ID = re.compile(r"[A-Z0-9]{2,4}\Z")
@@ -22,7 +24,28 @@ PENALTY_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:penalty-s
 BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
 STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
 PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
+V2_SCHEMA_PREFIX = "urn:f1-cache-replay:schema:replay-data:v2:"
+V2_MANIFEST_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}manifest"
+V2_CHUNK_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}chunk"
+V2_TRACK_ASSETS_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}track-assets"
+V2_TIMELINE_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}timeline-summary"
+V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}browser-lap-sector-sidecar"
+V2_PENALTY_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}penalty-sidecar"
+V2_STINT_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}stint-summary"
+V2_PIT_LOSS_MODEL_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}pit-loss-model"
+QUALIFYING_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}qualifying-summary"
+ContractVersion = Literal["v1", "v2"]
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
+
+
+def _validate_contract_version(value: object) -> ContractVersion:
+    if value not in {"v1", "v2"}:
+        raise ValueError("contract_version must be v1 or v2")
+    return cast(ContractVersion, value)
+
+
+def _schema_for_version(version: ContractVersion, v1: str, v2: str) -> str:
+    return v2 if version == "v2" else v1
 
 
 def deep_freeze_json(value: object) -> object:
@@ -91,8 +114,8 @@ class BrowserDriverFields:
     tyre_age: tuple[int | None, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.driver_id, str) or not self.driver_id:
-            raise ValueError("driver_id must be a non-empty string")
+        if not isinstance(self.driver_id, str) or not _DRIVER_ID.fullmatch(self.driver_id):
+            raise ValueError("driver_id must match the canonical identifier pattern")
         if tuple(sorted(set(self.time_ms))) != self.time_ms:
             raise ValueError("time_ms must be sorted unique integer milliseconds")
         if not all(type(value) is int and 0 <= value <= MAX_INT64 for value in self.time_ms):
@@ -200,6 +223,7 @@ class BrowserLapSectorSidecar:
 
     fixture_id: str
     drivers: Mapping[str, BrowserDriverLapSector]
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -212,11 +236,12 @@ class BrowserLapSectorSidecar:
             raise ValueError("driver IDs must be unique")
         if any(not isinstance(value, BrowserDriverLapSector) for value in self.drivers.values()):
             raise TypeError("drivers must map to BrowserDriverLapSector values")
+        _validate_contract_version(self.contract_version)
         object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
         }
@@ -272,6 +297,7 @@ class BrowserPenaltySidecar:
 
     fixture_id: str
     penalty_issuances: tuple[BrowserPenaltyIssuance, ...]
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -279,11 +305,12 @@ class BrowserPenaltySidecar:
         issuances = tuple(self.penalty_issuances)
         if any(not isinstance(value, BrowserPenaltyIssuance) for value in issuances):
             raise TypeError("penalty_issuances must contain BrowserPenaltyIssuance values")
+        _validate_contract_version(self.contract_version)
         object.__setattr__(self, "penalty_issuances", issuances)
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "penaltyIssuances": [issuance.as_dict() for issuance in self.penalty_issuances],
         }
@@ -371,6 +398,7 @@ class BrowserStintSummary:
 
     fixture_id: str
     drivers: Mapping[str, BrowserDriverStintSummary]
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -383,11 +411,12 @@ class BrowserStintSummary:
             raise ValueError("driver IDs must be unique")
         if any(not isinstance(value, BrowserDriverStintSummary) for value in self.drivers.values()):
             raise TypeError("drivers must map to BrowserDriverStintSummary values")
+        _validate_contract_version(self.contract_version)
         object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "drivers": {driver_id: driver.as_dict() for driver_id, driver in self.drivers.items()},
         }
@@ -456,10 +485,12 @@ class BrowserTimelineSummary:
     end_ms: int
     intervals: tuple[BrowserTimelineInterval, ...] = ()
     dnf_markers: tuple[BrowserDnfMarker, ...] = ()
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
             raise ValueError("timeline summary fixture_id must be a non-empty string")
+        _validate_contract_version(self.contract_version)
         if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in (self.start_ms, self.end_ms)):
             raise ValueError("timeline summary bounds must be non-negative signed Int64 integers")
         if self.start_ms >= self.end_ms:
@@ -491,7 +522,7 @@ class BrowserTimelineSummary:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "startMs": self.start_ms,
             "endMs": self.end_ms,
@@ -519,10 +550,12 @@ class BrowserPitLossModel:
     time_ms: tuple[int, ...]
     estimated_loss_ms: tuple[int, ...]
     observed_sample_count: tuple[int, ...]
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
             raise ValueError("pit loss model fixture_id must be a non-empty string")
+        _validate_contract_version(self.contract_version)
         if self.method != "global-prior-weighted-mean-v1":
             raise ValueError("pit loss model method is invalid")
         _validate_signed_int64(self.baseline_ms, "baseline_ms", minimum=1)
@@ -559,7 +592,7 @@ class BrowserPitLossModel:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "method": self.method,
             "baselineMs": self.baseline_ms,
@@ -598,7 +631,7 @@ class BrowserTimelineSummaryReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "timeline-summary.json":
             raise ValueError("timeline summary path must be timeline-summary.json")
-        if self.schema_id != TIMELINE_SUMMARY_SCHEMA_ID:
+        if self.schema_id not in {TIMELINE_SUMMARY_SCHEMA_ID, V2_TIMELINE_SUMMARY_SCHEMA_ID}:
             raise ValueError("timeline summary schema_id is invalid")
 
 
@@ -610,7 +643,7 @@ class BrowserLapSectorSidecarReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "lap-sector-sidecar.json":
             raise ValueError("lap sector sidecar path must be lap-sector-sidecar.json")
-        if self.schema_id != BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID:
+        if self.schema_id not in {BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID, V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID}:
             raise ValueError("lap sector sidecar schema_id is invalid")
 
 
@@ -622,7 +655,7 @@ class BrowserPenaltySidecarReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "penalty-sidecar.json":
             raise ValueError("penalty sidecar path must be penalty-sidecar.json")
-        if self.schema_id != PENALTY_SIDECAR_SCHEMA_ID:
+        if self.schema_id not in {PENALTY_SIDECAR_SCHEMA_ID, V2_PENALTY_SIDECAR_SCHEMA_ID}:
             raise ValueError("penalty sidecar schema_id is invalid")
 
 
@@ -634,7 +667,7 @@ class BrowserStintSummaryReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "stint-summary.json":
             raise ValueError("stint summary path must be stint-summary.json")
-        if self.schema_id != STINT_SUMMARY_SCHEMA_ID:
+        if self.schema_id not in {STINT_SUMMARY_SCHEMA_ID, V2_STINT_SUMMARY_SCHEMA_ID}:
             raise ValueError("stint summary schema_id is invalid")
 
 
@@ -646,8 +679,100 @@ class BrowserPitLossModelReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "pit-loss-model.json":
             raise ValueError("pit loss model path must be pit-loss-model.json")
-        if self.schema_id != PIT_LOSS_MODEL_SCHEMA_ID:
+        if self.schema_id not in {PIT_LOSS_MODEL_SCHEMA_ID, V2_PIT_LOSS_MODEL_SCHEMA_ID}:
             raise ValueError("pit loss model schema_id is invalid")
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingSummaryReference(BrowserArtifactReference):
+    """Manifest reference for the qualifying-like v2 summary."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "qualifying-summary.json" or self.schema_id != QUALIFYING_SUMMARY_SCHEMA_ID:
+            raise ValueError("qualifying summary reference is invalid")
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingDriverSummary:
+    """Aligned qualifying result columns for one driver.
+
+    The columns are arrays rather than scalar result fields so a summary can
+    retain repeated qualifying attempts or future segment extensions without
+    changing the artifact shape.  Current publishers emit one row per driver.
+    """
+
+    qualifying_position: tuple[int | None, ...]
+    q1_time_ms: tuple[int | None, ...]
+    q2_time_ms: tuple[int | None, ...]
+    q3_time_ms: tuple[int | None, ...]
+    best_lap_number: tuple[int | None, ...] = ()
+    best_lap_time_ms: tuple[int | None, ...] = ()
+
+    def __post_init__(self) -> None:
+        columns = (
+            self.qualifying_position, self.q1_time_ms, self.q2_time_ms,
+            self.q3_time_ms, self.best_lap_number, self.best_lap_time_ms,
+        )
+        if any(not isinstance(column, tuple) for column in columns):
+            raise TypeError("qualifying summary columns must be tuples")
+        size = len(self.qualifying_position)
+        if not self.best_lap_number:
+            object.__setattr__(self, "best_lap_number", (None,) * size)
+        if not self.best_lap_time_ms:
+            object.__setattr__(self, "best_lap_time_ms", (None,) * size)
+        columns = (
+            self.qualifying_position, self.q1_time_ms, self.q2_time_ms,
+            self.q3_time_ms, self.best_lap_number, self.best_lap_time_ms,
+        )
+        if any(len(column) != size for column in columns):
+            raise ValueError("qualifying summary columns must be aligned")
+        if any(value is not None and (type(value) is not int or value < 1) for value in self.qualifying_position):
+            raise ValueError("qualifying positions must be positive integers or null")
+        for column in (self.q1_time_ms, self.q2_time_ms, self.q3_time_ms, self.best_lap_time_ms):
+            if any(value is not None and (type(value) is not int or not 0 <= value <= MAX_INT64) for value in column):
+                raise ValueError("qualifying times must be signed non-negative Int64 integers or null")
+        if any(value is not None and (type(value) is not int or value < 1) for value in self.best_lap_number):
+            raise ValueError("best lap numbers must be positive integers or null")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "qualifyingPosition": list(self.qualifying_position),
+            "q1TimeMs": list(self.q1_time_ms),
+            "q2TimeMs": list(self.q2_time_ms),
+            "q3TimeMs": list(self.q3_time_ms),
+            "bestLapNumber": list(self.best_lap_number),
+            "bestLapTimeMs": list(self.best_lap_time_ms),
+        }
+
+
+@dataclass(frozen=True)
+class BrowserQualifyingSummary:
+    """Optional qualifying-only result and best-lap artifact."""
+
+    fixture_id: str
+    drivers: Mapping[str, BrowserQualifyingDriverSummary]
+    contract_version: ContractVersion = "v2"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not self.fixture_id:
+            raise ValueError("qualifying summary fixture_id must be a non-empty string")
+        if self.contract_version != "v2":
+            raise ValueError("qualifying summary is available only in contract version v2")
+        if not isinstance(self.drivers, Mapping) or not self.drivers:
+            raise ValueError("qualifying summary drivers must be a non-empty mapping")
+        if any(not isinstance(key, str) or not _DRIVER_ID.fullmatch(key) for key in self.drivers):
+            raise ValueError("qualifying summary driver IDs are invalid")
+        if any(not isinstance(value, BrowserQualifyingDriverSummary) for value in self.drivers.values()):
+            raise TypeError("qualifying summary drivers have invalid columns")
+        object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "contractVersion": "v2",
+            "fixtureId": self.fixture_id,
+            "drivers": {driver_id: value.as_dict() for driver_id, value in self.drivers.items()},
+        }
 
 
 @dataclass(frozen=True)
@@ -665,18 +790,38 @@ class BrowserManifest:
     penalty_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
     season_metadata: Mapping[str, object] | None = None
     telemetry_capabilities: Mapping[str, object] | None = None
+    qualifying_summary: BrowserArtifactReference | Mapping[str, object] | None = None
+    session_mode: SessionMode | None = None
+    contract_version: ContractVersion = "v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
             raise ValueError("fixture_id must be a non-empty string")
         if not isinstance(self.fixture_name, str) or not self.fixture_name:
             raise ValueError("fixture_name must be a non-empty string")
+        contract_version = _validate_contract_version(self.contract_version)
+        if contract_version == "v2":
+            if self.session_mode is None:
+                raise ValueError("v2 manifests require explicit session_mode metadata")
+            try:
+                session_mode = normalize_session_mode(self.session_mode)
+            except ValueError as error:
+                raise ValueError("session_mode must be a supported normalized value") from error
+            if session_mode != self.session_mode:
+                raise ValueError("session_mode must be normalized")
+        elif self.session_mode is not None:
+            raise ValueError("v1 manifests must not contain session_mode metadata")
         frozen_drivers = tuple(
             cast(Mapping[str, object], deep_freeze_json(driver)) for driver in self.drivers
         )
         required = {"id", "displayName", "teamName", "colorHex", "carNumber"}
         if not frozen_drivers or any(set(driver) != required for driver in frozen_drivers):
             raise ValueError("drivers must contain immutable driver metadata")
+        if contract_version == "v2" and any(
+            not isinstance(driver["id"], str) or not _DRIVER_ID.fullmatch(driver["id"])
+            for driver in frozen_drivers
+        ):
+            raise ValueError("driver metadata IDs must match the canonical identifier pattern")
         if len({driver["id"] for driver in frozen_drivers}) != len(frozen_drivers):
             raise ValueError("driver metadata IDs must be unique")
         season_metadata = _freeze_season_metadata(self.season_metadata)
@@ -769,6 +914,36 @@ class BrowserManifest:
             )
         elif penalty_sidecar is not None:
             raise TypeError("penalty_sidecar must be a BrowserArtifactReference or mapping")
+        qualifying_summary = self.qualifying_summary
+        if isinstance(qualifying_summary, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(qualifying_summary) != required:
+                raise ValueError("qualifying_summary must contain path, schemaId, and sha256")
+            qualifying_summary = BrowserQualifyingSummaryReference(
+                cast(str, qualifying_summary["path"]),
+                cast(str, qualifying_summary["schemaId"]),
+                cast(str, qualifying_summary["sha256"]),
+            )
+        elif isinstance(qualifying_summary, BrowserArtifactReference):
+            qualifying_summary = BrowserQualifyingSummaryReference(
+                qualifying_summary.path, qualifying_summary.schema_id, qualifying_summary.sha256,
+            )
+        elif qualifying_summary is not None:
+            raise TypeError("qualifying_summary must be a BrowserArtifactReference or mapping")
+        if contract_version == "v2":
+            references = (timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model, penalty_sidecar, qualifying_summary)
+            if any(reference is not None and ":v1:" in reference.schema_id for reference in references):
+                raise ValueError("v2 manifests must reference v2 artifacts")
+            if self.session_mode in {
+                "practice", "qualifying", "sprint-qualifying", "sprint-shootout", "testing",
+            } and any(
+                reference is not None for reference in (timeline_summary, pit_loss_model)
+            ):
+                raise ValueError("race-only browser sidecars are invalid for this session mode")
+            if self.session_mode not in {
+                "qualifying", "sprint-qualifying", "sprint-shootout",
+            } and qualifying_summary is not None:
+                raise ValueError("qualifying_summary is valid only for qualifying-like modes")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
@@ -776,18 +951,19 @@ class BrowserManifest:
         object.__setattr__(self, "stint_summary", stint_summary)
         object.__setattr__(self, "pit_loss_model", pit_loss_model)
         object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
+        object.__setattr__(self, "qualifying_summary", qualifying_summary)
         object.__setattr__(self, "season_metadata", season_metadata)
         object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
-            "contractVersion": "v1",
+            "contractVersion": self.contract_version,
             "fixtureId": self.fixture_id,
             "fixtureName": self.fixture_name,
             "schemas": {
-                "manifest": "urn:f1-cache-replay:schema:replay-data:v1:manifest",
-                "chunk": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
-                "trackAssets": "urn:f1-cache-replay:schema:replay-data:v1:track-assets",
+                "manifest": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:manifest", V2_MANIFEST_SCHEMA_ID),
+                "chunk": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:chunk", V2_CHUNK_SCHEMA_ID),
+                "trackAssets": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:track-assets", V2_TRACK_ASSETS_SCHEMA_ID),
             },
             "drivers": [dict(driver) for driver in self.drivers],
         }
@@ -817,7 +993,32 @@ class BrowserManifest:
             value["penaltySidecar"] = cast(
                 BrowserArtifactReference, self.penalty_sidecar,
             ).as_dict()
+        if self.contract_version == "v2":
+            value["formatVersion"] = "browser-delivery-v2"
+            value["sessionMode"] = self.session_mode
+            schemas = cast(dict[str, object], value["schemas"])
+            optional_schemas = {
+                "timelineSummary": V2_TIMELINE_SUMMARY_SCHEMA_ID,
+                "lapSectorSidecar": V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+                "stintSummary": V2_STINT_SUMMARY_SCHEMA_ID,
+                "pitLossModel": V2_PIT_LOSS_MODEL_SCHEMA_ID,
+                "penaltySidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
+                "qualifyingSummary": QUALIFYING_SUMMARY_SCHEMA_ID,
+            }
+            for field_name, schema_id in optional_schemas.items():
+                if getattr(self, _camel_to_snake(field_name)) is not None:
+                    schemas[field_name] = schema_id
+        if self.qualifying_summary is not None:
+            value["qualifyingSummary"] = cast(
+                BrowserArtifactReference, self.qualifying_summary,
+            ).as_dict()
         return value
+
+
+def _camel_to_snake(value: str) -> str:
+    return value[0].lower() + "".join(
+        f"_{character.lower()}" if character.isupper() else character for character in value[1:]
+    )
 
 
 def _freeze_season_metadata(value: Mapping[str, object] | None) -> Mapping[str, object] | None:
@@ -851,11 +1052,16 @@ __all__ = [
     "BrowserLapSectorSidecarReference",
     "BrowserLapStart", "BrowserManifest", "BrowserPenaltyIssuance", "BrowserPenaltySidecar",
     "BrowserPenaltySidecarReference",
+    "BrowserQualifyingDriverSummary", "BrowserQualifyingSummary", "BrowserQualifyingSummaryReference",
     "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
+    "V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "V2_CHUNK_SCHEMA_ID", "V2_MANIFEST_SCHEMA_ID",
+    "V2_PIT_LOSS_MODEL_SCHEMA_ID", "V2_PENALTY_SIDECAR_SCHEMA_ID", "V2_STINT_SUMMARY_SCHEMA_ID",
+    "V2_TIMELINE_SUMMARY_SCHEMA_ID", "V2_TRACK_ASSETS_SCHEMA_ID", "QUALIFYING_SUMMARY_SCHEMA_ID",
+    "ContractVersion",
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
     "STINT_SUMMARY_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",

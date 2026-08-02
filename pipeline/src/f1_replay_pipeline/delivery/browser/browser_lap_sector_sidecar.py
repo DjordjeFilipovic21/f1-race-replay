@@ -1,4 +1,4 @@
-"""Pure, deterministic derivation of the compact browser lap/sector sidecar."""
+"""Pure, deterministic derivation of the mode-neutral lap/sector sidecar."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def build_lap_sector_sidecar(snapshot: CanonicalGenerationSnapshot) -> BrowserLa
     """Return a compact columnar BrowserLapSectorSidecar from canonical laps.
 
     The function is pure, immutable, and deterministic: the same canonical snapshot
-    always produces the same sidecar. Rows with a null ``lap_start_time_ms`` or
+    always produces the same sidecar for Race, Practice, or Qualifying. Rows with a null ``lap_start_time_ms`` or
     ``lap_end_time_ms`` are dropped because the sidecar contains only completed
     laps; null canonical sector/session fields are propagated as ``None``; no
     values are invented.
