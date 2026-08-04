@@ -25,6 +25,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserStintSummary,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
+    BrowserWeatherSidecar,
     CanonicalGenerationSnapshot,
     TimelineSummaryKind,
     deep_freeze_json,
@@ -37,6 +38,7 @@ from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
     extract_eligible_pit_loss_observations,
 )
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import build_stint_summary
+from f1_replay_pipeline.delivery.browser.browser_weather_sidecar import build_weather_sidecar
 from f1_replay_pipeline.analysis.live_position.live_position_progress import (
     ProgressMode,
     ProgressState,
@@ -106,6 +108,7 @@ class BrowserDeliveryBuild:
     stint_summary: BrowserStintSummary | None = None
     pit_loss_model: BrowserPitLossModel | None = None
     penalty_sidecar: BrowserPenaltySidecar | None = None
+    weather_sidecar: BrowserWeatherSidecar | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -122,6 +125,8 @@ class BrowserDeliveryBuild:
             raise TypeError("pit_loss_model must be a BrowserPitLossModel or None")
         if self.penalty_sidecar is not None and not isinstance(self.penalty_sidecar, BrowserPenaltySidecar):
             raise TypeError("penalty_sidecar must be a BrowserPenaltySidecar or None")
+        if self.weather_sidecar is not None and not isinstance(self.weather_sidecar, BrowserWeatherSidecar):
+            raise TypeError("weather_sidecar must be a BrowserWeatherSidecar or None")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -194,6 +199,7 @@ def build_browser_delivery(
         penalty_sidecar = (
             parsed_penalty_sidecar if parsed_penalty_sidecar.penalty_issuances else None
         )
+        weather_sidecar = build_weather_sidecar(snapshot)
         stint_summary = build_stint_summary(snapshot)
         observations = extract_eligible_pit_loss_observations(
             stint_summary=stint_summary,
@@ -220,7 +226,7 @@ def build_browser_delivery(
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
-        stint_summary, pit_loss_model, penalty_sidecar,
+        stint_summary, pit_loss_model, penalty_sidecar, weather_sidecar,
     )
 
 
@@ -269,9 +275,16 @@ def _delivery_timeline(snapshot: CanonicalGenerationSnapshot, race_start_ms: int
     values = {
         cast(int, time_ms)
         for table, column in timestamp_columns
-        for time_ms in snapshot.frames[table].get_column(column).drop_nulls().to_list()
+        for time_ms in _timestamp_values(snapshot.frames.get(table), column)
     }
     return tuple(sorted(time_ms for time_ms in values if time_ms >= race_start_ms))
+
+
+def _timestamp_values(frame, column: str) -> tuple[object, ...]:
+    """Read a timestamp column, treating an absent optional weather frame as empty."""
+    if frame is None:
+        return ()
+    return tuple(frame.get_column(column).drop_nulls().to_list())
 
 
 def build_timeline_summary(
@@ -351,7 +364,8 @@ def _global_fields(snapshot, timeline, driver_ids, dynamic_orders: tuple[tuple[s
     results = snapshot.frames["results"].to_dicts()
     ranked = sorted(driver_ids, key=lambda driver_id: (_result_rank(results, driver_id), driver_id))
     statuses = snapshot.frames["track_status_intervals"].to_dicts()
-    weather = snapshot.frames["weather"].to_dicts()
+    weather_frame = snapshot.frames.get("weather")
+    weather = () if weather_frame is None else weather_frame.to_dicts()
     return BrowserGlobalFields(
         timeline,
         (tuple(ranked),) * len(timeline) if dynamic_orders is None else dynamic_orders,

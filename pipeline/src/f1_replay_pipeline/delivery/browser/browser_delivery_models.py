@@ -14,6 +14,7 @@ import polars as pl
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DRIVER_ID = re.compile(r"[A-Z0-9]{2,4}\Z")
+_FIXTURE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
 TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
@@ -22,6 +23,8 @@ PENALTY_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:penalty-s
 BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
 STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
 PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
+WEATHER_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar"
+BROWSER_WEATHER_SIDECAR_SCHEMA_ID = WEATHER_SIDECAR_SCHEMA_ID
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -508,6 +511,27 @@ def _validate_signed_int64(value: object, label: str, *, minimum: int | None = N
         raise ValueError(f"{label} must be at least {minimum}")
 
 
+def _validate_weather_float_values(
+    values: tuple[object, ...],
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    exclusive_minimum: bool = False,
+) -> None:
+    """Validate nullable finite float measurements at the sidecar boundary."""
+    for value in values:
+        if value is None:
+            continue
+        if type(value) is not float or not math.isfinite(value):
+            raise TypeError(f"{label} must contain finite floats or null")
+        if minimum is not None and (value <= minimum if exclusive_minimum else value < minimum):
+            comparison = "greater than" if exclusive_minimum else "at least"
+            raise ValueError(f"{label} must be {comparison} {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{label} must be at most {maximum}")
+
+
 @dataclass(frozen=True)
 class BrowserPitLossModel:
     """Immutable causal pit-loss estimates sampled over replay time."""
@@ -651,6 +675,93 @@ class BrowserPitLossModelReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserWeatherSidecar:
+    """Immutable native-cadence weather observations for one browser replay."""
+
+    fixture_id: str
+    time_ms: tuple[int, ...]
+    air_temp_c: tuple[float | None, ...]
+    humidity_pct: tuple[float | None, ...]
+    pressure_mbar: tuple[float | None, ...]
+    rainfall: tuple[bool | None, ...]
+    track_temp_c: tuple[float | None, ...]
+    wind_direction_deg: tuple[int | None, ...]
+    wind_speed_mps: tuple[float | None, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not _FIXTURE_ID.fullmatch(self.fixture_id):
+            raise ValueError("weather sidecar fixture_id must match the canonical identifier pattern")
+
+        arrays = (
+            tuple(self.time_ms),
+            tuple(self.air_temp_c),
+            tuple(self.humidity_pct),
+            tuple(self.pressure_mbar),
+            tuple(self.rainfall),
+            tuple(self.track_temp_c),
+            tuple(self.wind_direction_deg),
+            tuple(self.wind_speed_mps),
+        )
+        if not arrays[0]:
+            raise ValueError("weather sidecar arrays must be non-empty")
+        if any(len(values) != len(arrays[0]) for values in arrays[1:]):
+            raise ValueError("weather sidecar arrays must be equal length")
+
+        for value in arrays[0]:
+            _validate_signed_int64(value, "weather time_ms", minimum=0)
+        if any(following <= current for current, following in zip(arrays[0], arrays[0][1:], strict=False)):
+            raise ValueError("weather time_ms must be strictly increasing")
+
+        _validate_weather_float_values(arrays[1], "air_temp_c", minimum=0.0, exclusive_minimum=True)
+        _validate_weather_float_values(arrays[2], "humidity_pct", minimum=0.0, maximum=100.0)
+        _validate_weather_float_values(arrays[3], "pressure_mbar", minimum=0.0, exclusive_minimum=True)
+        if any(value is not None and type(value) is not bool for value in arrays[4]):
+            raise TypeError("rainfall must contain booleans or null")
+        _validate_weather_float_values(arrays[5], "track_temp_c", minimum=0.0, exclusive_minimum=True)
+        if any(
+            value is not None and (type(value) is not int or not 0 <= value <= 359)
+            for value in arrays[6]
+        ):
+            raise ValueError("wind_direction_deg must contain integers from 0 through 359 or null")
+        _validate_weather_float_values(arrays[7], "wind_speed_mps", minimum=0.0)
+
+        for field, values in zip(
+            ("time_ms", "air_temp_c", "humidity_pct", "pressure_mbar", "rainfall",
+             "track_temp_c", "wind_direction_deg", "wind_speed_mps"),
+            arrays,
+            strict=True,
+        ):
+            object.__setattr__(self, field, values)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the contract-shaped payload in its frozen field order."""
+        return {
+            "contractVersion": "v1",
+            "fixtureId": self.fixture_id,
+            "timeMs": list(self.time_ms),
+            "airTempC": list(self.air_temp_c),
+            "humidityPct": list(self.humidity_pct),
+            "pressureMbar": list(self.pressure_mbar),
+            "rainfall": list(self.rainfall),
+            "trackTempC": list(self.track_temp_c),
+            "windDirectionDeg": list(self.wind_direction_deg),
+            "windSpeedMps": list(self.wind_speed_mps),
+        }
+
+
+@dataclass(frozen=True)
+class BrowserWeatherSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional weather sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "weather-sidecar.json":
+            raise ValueError("weather sidecar path must be weather-sidecar.json")
+        if self.schema_id != WEATHER_SIDECAR_SCHEMA_ID:
+            raise ValueError("weather sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -665,6 +776,7 @@ class BrowserManifest:
     penalty_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
     season_metadata: Mapping[str, object] | None = None
     telemetry_capabilities: Mapping[str, object] | None = None
+    weather_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -769,6 +881,22 @@ class BrowserManifest:
             )
         elif penalty_sidecar is not None:
             raise TypeError("penalty_sidecar must be a BrowserArtifactReference or mapping")
+        weather_sidecar = self.weather_sidecar
+        if isinstance(weather_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(weather_sidecar) != required:
+                raise ValueError("weather_sidecar must contain path, schemaId, and sha256")
+            weather_sidecar = BrowserWeatherSidecarReference(
+                cast(str, weather_sidecar["path"]),
+                cast(str, weather_sidecar["schemaId"]),
+                cast(str, weather_sidecar["sha256"]),
+            )
+        elif isinstance(weather_sidecar, BrowserArtifactReference):
+            weather_sidecar = BrowserWeatherSidecarReference(
+                weather_sidecar.path, weather_sidecar.schema_id, weather_sidecar.sha256,
+            )
+        elif weather_sidecar is not None:
+            raise TypeError("weather_sidecar must be a BrowserArtifactReference or mapping")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
@@ -778,6 +906,7 @@ class BrowserManifest:
         object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
         object.__setattr__(self, "season_metadata", season_metadata)
         object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
+        object.__setattr__(self, "weather_sidecar", weather_sidecar)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -817,6 +946,10 @@ class BrowserManifest:
             value["penaltySidecar"] = cast(
                 BrowserArtifactReference, self.penalty_sidecar,
             ).as_dict()
+        if self.weather_sidecar is not None:
+            value["weatherSidecar"] = cast(
+                BrowserArtifactReference, self.weather_sidecar,
+            ).as_dict()
         return value
 
 
@@ -852,12 +985,14 @@ __all__ = [
     "BrowserLapStart", "BrowserManifest", "BrowserPenaltyIssuance", "BrowserPenaltySidecar",
     "BrowserPenaltySidecarReference",
     "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserWeatherSidecar", "BrowserWeatherSidecarReference",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
-    "STINT_SUMMARY_SCHEMA_ID",
+    "STINT_SUMMARY_SCHEMA_ID", "BROWSER_WEATHER_SIDECAR_SCHEMA_ID",
+    "WEATHER_SIDECAR_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",
     "TimelineSummaryKind",
     "deep_freeze_json",

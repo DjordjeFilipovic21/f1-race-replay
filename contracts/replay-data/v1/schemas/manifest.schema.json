@@ -173,6 +173,9 @@
     "pitLossModel": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model#/$defs/pitLossModelFileReference"
     },
+    "weatherSidecar": {
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar#/$defs/weatherSidecarFileReference"
+    },
     "chunks": {
       "type": "array",
       "minItems": 1,

@@ -4,7 +4,7 @@ import type {
   PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
   SeasonMetadata, StintDriverColumns, StintSummary, StintSummaryReference, TelemetryCapabilities, TelemetryCapabilityState,
   TimelineInterval, TimelineIntervalKind, TimelineSummary,
-  TimelineSummaryReference, TrackAssets, TrackPoint,
+  TimelineSummaryReference, TrackAssets, TrackPoint, WeatherSidecar, WeatherSidecarReference,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
 
@@ -16,6 +16,7 @@ export const BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:rep
 export const STINT_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
 export const PIT_LOSS_MODEL_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model'
 export const PENALTY_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
+export const WEATHER_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm', 'tyreAge', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -43,7 +44,7 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar'], 'manifest')
+  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'weatherSidecar'], 'manifest')
   if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
   const schemas = object(item.schemas, 'manifest.schemas')
   exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
@@ -57,6 +58,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   const stintSummary = item.stintSummary === undefined ? undefined : parseStintSummaryReference(item.stintSummary)
   const pitLossModel = item.pitLossModel === undefined ? undefined : parsePitLossModelReference(item.pitLossModel)
   const penaltySidecar = item.penaltySidecar === undefined ? undefined : parsePenaltySidecarReference(item.penaltySidecar)
+  const weatherSidecar = item.weatherSidecar === undefined ? undefined : parseWeatherSidecarReference(item.weatherSidecar)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
@@ -75,7 +77,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), ...(weatherSidecar === undefined ? {} : { weatherSidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
 }
 
 export function parseSeasonMetadata(value: unknown): SeasonMetadata {
@@ -148,6 +150,16 @@ export function parsePenaltySidecarReference(value: unknown): PenaltySidecarRefe
   return freeze({ path: 'penalty-sidecar.json', schemaId: PENALTY_SIDECAR_SCHEMA, sha256 })
 }
 
+export function parseWeatherSidecarReference(value: unknown): WeatherSidecarReference {
+  const item = object(value, 'manifest.weatherSidecar')
+  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.weatherSidecar')
+  if (item.path !== 'weather-sidecar.json') throw new Error('weather sidecar path is unsupported')
+  if (item.schemaId !== WEATHER_SIDECAR_SCHEMA) throw new Error('weather sidecar schema identity is unsupported')
+  const sha256 = item.sha256
+  if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.weatherSidecar.sha256 is invalid')
+  return freeze({ path: 'weather-sidecar.json', schemaId: WEATHER_SIDECAR_SCHEMA, sha256 })
+}
+
 export function parseLapSectorSidecar(value: unknown): LapSectorSidecar {
   const item = object(value, 'lap sector sidecar')
   exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'lap sector sidecar')
@@ -193,6 +205,47 @@ export function parsePenaltySidecar(value: unknown): PenaltySidecar {
   const fixtureId = parseFixtureId(item.fixtureId, 'penalty sidecar fixture id')
   const penaltyIssuances = array(item.penaltyIssuances, 'penalty sidecar penaltyIssuances').map(parsePenaltyIssuance)
   return freeze({ contractVersion: 'v1', fixtureId, penaltyIssuances: freeze(penaltyIssuances) })
+}
+
+export function parseWeatherSidecar(value: unknown): WeatherSidecar {
+  const item = object(value, 'weather sidecar')
+  exact(item, ['contractVersion', 'fixtureId', 'timeMs', 'airTempC', 'humidityPct', 'pressureMbar', 'rainfall', 'trackTempC', 'windDirectionDeg', 'windSpeedMps'], [], 'weather sidecar')
+  if (item.contractVersion !== 'v1') throw new Error('weather sidecar must be contract version v1')
+  const fixtureId = parseFixtureId(item.fixtureId, 'weather sidecar fixture id')
+  const timeMs = parseStandaloneColumn(item.timeMs, 'weather sidecar timeMs', (entry) => integer(entry, 'weather sidecar timeMs value'))
+  if (!timeMs.length) throw new Error('weather sidecar timeMs must be non-empty')
+  assertStrictlyIncreasing(timeMs, 'weather sidecar timeMs must be strictly increasing')
+  const airTempC = parseWeatherMeasurement(item.airTempC, timeMs.length, 'airTempC', (value) => positiveFinite(value, 'weather sidecar airTempC value'))
+  const humidityPct = parseWeatherMeasurement(item.humidityPct, timeMs.length, 'humidityPct', (value) => boundedFinite(value, 'weather sidecar humidityPct value', 0, 100))
+  const pressureMbar = parseWeatherMeasurement(item.pressureMbar, timeMs.length, 'pressureMbar', (value) => positiveFinite(value, 'weather sidecar pressureMbar value'))
+  const rainfall = parseWeatherColumn(item.rainfall, timeMs.length, 'rainfall', (value) => {
+    if (typeof value !== 'boolean') throw new Error('weather sidecar rainfall must contain booleans or null')
+    return value
+  })
+  const trackTempC = parseWeatherMeasurement(item.trackTempC, timeMs.length, 'trackTempC', (value) => positiveFinite(value, 'weather sidecar trackTempC value'))
+  const windDirectionDeg = parseWeatherMeasurement(item.windDirectionDeg, timeMs.length, 'windDirectionDeg', (value) => integer(value, 'weather sidecar windDirectionDeg value', 0, 359))
+  const windSpeedMps = parseWeatherMeasurement(item.windSpeedMps, timeMs.length, 'windSpeedMps', (value) => boundedFinite(value, 'weather sidecar windSpeedMps value', 0, Number.MAX_VALUE))
+  return freeze({ contractVersion: 'v1', fixtureId, timeMs, airTempC, humidityPct, pressureMbar, rainfall, trackTempC, windDirectionDeg, windSpeedMps })
+}
+
+function parseWeatherMeasurement<T>(value: unknown, length: number, label: string, parse: (entry: unknown) => T): readonly (T | null)[] {
+  return parseWeatherColumn(value, length, label, parse)
+}
+
+function parseWeatherColumn<T>(value: unknown, length: number, label: string, parse: (entry: unknown) => T): readonly (T | null)[] {
+  return parseColumn(value, length, `weather sidecar.${label}`, (entry) => nullable(entry, parse))
+}
+
+function positiveFinite(value: unknown, label: string): number {
+  const parsed = finite(value, label)
+  if (parsed <= 0) throw new Error(`${label} must be greater than zero`)
+  return parsed
+}
+
+function boundedFinite(value: unknown, label: string, minimum: number, maximum: number): number {
+  const parsed = finite(value, label)
+  if (parsed < minimum || parsed > maximum) throw new Error(`${label} must be between ${minimum} and ${maximum}`)
+  return parsed
 }
 
 function parsePenaltyIssuance(value: unknown, index: number): PenaltyIssuance {

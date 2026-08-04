@@ -1,6 +1,8 @@
 import copy
 import json
+import math
 from pathlib import Path
+from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -11,10 +13,12 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     PENALTY_SIDECAR_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
+    WEATHER_SIDECAR_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserPenaltySidecarReference,
     BrowserTimelineSummaryReference,
+    BrowserWeatherSidecarReference,
 )
 
 
@@ -66,6 +70,7 @@ def load_contract_bundle():
         "penaltySidecar": load_json(SCHEMA_ROOT / "penalty-sidecar.schema.json"),
         "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
         "pitLossModel": load_json(SCHEMA_ROOT / "pit-loss-model.schema.json"),
+        "weatherSidecar": load_json(SCHEMA_ROOT / "weather-sidecar.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -531,6 +536,56 @@ def pit_loss_model_reference() -> dict[str, str]:
     }
 
 
+WEATHER_ARRAY_NAMES = (
+    "timeMs", "airTempC", "humidityPct", "pressureMbar", "rainfall",
+    "trackTempC", "windDirectionDeg", "windSpeedMps",
+)
+
+
+def weather_sidecar_payload() -> dict[str, object]:
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "timeMs": [0, 1_000, 2_000],
+        "airTempC": [21.5, None, 22.0],
+        "humidityPct": [50.0, 55.0, None],
+        "pressureMbar": [1013.0, None, 1012.0],
+        "rainfall": [False, True, False],
+        "trackTempC": [35.0, None, 36.0],
+        "windDirectionDeg": [90, 0, None],
+        "windSpeedMps": [2.5, 0.0, None],
+    }
+
+
+def weather_sidecar_reference() -> dict[str, str]:
+    return {
+        "path": "weather-sidecar.json",
+        "schemaId": WEATHER_SIDECAR_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def assert_weather_sidecar_semantics(sidecar):
+    """Apply weather checks the compact schema cannot express.
+
+    JSON Schema enforces non-negative, unique integer timestamps and per-array
+    ranges, but not cross-array alignment, strict ascending order, or the
+    finite guarantee (reference engines treat NaN as a nullable number).
+    """
+    arrays = [sidecar[name] for name in WEATHER_ARRAY_NAMES]
+    assert arrays[0] and len({len(values) for values in arrays}) == 1
+    times = arrays[0]
+    assert all(type(value) is int and value >= 0 for value in times)
+    assert all(current < following for current, following in zip(times, times[1:]))
+    for name, values in zip(WEATHER_ARRAY_NAMES[1:], arrays[1:]):
+        if name == "rainfall":
+            assert all(value is None or type(value) is bool for value in values)
+        elif name == "windDirectionDeg":
+            assert all(value is None or (type(value) is int and 0 <= value <= 359) for value in values)
+        else:
+            assert all(value is None or math.isfinite(value) for value in values)
+
+
 def assert_timeline_summary_semantics(summary):
     assert summary["startMs"] < summary["endMs"]
     for interval in summary["intervals"]:
@@ -613,6 +668,154 @@ def test_replay_contract_pit_loss_model_rejects_structurally_invalid_payload(
         validate_instance(contract_bundle["schemas"]["pitLossModel"], model, schema_registry)
 
 
+def test_replay_contract_weather_sidecar_validates_and_is_optional(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["weatherSidecar"] = weather_sidecar_reference()
+
+    validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+    assert_weather_sidecar_semantics(sidecar)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timeMs", [0, "1000", 2_000]),
+        ("airTempC", [21.5, "warm", 22.0]),
+        ("humidityPct", [50.0, None, "fifty"]),
+        ("pressureMbar", [1013.0, None, True]),
+        ("rainfall", [False, 1, False]),
+        ("trackTempC", [35.0, None, "hot"]),
+        ("windDirectionDeg", [90, 12.5, None]),
+        ("windSpeedMps", [2.5, None, "fast"]),
+    ],
+)
+def test_replay_contract_weather_sidecar_rejects_invalid_types(
+    contract_bundle, schema_registry, field, value
+):
+    sidecar = weather_sidecar_payload()
+    sidecar[field] = value
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+
+
+def test_replay_contract_weather_sidecar_rejects_negative_times(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    sidecar["timeMs"] = [-1, 0, 2_000]
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+
+
+def test_replay_contract_weather_sidecar_rejects_null_in_time_array(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    sidecar["timeMs"] = [0, None, 2_000]
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+
+
+def test_replay_contract_weather_sidecar_rejects_duplicate_times(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    sidecar["timeMs"] = [0, 0, 2_000]
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("airTempC", [0.0, 22.0, None]),
+        ("airTempC", [-1.0, 22.0, None]),
+        ("humidityPct", [101.0, 50.0, None]),
+        ("humidityPct", [-1.0, 50.0, None]),
+        ("pressureMbar", [0.0, 1012.0, None]),
+        ("trackTempC", [0.0, 36.0, None]),
+        ("windDirectionDeg", [360, 90, None]),
+        ("windDirectionDeg", [-1, 90, None]),
+        ("windSpeedMps", [-1.0, 2.5, None]),
+    ],
+)
+def test_replay_contract_weather_sidecar_rejects_invalid_range_or_null_combinations(
+    contract_bundle, schema_registry, field, value
+):
+    sidecar = weather_sidecar_payload()
+    sidecar[field] = value
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+
+
+def test_replay_contract_weather_sidecar_detects_bad_time_ordering(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    sidecar["timeMs"] = [1_000, 0, 2_000]
+
+    # Unique non-negative times pass the schema, but the semantic ordering
+    # contract rejects them (mirrors the publication-time audit).
+    validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+    with pytest.raises(AssertionError):
+        assert_weather_sidecar_semantics(sidecar)
+
+
+def test_replay_contract_weather_sidecar_detects_misaligned_arrays(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    sidecar["airTempC"] = [21.5]
+
+    # The schema only enforces per-array minItems; cross-array alignment is
+    # a semantic contract check.
+    validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+    with pytest.raises(AssertionError):
+        assert_weather_sidecar_semantics(sidecar)
+
+
+def test_replay_contract_weather_sidecar_rejects_non_finite_values(
+    contract_bundle, schema_registry
+):
+    sidecar = weather_sidecar_payload()
+    cast(list[object], sidecar["airTempC"])[0] = float("nan")
+
+    # JSON Schema engines treat NaN as a nullable number, so the finite
+    # guarantee is enforced semantically at the immutable-model boundary.
+    validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
+    with pytest.raises(AssertionError):
+        assert_weather_sidecar_semantics(sidecar)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("path", "not-weather-sidecar.json"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_replay_contract_weather_sidecar_reference_rejects_invalid_schema_or_digest(
+    contract_bundle, schema_registry, field, value
+):
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    reference = weather_sidecar_reference()
+    reference[field] = value
+    manifest["weatherSidecar"] = reference
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
 def test_browser_manifest_serializes_optional_timeline_summary_reference():
     manifest = BrowserManifest(
         "deterministic-race",
@@ -676,6 +879,25 @@ def test_browser_manifest_serializes_optional_penalty_sidecar_reference():
         "schemaId": PENALTY_SIDECAR_SCHEMA_ID,
         "sha256": "a" * 64,
     }
+
+
+def test_browser_manifest_serializes_optional_weather_sidecar_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        weather_sidecar=BrowserWeatherSidecarReference(
+            "weather-sidecar.json", WEATHER_SIDECAR_SCHEMA_ID, "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["weatherSidecar"] == weather_sidecar_reference()
 
 
 @pytest.mark.parametrize(

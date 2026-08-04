@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -20,6 +21,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BrowserManifest,
     CanonicalGenerationSnapshot,
+    WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
@@ -31,6 +33,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryPublicationError,
     publish_browser_delivery,
+    validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import BrowserReadProgress, read_validated_canonical_generation
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
@@ -198,6 +201,126 @@ def test_penalty_sidecar_is_published_only_when_issuances_exist_and_validates(
     assert no_penalty_delivery.penalty_sidecar is None
     assert "penaltySidecar" not in no_penalty_manifest
     assert no_penalty_published.penalty_sidecar_path is None
+
+
+def test_browser_delivery_publishes_native_cadence_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange: canonical weather keeps sparse native-cadence observations,
+    # including corroborated zero wind samples and a partially null row.
+    frames = _canonical_frames(weather_rows=[
+        _row(
+            "weather", session_time_ms=0, air_temperature_c=21.0, humidity_pct=50.0,
+            pressure_mbar=1013.0, rainfall=False, track_temperature_c=35.0,
+            wind_direction_deg=90.0, wind_speed_mps=2.5,
+        ),
+        _row(
+            "weather", session_time_ms=6_000, air_temperature_c=22.5, rainfall=True,
+            wind_direction_deg=0.0, wind_speed_mps=0.0,
+        ),
+        _row(
+            "weather", session_time_ms=9_500, air_temperature_c=22.0, humidity_pct=55.0,
+            rainfall=False,
+        ),
+    ])
+    canonical_parent = tmp_path / "canonical"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    snapshot = read_validated_canonical_generation(canonical_parent)
+    delivery = build_browser_delivery(snapshot, _track_assets())
+
+    # Assert: the sidecar preserves native cadence and the canonical frame is untouched.
+    assert delivery.weather_sidecar is not None
+    assert delivery.weather_sidecar.time_ms == (0, 6_000, 9_500)
+    assert snapshot.frames["weather"].equals(frames["weather"])
+
+    # Act: publish and re-validate the delivery including the weather sidecar.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(result.manifest_path)
+    weather = _load_json(result.weather_sidecar_path)  # type: ignore[arg-type]
+
+    # Assert: manifest reference, digest, contract shape, and schema validity.
+    assert manifest["weatherSidecar"]["path"] == "weather-sidecar.json"
+    assert manifest["weatherSidecar"]["schemaId"] == WEATHER_SIDECAR_SCHEMA_ID
+    assert manifest["weatherSidecar"]["sha256"] == hashlib.sha256(
+        result.weather_sidecar_path.read_bytes(),  # type: ignore[union-attr]
+    ).hexdigest()
+    assert weather["timeMs"] == [0, 6_000, 9_500]
+    assert weather["airTempC"] == [21.0, 22.5, 22.0]
+    assert weather["humidityPct"] == [50.0, None, 55.0]
+    assert weather["windDirectionDeg"] == [90, 0, None]
+    assert weather["windSpeedMps"] == [2.5, 0.0, None]
+    schemas, registry = _registry()
+    Draft202012Validator(schemas["weather-sidecar"], registry=registry).validate(weather)
+
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-v1",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+
+def test_browser_delivery_without_weather_observations_omits_sidecar(tmp_path: Path) -> None:
+    # Arrange: a valid canonical generation whose weather table is empty.
+    canonical_parent = tmp_path / "canonical"
+    published_canonical = publish_canonical_generation(
+        frames=_canonical_frames(weather_rows=[]),
+        target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+
+    # Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(result.manifest_path)
+
+    # Assert: no sidecar is written, referenced, or validated.
+    assert delivery.weather_sidecar is None
+    assert result.weather_sidecar_path is None
+    assert "weather-sidecar.json" not in result.artifact_digests
+    assert "weatherSidecar" not in manifest
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-v1",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+
+def test_weather_sidecar_publication_does_not_mutate_core_chunk_bytes(tmp_path: Path) -> None:
+    # Arrange: one delivery derived with weather sidecar present.
+    canonical_parent = tmp_path / "canonical"
+    frames = _canonical_frames(weather_rows=[
+        _row("weather", session_time_ms=0, air_temperature_c=21.0, rainfall=False),
+        _row("weather", session_time_ms=6_000, air_temperature_c=22.5, rainfall=True),
+    ])
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.weather_sidecar is not None
+
+    # Act: publish once with the sidecar and once with the sidecar stripped.
+    with_sidecar = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-with", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    without_sidecar = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-without", delivery_version="delivery-v1",
+        delivery=replace(delivery, weather_sidecar=None), schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+    # Assert: core chunk artifacts are byte-identical; only the sidecar is added.
+    assert tuple(path.read_bytes() for path in with_sidecar.chunk_paths) == tuple(
+        path.read_bytes() for path in without_sidecar.chunk_paths
+    )
+    assert with_sidecar.weather_sidecar_path is not None
+    assert without_sidecar.weather_sidecar_path is None
 
 
 def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tmp_path: Path) -> None:
@@ -939,6 +1062,7 @@ def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
     include_pre_race: bool = False, include_rpm: bool = False, year: int = 2026,
+    weather_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
     rows["session_metadata"][0]["year"] = year
@@ -954,7 +1078,7 @@ def _canonical_frames(
         _row("position_telemetry", session_time_ms=time, x=x, y=y, status=status)
         for time, x, y, status in ((0, 0.0, 1.0, "OnTrack"), (9_500, None, 9.5, None), (10_000, 10.0, 11.0, "OnTrack"), (19_999, 20.0, None, "OnTrack"))
     ]
-    rows["weather"] = [
+    rows["weather"] = weather_rows if weather_rows is not None else [
         _row("weather", session_time_ms=0, rainfall=False),
         _row("weather", session_time_ms=6_000, rainfall=True),
     ]
@@ -1252,6 +1376,8 @@ def _artifact_bytes(result: object) -> tuple[bytes, ...]:
     paths = (result.manifest_path, result.track_assets_path, *result.chunk_paths)
     if result.timeline_summary_path is not None:
         paths = (*paths, result.timeline_summary_path)
+    if result.weather_sidecar_path is not None:
+        paths = (*paths, result.weather_sidecar_path)
     return tuple(path.read_bytes() for path in paths)
 
 
@@ -1265,6 +1391,7 @@ def _registry() -> tuple[dict[str, object], Registry]:
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
             "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
+            "weather-sidecar",
         )
     }
     registry = Registry()
