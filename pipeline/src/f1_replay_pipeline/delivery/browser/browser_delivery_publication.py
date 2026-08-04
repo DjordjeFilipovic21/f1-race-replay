@@ -25,6 +25,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     PIT_LOSS_MODEL_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
+    WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 from f1_replay_pipeline.domain.dataset_manifest import ManifestValidationError, serialize_deterministic_json
@@ -55,6 +56,7 @@ _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
 _STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
 _PIT_LOSS_MODEL_SCHEMA = PIT_LOSS_MODEL_SCHEMA_ID
 _PENALTY_SIDECAR_SCHEMA = PENALTY_SIDECAR_SCHEMA_ID
+_WEATHER_SIDECAR_SCHEMA = WEATHER_SIDECAR_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 _UNSUPPORTED_DIRECTORY_FSYNC = {errno.EINVAL, errno.ENOTSUP, errno.EBADF}
 
@@ -138,6 +140,7 @@ class PublishedBrowserDelivery:
     stint_summary_path: Path | None = None
     pit_loss_model_path: Path | None = None
     penalty_sidecar_path: Path | None = None
+    weather_sidecar_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -197,6 +200,7 @@ def validate_complete_browser_delivery(
         stint_reference = manifest.get("stintSummary")
         pit_loss_reference = manifest.get("pitLossModel")
         penalty_reference = manifest.get("penaltySidecar")
+        weather_reference = manifest.get("weatherSidecar")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
@@ -204,6 +208,7 @@ def validate_complete_browser_delivery(
             *((stint_reference,) if stint_reference is not None else ()),
             *((pit_loss_reference,) if pit_loss_reference is not None else ()),
             *((penalty_reference,) if penalty_reference is not None else ()),
+            *((weather_reference,) if weather_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -217,6 +222,7 @@ def validate_complete_browser_delivery(
                 raise ValueError(f"browser artifact checksum disagrees for {relative}")
             verify_regular_file_identity(artifact, guarded, f"browser artifact {relative}")
             payloads.append((relative, guarded.data))
+        payloads.extend(_read_unreferenced_delivery_files(generation, {path for path, _ in payloads}))
         emit("browser_contract_schema_loading")
         schemas, registry = _load_contract_schemas(schema_root)
         _validate_stored_delivery_payloads(payloads, _contract_validators(schemas, registry), emit)
@@ -264,6 +270,40 @@ def _stored_delivery_file(generation: Path, relative: str) -> Path:
     return path / parts[-1]
 
 
+def _read_unreferenced_delivery_files(
+    generation: Path, referenced_paths: set[str],
+) -> list[tuple[str, bytes]]:
+    """Read every extra generation file so complete validation can reject it."""
+    payloads: list[tuple[str, bytes]] = []
+    with os.scandir(generation) as entries:
+        for entry in entries:
+            if entry.name == "chunks":
+                if not entry.is_dir(follow_symlinks=False):
+                    raise ValueError("browser chunks entry must be a directory")
+                with os.scandir(entry.path) as chunk_entries:
+                    for chunk_entry in chunk_entries:
+                        if not chunk_entry.is_file(follow_symlinks=False):
+                            raise ValueError("browser chunks directory contains a non-file artifact")
+                        relative = _safe_delivery_path(f"chunks/{chunk_entry.name}")
+                        if relative in referenced_paths:
+                            continue
+                        path = _stored_delivery_file(generation, relative)
+                        guarded = read_regular_file_no_follow(path, f"browser artifact {relative}")
+                        verify_regular_file_identity(path, guarded, f"browser artifact {relative}")
+                        payloads.append((relative, guarded.data))
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                raise ValueError("browser delivery contains an unexpected directory or link")
+            relative = _safe_delivery_path(entry.name)
+            if relative in referenced_paths:
+                continue
+            path = _stored_delivery_file(generation, relative)
+            guarded = read_regular_file_no_follow(path, f"browser artifact {relative}")
+            verify_regular_file_identity(path, guarded, f"browser artifact {relative}")
+            payloads.append((relative, guarded.data))
+    return payloads
+
+
 def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallback) -> None:
     encoded = dict(payloads)
     manifest = json.loads(encoded["manifest.json"])
@@ -309,6 +349,11 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         if not isinstance(penalty_reference, dict) or penalty_reference.get("path") != "penalty-sidecar.json":
             raise BrowserDeliveryPublicationError("manifest penalty sidecar reference is invalid")
         expected_paths.add("penalty-sidecar.json")
+    weather_reference = manifest.get("weatherSidecar")
+    if weather_reference is not None:
+        if not isinstance(weather_reference, dict) or weather_reference.get("path") != "weather-sidecar.json":
+            raise BrowserDeliveryPublicationError("manifest weather sidecar reference is invalid")
+        expected_paths.add("weather-sidecar.json")
     total = (
         len(chunk_refs) + 2
         + (1 if timeline_reference is not None else 0)
@@ -316,6 +361,7 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         + (1 if stint_reference is not None else 0)
         + (1 if pit_loss_reference is not None else 0)
         + (1 if penalty_reference is not None else 0)
+        + (1 if weather_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -372,6 +418,16 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_penalty_sidecar_contract(penalty_sidecar, manifest)
         completed += 1
         _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
+    if weather_reference is not None:
+        weather_sidecar = json.loads(encoded["weather-sidecar.json"])
+        if not isinstance(weather_sidecar, dict):
+            raise BrowserDeliveryPublicationError("weather sidecar must be a JSON object")
+        _validate_schema_instance(
+            validators["weather-sidecar"], weather_sidecar, "weather sidecar",
+        )
+        _validate_weather_sidecar_contract(weather_sidecar, manifest)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "weather sidecar schema")
     previous = None
     for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
@@ -399,6 +455,7 @@ def _prepared_artifacts(
     _validate_chunks(chunks)
     summary = delivery.timeline_summary
     sidecar = delivery.lap_sector_sidecar
+    weather_sidecar = delivery.weather_sidecar
     total = (
         2 * len(chunks) + 4
         + (2 if summary is not None else 0)
@@ -406,6 +463,7 @@ def _prepared_artifacts(
         + (2 if delivery.stint_summary is not None else 0)
         + (2 if delivery.pit_loss_model is not None else 0)
         + (2 if delivery.penalty_sidecar is not None else 0)
+        + (2 if weather_sidecar is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
@@ -485,6 +543,19 @@ def _prepared_artifacts(
         completed += 1
         _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
 
+    weather_artifact: PreparedArtifact | None = None
+    weather_contract = None
+    if weather_sidecar is not None:
+        weather_contract = _schema_compatible_value(weather_sidecar.as_dict())
+        _validate_schema_instance(
+            validators["weather-sidecar"], weather_contract, "weather sidecar",
+        )
+        weather_artifact = _prepare_artifact("weather-sidecar.json", weather_contract)
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "weather sidecar")
+        completed += 1
+        _emit_validation_progress(emit, completed, total, "weather sidecar schema")
+
     previous = None
     chunk_artifacts = []
     references = []
@@ -562,6 +633,16 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest penalty sidecar reference has no penalty sidecar payload"
         )
+    if weather_artifact is not None:
+        manifest["weatherSidecar"] = {
+            "path": weather_artifact.path,
+            "schemaId": _WEATHER_SIDECAR_SCHEMA,
+            "sha256": weather_artifact.sha256,
+        }
+    elif "weatherSidecar" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest weather sidecar reference has no weather sidecar payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest)
     if sidecar_contract is not None:
@@ -572,9 +653,11 @@ def _prepared_artifacts(
         _validate_pit_loss_model_contract(pit_loss_contract, manifest)
     if penalty_contract is not None:
         _validate_penalty_sidecar_contract(penalty_contract, manifest)
+    if weather_contract is not None:
+        _validate_weather_sidecar_contract(weather_contract, manifest)
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
-        pit_loss_artifact, penalty_artifact,
+        pit_loss_artifact, penalty_artifact, weather_artifact,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
@@ -587,6 +670,7 @@ def _prepared_artifacts(
         *((stint_artifact,) if stint_artifact is not None else ()),
         *((pit_loss_artifact,) if pit_loss_artifact is not None else ()),
         *((penalty_artifact,) if penalty_artifact is not None else ()),
+        *((weather_artifact,) if weather_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -629,6 +713,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("pit-loss-model.json")
     if delivery.penalty_sidecar is not None:
         expected_paths.add("penalty-sidecar.json")
+    if delivery.weather_sidecar is not None:
+        expected_paths.add("weather-sidecar.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -642,6 +728,7 @@ def _validate_manifest_contract(
     stint_artifact: PreparedArtifact | None = None,
     pit_loss_artifact: PreparedArtifact | None = None,
     penalty_artifact: PreparedArtifact | None = None,
+    weather_artifact: PreparedArtifact | None = None,
 ) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
@@ -697,6 +784,16 @@ def _validate_manifest_contract(
         "sha256": penalty_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("penalty sidecar reference disagrees with its payload")
+    weather_reference = manifest.get("weatherSidecar")
+    if weather_artifact is None:
+        if weather_reference is not None or delivery.weather_sidecar is not None:
+            raise BrowserDeliveryPublicationError("manifest weather sidecar reference disagrees with its payload")
+    elif weather_reference != {
+        "path": weather_artifact.path,
+        "schemaId": _WEATHER_SIDECAR_SCHEMA,
+        "sha256": weather_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError("manifest weather sidecar reference disagrees with its payload")
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -793,6 +890,35 @@ def _validate_penalty_sidecar_contract(sidecar, manifest) -> None:
         for issuance in issuances
     ):
         raise BrowserDeliveryPublicationError("penalty sidecar driver IDs disagree with the manifest")
+
+
+def _validate_weather_sidecar_contract(sidecar, manifest) -> None:
+    """Apply weather identity, ordering, alignment, and sentinel semantics."""
+    if sidecar.get("contractVersion") != "v1" or sidecar.get("fixtureId") != manifest.get("fixtureId"):
+        raise BrowserDeliveryPublicationError("weather sidecar disagrees with the manifest")
+    names = (
+        "timeMs", "airTempC", "humidityPct", "pressureMbar", "rainfall",
+        "trackTempC", "windDirectionDeg", "windSpeedMps",
+    )
+    arrays = tuple(sidecar.get(name) for name in names)
+    if any(not isinstance(values, list) for values in arrays):
+        raise BrowserDeliveryPublicationError("weather sidecar arrays are invalid")
+    typed_arrays = cast(tuple[list[object], ...], arrays)
+    if not typed_arrays[0] or any(len(values) != len(typed_arrays[0]) for values in typed_arrays[1:]):
+        raise BrowserDeliveryPublicationError("weather sidecar arrays are not aligned")
+    times = cast(list[int], typed_arrays[0])
+    if any(type(value) is not int or not 0 <= value <= MAX_INT64 for value in times):
+        raise BrowserDeliveryPublicationError("weather sidecar timestamps are outside signed Int64 bounds")
+    if any(following <= current for current, following in zip(times, times[1:], strict=False)):
+        raise BrowserDeliveryPublicationError("weather sidecar timestamps must be strictly increasing")
+    for row in zip(*typed_arrays[1:], strict=True):
+        measurements = (row[0], row[1], row[2], row[4], row[5], row[6])
+        corroborated = any(value is not None and value != 0 for value in measurements)
+        if any(
+            value == 0 and not corroborated
+            for value in (row[1], row[5], row[6])
+        ):
+            raise BrowserDeliveryPublicationError("weather sidecar contains an unsanitized zero sentinel")
 
 
 def _validate_stint_summary_contract(summary, manifest) -> None:
@@ -897,6 +1023,7 @@ def _load_contract_schemas(
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
             "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
+            "weather-sidecar",
         ):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
@@ -1144,6 +1271,7 @@ def _delivery_result(
         generation / "stint-summary.json" if "stint-summary.json" in digests else None,
         generation / "pit-loss-model.json" if "pit-loss-model.json" in digests else None,
         generation / "penalty-sidecar.json" if "penalty-sidecar.json" in digests else None,
+        generation / "weather-sidecar.json" if "weather-sidecar.json" in digests else None,
     )
 
 

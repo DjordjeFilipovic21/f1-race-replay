@@ -34,7 +34,6 @@ _REQUIRED_SESSION_DATA = (
     "results",
     "car_data",
     "pos_data",
-    "weather_data",
     "track_status",
     "race_control_messages",
 )
@@ -49,6 +48,9 @@ def load_session(
 
     Supplying ``session`` declares it already loaded, so its ``load`` method is
     never called. A factory is only required when no loaded session is supplied.
+    FastF1 weather is intentionally absent from the required set: its documented
+    soft-failure leaves ``weather_data`` unreadable or unset, and the weather
+    adapter converts that optional absence to a typed empty table.
     """
     if session is not None:
         _validate_required_session_data(session)

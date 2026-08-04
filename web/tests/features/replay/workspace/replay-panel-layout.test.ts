@@ -29,6 +29,7 @@ test('validates sortable IDs against the registered panel IDs', () => {
   expect(isReplayPanelId('driver')).toBe(true)
   expect(isReplayPanelId('telemetry')).toBe(true)
   expect(isReplayPanelId('race-control')).toBe(true)
+  expect(isReplayPanelId('weather')).toBe(true)
   expect(isReplayPanelId('lap-analysis')).toBe(true)
   expect(isReplayPanelId('strategy')).toBe(true)
   expect(isReplayPanelId('pit-loss-position')).toBe(true)
@@ -41,6 +42,12 @@ test('registers the analysis panels with their correct column widths', () => {
   expect(replayPanelColumns('pit-loss-position')).toBe(1)
 })
 
+test('registers the weather panel with a deterministic one-column desktop slot', () => {
+  expect(isReplayPanelId('weather')).toBe(true)
+  expect(replayPanelColumns('weather')).toBe(1)
+  expect(defaultReplayPanelColumn('weather')).toBe(4)
+})
+
 test('updates the dragged panel column while retaining canonical sortable order', () => {
   const updated = commitReplayPanelDrag(layout, { id: 'driver', index: 1, desktopColumnStart: 4 })
 
@@ -49,7 +56,7 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy'), defaultReplayPanelColumn('pit-loss-position')]).toEqual([4, 2, 1, 1, 4, 2, 4, 2, 4])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('weather'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy'), defaultReplayPanelColumn('pit-loss-position')]).toEqual([4, 2, 1, 1, 4, 4, 2, 4, 2, 4])
 })
 
 test('defines a stable default layout independently of panel registry order', () => {
@@ -59,7 +66,7 @@ test('defines a stable default layout independently of panel registry order', ()
     { id: 'strategy', pinned: true, desktopColumnStart: 2 },
   ])
   expect(REPLAY_PANEL_DEFAULT_LAYOUT.map(({ id }) => id)).toEqual([
-    'race-control', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy', 'pit-loss-position',
+    'race-control', 'weather', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy', 'pit-loss-position',
   ])
 })
 
@@ -122,6 +129,27 @@ test('adds and removes the new panels while retaining registered layout choices'
   expect(reconcileReplayPanelLayout(['player'] as const, withNewPanels)).toEqual([
     { id: 'player', pinned: true, desktopColumnStart: 1 },
   ])
+})
+
+test('adds the weather panel to legacy layouts without changing saved choices', () => {
+  expect(reconcileReplayPanelLayout(['player', 'leaderboard', 'weather'] as const, layout)).toEqual([
+    { id: 'player', pinned: true, desktopColumnStart: 1 },
+    { id: 'leaderboard', pinned: true, desktopColumnStart: 4 },
+    { id: 'weather', pinned: true, desktopColumnStart: 4 },
+  ])
+})
+
+test('pins and unpins the weather panel without affecting other panels', () => {
+  const withWeather = createDefaultReplayPanelLayout(['race-control', 'weather', 'driver'] as const)
+  const unpinned = toggleReplayPanelPinning(withWeather, 'weather')
+
+  expect(unpinned.find(({ id }) => id === 'weather')?.pinned).toBe(false)
+  expect(unpinned.filter(({ id }) => id !== 'weather').every(({ pinned }) => pinned)).toBe(true)
+  expect(unpinned.map(({ id }) => id)).toEqual(['race-control', 'weather', 'driver'])
+
+  const restored = toggleReplayPanelPinning(unpinned, 'weather')
+  expect(restored.find(({ id }) => id === 'weather')?.pinned).toBe(true)
+  expect(restored).toEqual(withWeather)
 })
 
 test('clamps every registered panel column start to a valid desktop position', () => {

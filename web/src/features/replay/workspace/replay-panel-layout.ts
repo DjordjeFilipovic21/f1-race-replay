@@ -1,4 +1,4 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy' | 'pit-loss-position'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'weather' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy' | 'pit-loss-position'
 
 const DESKTOP_WORKSPACE_COLUMNS = 4
 
@@ -7,6 +7,7 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   'track-map': 2,
   leaderboard: 1,
   'race-control': 1,
+  weather: 1,
   driver: 1,
   telemetry: 1,
   'lap-analysis': 1,
@@ -19,6 +20,7 @@ const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
   'track-map': 2,
   leaderboard: 1,
   'race-control': 1,
+  weather: 4,
   driver: 4,
   telemetry: 2,
   'lap-analysis': 4,
@@ -28,6 +30,7 @@ const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
 
 export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Object.freeze([
   { id: 'race-control', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['race-control'] },
+  { id: 'weather', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.weather },
   { id: 'track-map', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['track-map'] },
   { id: 'player', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.player },
   { id: 'leaderboard', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.leaderboard },
@@ -39,7 +42,7 @@ export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Obj
 ])
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy' || value === 'pit-loss-position'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'weather' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy' || value === 'pit-loss-position'
 }
 
 export interface ReplayPanelLayoutItem {

@@ -50,6 +50,12 @@ export interface PenaltySidecarReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface WeatherSidecarReference extends ArtifactReference {
+  readonly path: 'weather-sidecar.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar'
+  readonly sha256: string
+}
+
 export interface LapSectorDriverColumns {
   readonly lapNumber: readonly number[]
   readonly lapStartMs: readonly number[]
@@ -115,6 +121,19 @@ export interface PenaltySidecar {
   readonly penaltyIssuances: readonly PenaltyIssuance[]
 }
 
+export interface WeatherSidecar {
+  readonly contractVersion: 'v1'
+  readonly fixtureId: string
+  readonly timeMs: readonly number[]
+  readonly airTempC: readonly (number | null)[]
+  readonly humidityPct: readonly (number | null)[]
+  readonly pressureMbar: readonly (number | null)[]
+  readonly rainfall: readonly (boolean | null)[]
+  readonly trackTempC: readonly (number | null)[]
+  readonly windDirectionDeg: readonly (number | null)[]
+  readonly windSpeedMps: readonly (number | null)[]
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -161,6 +180,7 @@ export interface ReplayManifest {
   readonly stintSummary?: StintSummaryReference
   readonly pitLossModel?: PitLossModelReference
   readonly penaltySidecar?: PenaltySidecarReference
+  readonly weatherSidecar?: WeatherSidecarReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
@@ -278,6 +298,7 @@ export interface ReplayData {
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
   readonly penaltySidecar?: PenaltySidecar
+  readonly weatherSidecar?: WeatherSidecar
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -292,6 +313,7 @@ export interface ReplayIndex {
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
   readonly penaltySidecar?: PenaltySidecar
+  readonly weatherSidecar?: WeatherSidecar
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

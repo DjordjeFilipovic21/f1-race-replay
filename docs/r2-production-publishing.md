@@ -47,6 +47,11 @@ Publish immutable objects before mutable discovery objects:
 Never overwrite a generation. A corrected delivery gets a new
 `delivery_version`, then the session pointer and catalog are committed last.
 
+Weather is an optional artifact inside that same immutable generation; it is
+never uploaded or pointed to independently. See
+[Weather sidecar rollout](weather-sidecar-rollout.md) for the frontend-first
+rollout, backfill, and rollback checklist.
+
 ## HTTP metadata
 
 Generation objects:

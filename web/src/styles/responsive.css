@@ -13,6 +13,8 @@
   .replay-workspace { align-items: start; gap: var(--replay-workspace-gap); grid-auto-flow: dense; grid-auto-rows: var(--replay-workspace-row-height); grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-panel-frame { align-self: start; grid-column: var(--replay-panel-tablet-column) / span var(--replay-panel-columns); grid-row: span var(--replay-panel-row-span); }
   .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .weather-panel__layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.45fr); }
+  .weather-panel__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .replay-workspace:fullscreen { padding: 1.5rem; }
 }
 

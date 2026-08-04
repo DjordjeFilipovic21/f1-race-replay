@@ -8,7 +8,7 @@ import { useReplayEntry } from '../../../../src/features/replay/entry/useReplayE
 import { loadReplayIndex } from '../../../../src/data/replay/loader'
 import { createFetchSource } from '../../../../src/data/replay/source'
 import { createReplayController, type ReplayController, type ReplayControllerSnapshot } from '../../../../src/engine/replay'
-import type { ReplayIndex, ReplaySource, TelemetryCapabilities, TrackAssets } from '../../../../src/data/replay/types'
+import type { ReplayIndex, ReplaySource, TelemetryCapabilities, TrackAssets, WeatherSidecar } from '../../../../src/data/replay/types'
 
 vi.mock('../../../../src/data/replay/loader', () => ({ loadReplayIndex: vi.fn() }))
 vi.mock('../../../../src/data/replay/source', () => ({ createFetchSource: vi.fn() }))
@@ -40,6 +40,7 @@ function ReplayEntryProbe({ browserBaseUrl, browserPointerPath }: { readonly bro
       <output data-testid="state">{replay === null ? (error === null ? 'loading' : 'error') : 'ready'}</output>
       <output data-testid="season-metadata">{replay?.seasonMetadata?.year ?? 'absent'}</output>
       <output data-testid="telemetry-capabilities">{replay?.telemetryCapabilities?.drs ?? 'absent'}</output>
+      <output data-testid="sidecar">{replay?.weatherSidecar?.fixtureId ?? 'none'}</output>
       <button type="button" onClick={retry}>Retry</button>
     </>
   )
@@ -72,6 +73,7 @@ test('loads a nested browser pointer without creating a controller from stale St
   expect(screen.getByTestId('state').textContent).toBe('ready')
   expect(screen.getByTestId('season-metadata').textContent).toBe('absent')
   expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('absent')
+  expect(screen.getByTestId('sidecar').textContent).toBe('none')
 
   unmount()
   expect(activeController.dispose).toHaveBeenCalledOnce()
@@ -122,4 +124,29 @@ test('returns an initialization error and retries the same race entry', async ()
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })) })
   await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
   expect(loadReplayIndex).toHaveBeenCalledTimes(2)
+})
+
+test('threads the optional weather sidecar from the index into the ready replay', async () => {
+  const weatherSidecar = {
+    contractVersion: 'v1',
+    fixtureId: 'test-race',
+    timeMs: [0],
+    airTempC: [21.0],
+    humidityPct: [60],
+    pressureMbar: [1013.2],
+    rainfall: [false],
+    trackTempC: [30.5],
+    windDirectionDeg: [180],
+    windSpeedMps: [3.2],
+  } as WeatherSidecar
+  const weatherIndex = { ...index, weatherSidecar } as unknown as ReplayIndex
+  const controller = createController()
+  vi.mocked(createFetchSource).mockReturnValue(source)
+  vi.mocked(loadReplayIndex).mockResolvedValueOnce(weatherIndex)
+  vi.mocked(createReplayController).mockReturnValue(controller)
+
+  render(<ReplayEntryProbe browserBaseUrl="/seasons/2024/" browserPointerPath="browser-current.json" />)
+  await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
+
+  expect(screen.getByTestId('sidecar').textContent).toBe('test-race')
 })

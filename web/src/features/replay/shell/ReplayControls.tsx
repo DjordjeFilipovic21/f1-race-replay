@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayEvent, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayEvent, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
@@ -7,6 +7,7 @@ import { LapAnalysisPanel } from '../panels/LapAnalysisPanel'
 import { LiveLeaderboardPanel } from '../panels/LiveLeaderboardPanel'
 import { LiveTrackMap } from '../panels/LiveTrackMap'
 import { RaceControlPanel, RACE_CONTROL_MESSAGE_DURATION_MS, RACE_CONTROL_MESSAGE_EXIT_DURATION_MS } from '../panels/RaceControlPanel'
+import { WeatherPanel } from '../panels/WeatherPanel'
 import { LiveTyreStrategyPanel } from '../panels/LiveTyreStrategyPanel'
 import { LivePitLossPositionPanel } from '../panels/LivePitLossPositionPanel'
 import { selectLapSectorData } from '../selectors/lap-sector-selectors'
@@ -32,10 +33,11 @@ export interface ReplayControlsProps {
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
   readonly penaltySidecar?: PenaltySidecar
+  readonly weatherSidecar?: WeatherSidecar | null
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, weatherSidecar }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -160,6 +162,12 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       label: 'Race control',
       columns: 1,
       element: <RaceControlPanel snapshot={snapshot} activeMessage={activeRaceControlMessage} isMessageExiting={isRaceControlMessageExiting} />,
+    },
+    {
+      id: 'weather',
+      label: 'Weather',
+      columns: 1,
+      element: <WeatherPanel snapshot={snapshot} weatherSidecar={weatherSidecar} />,
     },
     {
       id: 'driver',

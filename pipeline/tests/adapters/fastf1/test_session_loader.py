@@ -96,6 +96,17 @@ def test_load_session_identifies_missing_required_session_data():
         load_session(session_factory=lambda: FakeSession(missing_data="pos_data"))
 
 
+def test_load_session_accepts_fastf1_soft_weather_absence():
+    # Arrange — FastF1 can complete the load while leaving weather_data unset.
+    session = FakeSession(missing_data="weather_data")
+
+    # Act
+    loaded_session = load_session(session=session)
+
+    # Assert — all core session data remains required, but weather is optional.
+    assert loaded_session is session
+
+
 def test_load_session_accepts_public_shaped_fastf1_fixture_without_network_loading():
     # Arrange: an already-loaded public-shaped session has typed FastF1 tables and no factory.
     session = build_complete_session()

@@ -180,8 +180,9 @@ test('renders persistent workspace headers in canonical order with definition-dr
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.getAttribute('class'))).toEqual([
-    'replay-panel-frame',
-    'replay-panel-frame',
+     'replay-panel-frame',
+     'replay-panel-frame',
+     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
@@ -197,8 +198,8 @@ test('renders persistent workspace headers in canonical order with definition-dr
   expect(playerPanel?.contains(screen.getByLabelText('Replay time'))).toBe(true)
   expect(playerPanel?.contains(screen.getByLabelText('Lap navigation'))).toBe(true)
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('Track map')
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '2', '1', '1', '1', '1', '1', '2', '1'])
-  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '2', '4', '1', '4', '4', '2', '2', '4'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '1', '2', '1', '1', '1', '1', '1', '2', '1'])
+  expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '4', '2', '4', '1', '4', '4', '2', '2', '4'])
 })
 
 test('unpins and restores timestamp and lap navigation with the Player panel', () => {
@@ -221,7 +222,7 @@ test('removes an unpinned panel frame and restores it with its drag handle from 
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
 
-  expect(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).toHaveLength(8)
+  expect(document.querySelectorAll('.replay-workspace > .replay-panel-frame')).toHaveLength(9)
   expect(screen.queryByRole('button', { name: 'Move Track map panel' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
   expect(screen.getByRole('button', { name: 'Pin Track map panel' }).getAttribute('aria-pressed')).toBe('false')

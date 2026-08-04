@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar",
+  "title": "Browser replay weather sidecar",
+  "description": "Optional native-cadence weather observations for a browser replay. Arrays are aligned, and timeMs is strictly ascending.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "fixtureId",
+    "timeMs",
+    "airTempC",
+    "humidityPct",
+    "pressureMbar",
+    "rainfall",
+    "trackTempC",
+    "windDirectionDeg",
+    "windSpeedMps"
+  ],
+  "$defs": {
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "sessionTimeMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "nullableFiniteTemperatureC": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "nullableHumidityPct": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "nullablePressureMbar": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "nullableRainfall": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "nullableWindDirectionDeg": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 359
+    },
+    "nullableWindSpeedMps": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "weatherSidecarFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "schemaId",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "weather-sidecar.json"
+        },
+        "schemaId": {
+          "const": "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "contractVersion": {
+      "const": "v1"
+    },
+    "fixtureId": {
+      "$ref": "#/$defs/fixtureId"
+    },
+    "timeMs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/sessionTimeMs"
+      },
+      "description": "Strictly ascending absolute session times. JSON Schema enforces uniqueness and non-negative values; ordering and alignment are semantic contract checks."
+    },
+    "airTempC": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableFiniteTemperatureC"
+      }
+    },
+    "humidityPct": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableHumidityPct"
+      }
+    },
+    "pressureMbar": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullablePressureMbar"
+      }
+    },
+    "rainfall": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableRainfall"
+      }
+    },
+    "trackTempC": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableFiniteTemperatureC"
+      }
+    },
+    "windDirectionDeg": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableWindDirectionDeg"
+      }
+    },
+    "windSpeedMps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nullableWindSpeedMps"
+      }
+    }
+  }
+}

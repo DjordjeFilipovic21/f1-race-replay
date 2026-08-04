@@ -13,7 +13,7 @@ from f1_replay_pipeline.app.orchestration import (
     SessionResolutionError, TestingSelection as PipelineTestingSelection, resolve_generation_id,
     resolve_session, run_pipeline,
 )
-from fixtures.fake_fastf1_session import build_complete_session
+from fixtures.fake_fastf1_session import build_complete_session, build_no_weather_session
 
 
 def test_race_selection_is_immutable_and_accepts_a_positive_round() -> None:
@@ -155,6 +155,26 @@ def test_pipeline_normalizes_in_canonical_stage_order_and_publishes_exact_tables
     assert published[0]["target_parent"] == Path("artifacts")
     with pytest.raises(TypeError):
         frames["extra"] = object()  # type: ignore[index]
+
+
+def test_pipeline_keeps_core_replay_usable_when_weather_is_absent() -> None:
+    # Arrange — FastF1 session data is complete except for optional weather rows.
+    published: list[Mapping[str, object]] = []
+
+    def publisher(*, frames: Mapping[str, object], target_parent: Path, generation_id: str) -> str:
+        published.append(frames)
+        return "published"
+
+    # Act
+    run_pipeline(_request(), lambda selection: build_no_weather_session(), publisher)
+
+    # Assert — the canonical weather table is typed and empty while core tables remain present.
+    frames = published[0]
+    assert getattr(frames["weather"], "is_empty")()
+    assert all(name in frames for name in (
+        "laps", "results", "car_telemetry", "position_telemetry",
+        "track_status_intervals", "race_control_messages",
+    ))
 
 
 def test_invalid_source_driver_mapping_does_not_call_publisher_and_preserves_stage_cause() -> None:

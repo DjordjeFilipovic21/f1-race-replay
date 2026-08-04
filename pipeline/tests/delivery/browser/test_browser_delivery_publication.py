@@ -10,6 +10,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -24,8 +25,10 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserManifest,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
+    BrowserWeatherSidecar,
     CanonicalGenerationSnapshot,
     TIMELINE_SUMMARY_SCHEMA_ID,
+    WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 import f1_replay_pipeline.delivery.browser.browser_delivery_publication as publication
@@ -60,6 +63,7 @@ def _chunk() -> BrowserChunk:
 def _delivery(
     track_assets: dict[str, object] | None = None,
     timeline_summary: BrowserTimelineSummary | None = None,
+    weather_sidecar: BrowserWeatherSidecar | None = None,
 ) -> BrowserDeliveryBuild:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
@@ -78,6 +82,22 @@ def _delivery(
         assets.update(track_assets)
     return BrowserDeliveryBuild(
         _snapshot(), manifest, assets, (_chunk(),), timeline_summary=timeline_summary,
+        weather_sidecar=weather_sidecar,
+    )
+
+
+def _weather_sidecar(*, fixture_id: str = "race-one") -> BrowserWeatherSidecar:
+    """One valid sparse weather sidecar with corroborated zero samples."""
+    return BrowserWeatherSidecar(
+        fixture_id,
+        (0, 1_000),
+        (21.0, 22.0),
+        (50.0, 55.0),
+        (1013.0, 1012.0),
+        (False, True),
+        (35.0, 36.0),
+        (90, 0),
+        (2.5, 0.0),
     )
 
 
@@ -797,7 +817,7 @@ def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_pat
 
     _publish(tmp_path / "browser")
 
-    assert calls == 8
+    assert calls == 9
 
 
 def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:
@@ -866,3 +886,224 @@ def test_schema_normalization_preserves_large_scalar_sequences() -> None:
     values = tuple(range(10_000))
 
     assert publication._schema_compatible_value(values) is values
+
+
+# ===========================================================================
+# Weather sidecar publication tests
+# ===========================================================================
+
+
+def test_publication_writes_and_references_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange & Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()),
+        schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+    weather_path = tmp_path / "browser" / "generations" / "delivery-one" / "weather-sidecar.json"
+    weather = json.loads(weather_path.read_bytes())
+
+    # Assert — artifact written, referenced, and digested in the manifest.
+    assert weather == _weather_sidecar().as_dict()
+    assert manifest["weatherSidecar"] == {
+        "path": "weather-sidecar.json",
+        "schemaId": WEATHER_SIDECAR_SCHEMA_ID,
+        "sha256": hashlib.sha256(weather_path.read_bytes()).hexdigest(),
+    }
+    assert result.weather_sidecar_path == weather_path
+    assert result.artifact_digests["weather-sidecar.json"] == manifest["weatherSidecar"]["sha256"]
+
+
+def test_weather_sidecar_publication_is_byte_identical(tmp_path: Path) -> None:
+    # Arrange
+    delivery = _delivery(weather_sidecar=_weather_sidecar())
+
+    # Act
+    first = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-one", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    second = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-two", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+
+    # Assert — every artifact including the weather sidecar is byte-identical.
+    first_paths = (
+        first.manifest_path,
+        first.track_assets_path,
+        first.generation_path / "weather-sidecar.json",
+        *first.chunk_paths,
+    )
+    second_paths = (
+        second.manifest_path,
+        second.track_assets_path,
+        second.generation_path / "weather-sidecar.json",
+        *second.chunk_paths,
+    )
+    assert [path.read_bytes() for path in first_paths] == [path.read_bytes() for path in second_paths]
+
+
+def test_publication_without_weather_sidecar_is_backward_compatible(tmp_path: Path) -> None:
+    # Arrange & Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="legacy-delivery",
+        delivery=_delivery(weather_sidecar=None),
+        schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    # Assert — old deliveries omit the sidecar and still validate fully.
+    assert result.weather_sidecar_path is None
+    assert "weather-sidecar.json" not in result.artifact_digests
+    assert "weatherSidecar" not in manifest
+
+    validate_complete_browser_delivery(
+        tmp_path / "browser",
+        expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64,
+        schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_publication_rejects_weather_sidecar_fixture_id_mismatch(tmp_path: Path) -> None:
+    # Arrange — sidecar fixture_id disagrees with the manifest fixture_id.
+    delivery = _delivery(weather_sidecar=_weather_sidecar(fixture_id="other-race"))
+
+    # Act / Assert
+    with pytest.raises(BrowserDeliveryPublicationError, match="disagrees with the manifest"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=delivery, schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_complete_validator_rejects_a_weather_sidecar_digest_mismatch(tmp_path: Path) -> None:
+    # Arrange — publish with a weather sidecar, then mutate its stored bytes.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+    weather_path = result.weather_sidecar_path
+    assert weather_path is not None
+    weather_path.write_bytes(weather_path.read_bytes().replace(b'"airTempC"', b'"airTempX"'))
+
+    # Act / Assert — manifest checksum disagrees with the stored artifact.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "checksum disagrees for weather-sidecar.json" in str(error.value.__cause__)
+
+
+def _rewrite_weather_sidecar_and_manifest(result, mutate) -> None:
+    """Redigest a stored weather sidecar, manifest reference, and pointer."""
+    weather_path = result.weather_sidecar_path
+    assert weather_path is not None
+    weather = json.loads(weather_path.read_bytes())
+    mutate(weather)
+    weather_bytes = json.dumps(weather, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    weather_path.write_bytes(weather_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["weatherSidecar"]["sha256"] = hashlib.sha256(weather_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+
+def test_complete_validator_rejects_a_schema_invalid_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest a schema-invalid weather payload.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def replace_air_temp_with_string(weather: dict[str, object]) -> None:
+        cast(list[object], weather["airTempC"])[0] = "warm"
+
+    _rewrite_weather_sidecar_and_manifest(result, replace_air_temp_with_string)
+
+    # Act / Assert — schema validation rejects the mutated payload.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "weather sidecar fails replay-data v1 schema validation" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_weather_sidecar_with_unsorted_timestamps(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest a payload with non-increasing times.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def regress_timestamps(weather: dict[str, object]) -> None:
+        # [0, 1000] -> [1000, 0]: schema-unique but semantically unsorted.
+        times = cast(list[object], weather["timeMs"])
+        times[0] = 1_000
+        times[1] = 0
+
+    _rewrite_weather_sidecar_and_manifest(result, regress_timestamps)
+
+    # Act / Assert — the semantic contract rejects bad ordering.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "strictly increasing" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_an_unsanitized_zero_sentinel_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest an uncorroborated zero humidity sentinel.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def zero_humidity_without_corroboration(weather: dict[str, object]) -> None:
+        cast(list[object], weather["airTempC"])[1] = None
+        cast(list[object], weather["humidityPct"])[1] = 0.0
+        cast(list[object], weather["pressureMbar"])[1] = None
+        cast(list[object], weather["trackTempC"])[1] = None
+        cast(list[object], weather["windDirectionDeg"])[1] = None
+        cast(list[object], weather["windSpeedMps"])[1] = None
+
+    _rewrite_weather_sidecar_and_manifest(result, zero_humidity_without_corroboration)
+
+    # Act / Assert — the ADR-003 sentinel audit rejects the payload.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "unsanitized zero sentinel" in str(error.value.__cause__)
+
+
+def test_weather_sidecar_model_rejects_non_finite_before_publication() -> None:
+    # ❌ Negative: the model boundary rejects non-finite measurements before any
+    # payload can reach the publication path (the JSON engines admit NaN as a
+    # nullable number, so the finite guarantee lives in the immutable model).
+    with pytest.raises(TypeError, match="air_temp_c"):
+        BrowserWeatherSidecar(
+            "race-one", (0, 1_000), (float("nan"), 22.0), (50.0, 55.0),
+            (1013.0, 1012.0), (False, True), (35.0, 36.0), (90, 0), (2.5, 0.0),
+        )
