@@ -77,8 +77,10 @@ Before approving a release, record these checks explicitly:
    checked; manifests without the reference cause no weather request.
 4. **Selector:** lookup is the latest row at or before the replay cursor;
    before-first, no-measurement, and stale rows return unavailable.
-5. **UI:** normal, null, stale, unavailable, rainfall, wind direction, and
-   zero-valued display states are accessible and do not render fabricated zeroes.
+5. **UI:** normal, null, stale, unavailable, wind direction, and zero-valued
+   display states are accessible and do not render fabricated zeroes. Rainfall
+   remains in the sidecar and drives the replay weather state; it is intentionally
+   omitted from the compact Weather metric grid.
 6. **Digest:** the manifest sidecar SHA-256 equals the uploaded bytes, and the
    pointer `manifestSha256` equals the uploaded manifest bytes.
 7. **Pointer:** the pointer resolves to the intended immutable generation and

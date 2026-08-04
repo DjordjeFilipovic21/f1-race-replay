@@ -2,6 +2,7 @@ import type { WeatherSidecar } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 
 export const STALE_WEATHER_MS = 90_000
+const DISPLAYED_MEASUREMENT_KEYS = ['airTempC', 'humidityPct', 'pressureMbar', 'trackTempC', 'windDirectionDeg', 'windSpeedMps'] as const
 
 export type WeatherSelectionStatus = 'fresh' | 'stale' | 'unavailable'
 
@@ -80,7 +81,9 @@ function readObservation(sidecar: WeatherSidecar, index: number): Omit<WeatherSe
 }
 
 function hasUsableMeasurement(values: Omit<WeatherSelection, 'status' | 'reason' | 'observationTimeMs' | 'ageMs'>): boolean {
-  return Object.values(values).some((value) => value !== null && value !== undefined)
+  // Rainfall remains in the sidecar and powers the replay weather state, but is
+  // intentionally omitted from the compact Weather panel metric grid.
+  return DISPLAYED_MEASUREMENT_KEYS.some((key) => values[key] !== null && values[key] !== undefined)
 }
 
 function unavailable(reason: Exclude<WeatherSelectionReason, 'fresh' | 'stale'>): WeatherSelection {

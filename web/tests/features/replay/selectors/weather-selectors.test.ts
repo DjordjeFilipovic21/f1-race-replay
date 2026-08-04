@@ -119,6 +119,27 @@ describe('causalWeatherSelector unavailable states', () => {
     expect(selection.windDirectionDeg).toBeNull()
     expect(selection.windSpeedMps).toBeNull()
   })
+
+  test('does not mark a row fresh when rainfall is the only usable hidden value', () => {
+    // Arrange — rainfall is retained in the sidecar but is not rendered in the compact panel.
+    const sidecar = singleObservation({
+      airTempC: [null],
+      humidityPct: [null],
+      pressureMbar: [null],
+      rainfall: [true],
+      trackTempC: [null],
+      windDirectionDeg: [null],
+      windSpeedMps: [null],
+    })
+
+    // Act
+    const selection = causalWeatherSelector(sidecar, 0)
+
+    // Assert — hidden-only data cannot make the visible Weather panel claim freshness.
+    expect(selection.status).toBe('unavailable')
+    expect(selection.reason).toBe('no-usable-measurements')
+    expect(selection.rainfall).toBe(true)
+  })
 })
 
 describe('causalWeatherSelector sparse sampling', () => {

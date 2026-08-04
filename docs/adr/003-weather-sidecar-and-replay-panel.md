@@ -174,9 +174,9 @@ Row-level rules:
   row is indistinguishable from a missing sample.
 - Rows are never dropped: every canonical weather row maps to one sidecar entry
   at its native `session_time_ms`. A row whose only surviving value is explicit
-  `rainfall: false` displays the source's dry/unknown result with all other
-  conditions unavailable; a canonical/adapted `rainfall: null` displays
-  rainfall as unavailable.
+  rainfall is retained in the sidecar and replay weather state, while the
+  compact Weather panel remains unavailable because rainfall is not one of its
+  visible metrics; a canonical/adapted `rainfall: null` remains unavailable.
 - FastF1's raw API exposes rainfall as a boolean and may turn a missing source
   value into `false`. That source limitation is preserved, not reclassified as
   certainty. The canonical null policy remains authoritative whenever the
