@@ -5,6 +5,7 @@ import polars as pl
 import pytest
 
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_NAMES, get_canonical_schema
+from f1_replay_pipeline.domain.canonical_contract import QUALIFYING_PHASE_COLUMN
 from f1_replay_pipeline.domain.validators import (
     CanonicalValidationError,
     validate_canonical_frames,
@@ -161,6 +162,13 @@ def _v2_results(**changes: object) -> pl.DataFrame:
     return pl.DataFrame([row], schema=get_canonical_schema("results", "v2"))
 
 
+def _v2_laps(**changes: object) -> pl.DataFrame:
+    row = _frame("laps").to_dicts()[0]
+    row[QUALIFYING_PHASE_COLUMN] = None
+    row.update(changes)
+    return pl.DataFrame([row], schema=get_canonical_schema("laps", "v2"))
+
+
 def test_v2_frame_boundary_rejects_missing_session_mode_and_unsafe_identity():
     frames = _v2_frames()
 
@@ -206,6 +214,56 @@ def test_v2_results_rejects_negative_qualifying_time_values():
     # Act / Assert: qualifying times must be non-negative integer milliseconds.
     with pytest.raises(CanonicalValidationError, match="non-negative integer milliseconds"):
         validate_canonical_table("results", frame, version="v2")
+
+
+@pytest.mark.parametrize("phase", ["Q1", "Q2", "Q3", None])
+def test_v2_laps_accepts_wire_qualifying_phases_and_null(phase):
+    validate_canonical_table("laps", _v2_laps(qualifying_phase=phase), version="v2")
+
+
+@pytest.mark.parametrize("phase", ["q1", "Q4", "qualifying", ""])
+def test_v2_laps_rejects_invalid_qualifying_phase_values(phase):
+    with pytest.raises(CanonicalValidationError, match="qualifying_phase"):
+        validate_canonical_table("laps", _v2_laps(qualifying_phase=phase), version="v2")
+
+
+def test_v2_laps_boundary_rejects_missing_qualifying_phase_column():
+    frame = _frame("laps")
+
+    with pytest.raises(CanonicalValidationError, match="missing columns: qualifying_phase"):
+        validate_canonical_table("laps", frame, version="v2")
+
+
+def test_v2_laps_boundary_rejects_duplicate_canonical_lap_keys():
+    first = _v2_laps(qualifying_phase="Q1").to_dicts()[0]
+    second = dict(first, qualifying_phase="Q2")
+    frame = pl.DataFrame([first, second], schema=get_canonical_schema("laps", "v2"))
+
+    with pytest.raises(CanonicalValidationError, match="duplicate canonical key"):
+        validate_canonical_table("laps", frame, version="v2")
+
+
+def test_v2_frame_boundary_requires_null_qualifying_phase_for_non_qualifying_mode():
+    frames = _v2_frames()
+    row = _frame("laps").to_dicts()[0]
+    row.update({
+        "session_id": "2026-example-practice-1",
+        QUALIFYING_PHASE_COLUMN: "Q1",
+    })
+    frames["laps"] = pl.DataFrame([row], schema=get_canonical_schema("laps", "v2"))
+
+    with pytest.raises(CanonicalValidationError, match="null for non-qualifying"):
+        validate_canonical_frames(frames, version="v2")
+
+
+@pytest.mark.parametrize("mode", ["race", "sprint"])
+def test_v2_race_like_modes_accept_nullable_qualifying_phase(mode):
+    frames = _v2_frames()
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit(mode).alias("session_mode")
+    )
+
+    validate_canonical_frames(frames, version="v2")
 
 
 def test_v2_frame_boundary_rejects_non_normalized_session_mode():

@@ -348,7 +348,7 @@ def _add_browser_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     browser.add_argument("--canonical", type=Path, required=True, help="Canonical parent containing current.json.")
     browser.add_argument("--output", type=Path, required=True, help="Output directory for browser generations.")
     browser.add_argument("--delivery-version", type=_generation_id, required=True, help="Safe browser delivery version.")
-    browser.add_argument("--schema-root", type=Path, required=True, help="Local replay-data v1 schema directory.")
+    browser.add_argument("--schema-root", type=Path, required=True, help="Local replay-data v2 schema directory.")
 
 
 def _add_generate_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -360,7 +360,7 @@ def _add_generate_parser(commands: argparse._SubParsersAction[argparse.ArgumentP
     generate.add_argument("--session", type=_nonblank_text, default="R", help="FastF1 session alias (default: R).")
     generate.add_argument("--output", type=Path, help="Canonical season parent (default: artifacts/seasons/<year>/canonical).")
     generate.add_argument("--browser-output", type=Path, help="Browser season parent (default: artifacts/seasons/<year>/browser).")
-    generate.add_argument("--schema-root", type=Path, default=Path("contracts/replay-data/v1/schemas"), help="Local replay-data v1 schema directory.")
+    generate.add_argument("--schema-root", type=Path, default=Path("contracts/replay-data/v2/schemas"), help="Local replay-data v2 schema directory.")
     _add_backend_option(generate, _RACE_BACKENDS)
     generate.add_argument("--resume", action="store_true", help="Skip only races with validated existing outputs.")
     generate.add_argument("--force", action="store_true", help="Regenerate selected races even when resume would skip them.")
@@ -377,7 +377,7 @@ def _add_verify_parser(commands: argparse._SubParsersAction[argparse.ArgumentPar
     verify.add_argument("--year", type=_positive_integer, required=True, help="Formula 1 season year.")
     verify.add_argument("--output", type=Path, help="Canonical season parent (default: artifacts/seasons/<year>/canonical).")
     verify.add_argument("--browser-output", type=Path, help="Browser season parent (default: artifacts/seasons/<year>/browser).")
-    verify.add_argument("--schema-root", type=Path, default=Path("contracts/replay-data/v1/schemas"), help="Local replay-data v1 schema directory.")
+    verify.add_argument("--schema-root", type=Path, default=Path("contracts/replay-data/v2/schemas"), help="Local replay-data v2 schema directory.")
 
 
 class _TerminalProgressRenderer:

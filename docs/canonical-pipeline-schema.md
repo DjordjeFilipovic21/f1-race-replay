@@ -138,6 +138,21 @@ all descriptive fields are nullable. Row order is `session_id` ascending.
 Testing events preserve `round_number = 0`; select them through FastF1's
 testing-event/session APIs rather than ordinary round lookup.
 
+#### One typed nullable schema across modes
+
+All seven normalized modes share the same typed nullable canonical tables
+instead of forking per mode. Practice, qualifying, sprint, and race sessions
+produce the same `laps`, `results`, telemetry, and support tables with the
+same columns and dtypes; the normalized `session_type` in `session_metadata`
+is the mode identity, and mode-specific capability is expressed only at
+browser-delivery time through v2 artifacts gated on `sessionMode`
+(`timelineSummary`/`pitLossModel` are race-like-only;
+`qualifyingSummary`/`qualifyingLapStatus` are qualifying-like-only). A single
+schema keeps writers, readers, and validation identical across modes, and
+nullable columns carry what a mode does not produce rather than inventing
+values — for example, qualifying sessions populate
+`q1_time_ms`/`q2_time_ms`/`q3_time_ms` and leave race-only timing null.
+
 ### `drivers`
 
 One row maps a source driver key to a canonical driver. Its key and ascending
@@ -242,7 +257,10 @@ qualifying-result durations; absent or `NaT` values remain null. Best-lap
 timing is deliberately not duplicated here and remains derivable from valid
 canonical `laps`. `classified_position` preserves FastF1 values such as `1`,
 `R`, and `D`. `driver_id` must resolve through `drivers`. Duplicate keys are
-rejected.
+rejected. At browser delivery, qualifying-like v2 sessions surface these
+results through the optional `qualifyingSummary` artifact, which also carries
+`bestLapNumber`/`bestLapTimeMs` derived from valid (non-deleted) canonical
+laps.
 
 ## Native cadence and interpolation
 

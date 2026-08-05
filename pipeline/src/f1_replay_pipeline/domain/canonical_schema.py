@@ -5,7 +5,11 @@ from types import MappingProxyType
 
 import polars as pl
 
-from .canonical_contract import ContractVersion, get_canonical_contract
+from .canonical_contract import (
+    ContractVersion,
+    QUALIFYING_PHASE_COLUMN,
+    get_canonical_contract,
+)
 
 Schema = Mapping[str, pl.DataType]
 
@@ -179,6 +183,11 @@ RESULTS_SCHEMA_V2: Schema = MappingProxyType({
     "q3_time_ms": pl.Int64,
 })
 
+LAPS_SCHEMA_V2: Schema = MappingProxyType({
+    **LAPS_SCHEMA,
+    QUALIFYING_PHASE_COLUMN: pl.String,
+})
+
 SESSION_METADATA_SCHEMA_V2: Schema = MappingProxyType({
     "session_id": pl.String,
     "year": pl.Int16,
@@ -192,6 +201,7 @@ SESSION_METADATA_SCHEMA_V2: Schema = MappingProxyType({
 
 CANONICAL_TABLE_SCHEMAS_V2: Mapping[str, Schema] = MappingProxyType({
     **CANONICAL_TABLE_SCHEMAS_V1,
+    "laps": LAPS_SCHEMA_V2,
     "session_metadata": SESSION_METADATA_SCHEMA_V2,
     "results": RESULTS_SCHEMA_V2,
 })
@@ -208,7 +218,6 @@ RACE_CONTROL_MESSAGES_SCHEMA_V1 = RACE_CONTROL_MESSAGES_SCHEMA
 CAR_TELEMETRY_SCHEMA_V2 = CAR_TELEMETRY_SCHEMA
 POSITION_TELEMETRY_SCHEMA_V2 = POSITION_TELEMETRY_SCHEMA
 DRIVERS_SCHEMA_V2 = DRIVERS_SCHEMA
-LAPS_SCHEMA_V2 = LAPS_SCHEMA
 STINTS_SCHEMA_V2 = STINTS_SCHEMA
 WEATHER_SCHEMA_V2 = WEATHER_SCHEMA
 TRACK_STATUS_INTERVALS_SCHEMA_V2 = TRACK_STATUS_INTERVALS_SCHEMA

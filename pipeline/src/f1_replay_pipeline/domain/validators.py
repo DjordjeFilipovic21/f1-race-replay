@@ -10,13 +10,19 @@ from types import MappingProxyType
 
 import polars as pl
 
-from f1_replay_pipeline.domain.canonical_contract import ContractVersion, get_canonical_contract
+from f1_replay_pipeline.domain.canonical_contract import (
+    ContractVersion,
+    QUALIFYING_PHASE_COLUMN,
+    QUALIFYING_PHASES,
+    get_canonical_contract,
+)
 from f1_replay_pipeline.domain.canonical_schema import get_canonical_schema
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 from f1_replay_pipeline.domain.session_modes import normalize_session_mode
 
 
 _CANONICAL_DRIVER_ID = re.compile(r"(?:[A-Z]{3}|D(?:0|[1-9][0-9]*))\Z")
+_QUALIFYING_MODES = frozenset({"qualifying", "sprint-qualifying", "sprint-shootout"})
 
 
 class CanonicalValidationError(ValueError):
@@ -165,6 +171,16 @@ def _validate_v2_table_semantics(table_name: str, frame: pl.DataFrame) -> None:
                 "results qualifying times must contain non-negative integer milliseconds: "
                 f"{', '.join(invalid)}"
             )
+    elif table_name == "laps":
+        invalid = sorted({
+            value for value in frame.get_column(QUALIFYING_PHASE_COLUMN).drop_nulls().to_list()
+            if value not in QUALIFYING_PHASES
+        })
+        if invalid:
+            raise CanonicalValidationError(
+                "laps qualifying_phase must be null or one of Q1, Q2, Q3: "
+                f"{invalid}"
+            )
 
 
 def validate_canonical_frames(
@@ -211,6 +227,13 @@ def _validate_v2_frame_relationships(frames: Mapping[str, pl.DataFrame]) -> None
         raise CanonicalValidationError(
             "v2 session_metadata session_mode must be normalized and non-null"
         ) from error
+
+    if mode not in _QUALIFYING_MODES:
+        laps = frames["laps"]
+        if laps.get_column(QUALIFYING_PHASE_COLUMN).is_not_null().any():
+            raise CanonicalValidationError(
+                "v2 laps qualifying_phase must be null for non-qualifying sessions"
+            )
 
     for table_name, frame in frames.items():
         mismatches = frame.filter(pl.col("session_id") != session_id).height

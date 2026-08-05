@@ -54,6 +54,15 @@ def test_pit_driver_is_not_artificially_demoted_and_terminal_driver_is_naturally
     assert passed.leaderboard_order == ("B", "A")
 
 
+def test_pre_pit_dropout_retains_the_previous_slot_until_pit_begins():
+    first = _rank(0, _input("A", 100.0), _input("B", 90.0))
+    held = _rank(1, _input("A", 100.0, ProgressMode.PRE_PIT), _input("B", 200.0), state=first.state)
+    pit = _rank(2, _input("A", 100.0, ProgressMode.PIT), _input("B", 200.0), state=held.state)
+
+    assert held.leaderboard_order == ("A", "B")
+    assert pit.leaderboard_order == ("B", "A")
+
+
 def test_leader_gap_is_zero_and_follower_gap_uses_exact_or_interpolated_crossing():
     first = _rank(0, _input("A", 0.0), _input("B", 0.0))
     result = _rank(10, _input("A", 100.0), _input("B", 50.0), state=first.state)

@@ -515,14 +515,17 @@ def test_adapt_laps_rejects_negative_lap_start_time():
         adapt_laps(session, "2026-03-race", {"44": "HAM"})
 
 
-def test_qualifying_fixture_laps_keep_absent_optional_flags_null():
-    # Arrange / Act: normalize the deterministic qualifying fixture laps.
+def test_qualifying_fixture_laps_preserve_flying_evidence_fields():
+    # Arrange / Act: normalize the deterministic qualifying fixture laps, which
+    # intentionally carries the source evidence required for lap classification.
     frame = adapt_laps(build_qualifying_session(), "2026-03-qualifying", PRACTICE_DRIVER_IDS)
 
-    # Assert: optional FastF1 flags absent from the fixture stay typed null rather
-    # than being invented, matching FastF1's nullable sector/deletion semantics.
+    # Assert: source evidence is preserved while the optional deletion reason
+    # remains null because no fixture lap is deleted.
     selected = frame.select(
         "is_accurate", "deleted", "deleted_reason",
         "sector_1_duration_ms", "sector_2_duration_ms", "sector_3_duration_ms",
     )
-    assert selected.null_count().row(0) == (3, 3, 3, 3, 3, 3)
+    assert selected.null_count().row(0) == (0, 0, 3, 0, 0, 0)
+    assert selected["is_accurate"].to_list() == [True, True, True]
+    assert selected["deleted"].to_list() == [False, False, False]

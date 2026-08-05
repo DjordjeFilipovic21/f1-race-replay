@@ -7,7 +7,11 @@ from f1_replay_pipeline.domain.canonical_schema import (
     get_canonical_schema,
     get_canonical_schema_v2,
 )
-from f1_replay_pipeline.domain.canonical_contract import schema_dtype_token
+from f1_replay_pipeline.domain.canonical_contract import (
+    QUALIFYING_PHASE_COLUMN,
+    get_canonical_contract,
+    schema_dtype_token,
+)
 
 
 def test_canonical_table_names_are_exact_and_ordered():
@@ -156,6 +160,32 @@ def test_v2_results_keep_nullable_q_segment_int64_columns():
     }], schema=schema)
     assert frame.schema == schema
     assert frame.null_count().row(0)[-3:] == (1, 0, 1)
+
+
+def test_v2_laps_append_nullable_qualifying_phase_without_mutating_v1():
+    v1_schema = get_canonical_schema("laps", "v1")
+    v2_schema = get_canonical_schema_v2("laps")
+
+    assert QUALIFYING_PHASE_COLUMN not in v1_schema
+    assert list(v2_schema)[-1] == QUALIFYING_PHASE_COLUMN
+    assert v2_schema[QUALIFYING_PHASE_COLUMN] == pl.String
+    assert list(v2_schema)[:-1] == list(v1_schema)
+
+    frame = pl.DataFrame([
+        {**{column: None for column in v1_schema}, QUALIFYING_PHASE_COLUMN: None},
+        {**{column: None for column in v1_schema}, QUALIFYING_PHASE_COLUMN: "Q2"},
+    ], schema=v2_schema)
+
+    assert frame.schema == v2_schema
+    assert frame.get_column(QUALIFYING_PHASE_COLUMN).to_list() == [None, "Q2"]
+
+
+def test_v2_schema_and_contract_are_immutable():
+    with pytest.raises(TypeError):
+        get_canonical_schema_v2("laps")[QUALIFYING_PHASE_COLUMN] = pl.String  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        get_canonical_contract("v2").table_schema_tokens["laps"] = "changed"  # type: ignore[index]
 
 
 def test_v2_contract_tokens_are_distinct_and_require_explicit_selection():

@@ -84,6 +84,41 @@ class FakeFastF1Session:
         raise ValueError(f"unknown driver: {identifier}")
 
 
+class FakeQualifyingLaps(pd.DataFrame):
+    """DataFrame double exposing FastF1's qualifying partition API."""
+
+    _metadata = [
+        "_cancelled_q3", "_missing_status", "_duplicate_partition",
+        "_incomplete_partition", "_malformed_partition",
+    ]
+
+    @property
+    def _constructor(self):  # type: ignore[no-untyped-def]
+        return FakeQualifyingLaps
+
+    def split_qualifying_sessions(self) -> list[pd.DataFrame | None]:
+        if getattr(self, "_missing_status", False):
+            raise DataNotLoadedError("session status data is not loaded")
+        partitions: list[pd.DataFrame | None] = [
+            self.loc[self["QualifyingPhase"] == phase].drop(columns=["QualifyingPhase"])
+            for phase in ("Q1", "Q2", "Q3")
+        ]
+        if getattr(self, "_cancelled_q3", False):
+            partitions[2] = None
+        if getattr(self, "_duplicate_partition", False):
+            partitions[1] = partitions[0]
+        if getattr(self, "_incomplete_partition", False):
+            if partitions[1] is not None:
+                partitions[1] = partitions[1].iloc[:0]
+        if getattr(self, "_malformed_partition", False):
+            partitions[0] = "not-a-partition"
+        return partitions
+
+
+class DataNotLoadedError(RuntimeError):
+    """FastF1-shaped missing session-status failure for adapter tests."""
+
+
 @dataclass(frozen=True)
 class FakeFastF1EventSchedule:
     """Public-shaped schedule seam for the special FastF1 testing lookup."""
@@ -202,8 +237,55 @@ def build_qualifying_session_with_cancelled_q3() -> FakeFastF1Session:
     """
     session = _new_session(name="Qualifying")
     tables = _complete_tables()
-    tables["laps"] = _qualifying_laps()
+    tables["laps"] = _qualifying_laps(cancelled_q3=True)
     tables["results"] = _qualifying_results(cancelled_q3=True)
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_missing_status() -> FakeFastF1Session:
+    """Build a qualifying session whose source status prerequisite is absent."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(missing_status=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_duplicate_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API repeats a lap across phases."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(duplicate_partition=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_missing_splitter() -> FakeFastF1Session:
+    """Build a qualifying session whose laps expose no authoritative splitter."""
+    session = build_qualifying_session()
+    session.laps = session.laps.to_dict("records")
+    return session
+
+
+def build_qualifying_session_with_incomplete_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API omits a source lap."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(incomplete_partition=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_malformed_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API returns a malformed partition."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(malformed_partition=True)
+    tables["results"] = _qualifying_results()
     _set_tables(session, tables)
     return session
 
@@ -418,17 +500,127 @@ def _practice_results() -> pd.DataFrame:
     )
 
 
-def _qualifying_laps() -> pd.DataFrame:
-    """Flying laps with valid times and FastF1's documented NaN per-lap Position."""
+def _qualifying_laps(
+    *, cancelled_q3: bool = False, missing_status: bool = False, duplicate_partition: bool = False,
+    incomplete_partition: bool = False, malformed_partition: bool = False,
+) -> FakeQualifyingLaps:
+    """Flying laps with valid times and FastF1's documented NaN per-lap Position.
+
+    Each row carries the FastF1 3.8.3 evidence columns the qualifying flying-lap
+    policy consumes (PitInTime/PitOutTime/IsAccurate/Deleted/TrackStatus plus
+    the three sector durations and session timestamps).  All three laps are
+    accurate, non-deleted, pit-free flying laps whose sector sums equal their
+    LapTime, so the canonical adapter and the lap-sector sidecar can derive a
+    deterministic ``flying`` classification for each phase.
+    """
+    laps = FakeQualifyingLaps(
+        {
+            "DriverNumber": ["44", "1", "44"],
+            "LapNumber": [1, 1, 2],
+            "LapStartTime": [
+                pd.Timedelta(0, unit="s"),
+                pd.Timedelta(0, unit="s"),
+                pd.Timedelta(110, unit="s"),
+            ],
+            "Time": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(213_999, unit="ms"),
+            ],
+            "LapTime": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(103_999, unit="ms"),
+            ],
+            "Compound": ["SOFT", "SOFT", "SOFT"],
+            "Position": [np.nan, np.nan, np.nan],
+            "QualifyingPhase": ["Q1", "Q2", "Q3"],
+            "PitInTime": [pd.NaT, pd.NaT, pd.NaT],
+            "PitOutTime": [pd.NaT, pd.NaT, pd.NaT],
+            "IsAccurate": [True, True, True],
+            "Deleted": [False, False, False],
+            "TrackStatus": ["1", "1", "1"],
+            "Sector1Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(34_500, unit="ms"),
+            ],
+            "Sector2Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(34_500, unit="ms"),
+            ],
+            "Sector3Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_200, unit="ms"),
+                pd.Timedelta(34_999, unit="ms"),
+            ],
+            "Sector1SessionTime": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(144_500, unit="ms"),
+            ],
+            "Sector2SessionTime": [
+                pd.Timedelta(70_082, unit="ms"),
+                pd.Timedelta(70_000, unit="ms"),
+                pd.Timedelta(179_000, unit="ms"),
+            ],
+            "Sector3SessionTime": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(213_999, unit="ms"),
+            ],
+        }
+    )
+    if cancelled_q3:
+        laps = laps.loc[laps["QualifyingPhase"] != "Q3"].copy()
+    laps._cancelled_q3 = cancelled_q3
+    laps._missing_status = missing_status
+    laps._duplicate_partition = duplicate_partition
+    laps._incomplete_partition = incomplete_partition
+    laps._malformed_partition = malformed_partition
+    return laps
+
+
+def build_qualifying_session_with_incidents() -> FakeFastF1Session:
+    """Build a Qualifying session whose race-control stream carries CarEvents."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps()
+    tables["results"] = _qualifying_results()
+    tables["race_control_messages"] = _incident_messages()
+    _set_tables(session, tables)
+    return session
+
+
+def _incident_messages() -> pd.DataFrame:
+    """Race-control messages mixing terminal CarEvents and non-incident rows.
+
+    ``CAR 44 CRASH`` and ``CAR 1 STOPS`` are actionable terminal CarEvents;
+    ``YELLOW FLAG`` is a session-wide Flag (never a per-driver marker) and
+    ``CAR 44 OFF TRACK`` is a non-terminal CarEvent (never proof of an
+    incident).  Race-control ``Time`` is absolute UTC, unlike the duration
+    streams, so all timestamps anchor to ``t0_date``.
+    """
     return pd.DataFrame(
         {
-            "DriverNumber": ["44", "1"],
-            "LapNumber": [1, 1],
-            "LapStartTime": [pd.Timedelta(0, unit="s"), pd.Timedelta(0, unit="s")],
-            "Time": [pd.Timedelta(105_123, unit="ms"), pd.Timedelta(105_200, unit="ms")],
-            "LapTime": [pd.Timedelta(105_123, unit="ms"), pd.Timedelta(105_200, unit="ms")],
-            "Compound": ["SOFT", "SOFT"],
-            "Position": [np.nan, np.nan],
+            "Time": [
+                pd.Timestamp("2026-03-08T05:00:40.000"),
+                pd.Timestamp("2026-03-08T05:00:50.000"),
+                pd.Timestamp("2026-03-08T05:01:00.000"),
+                pd.Timestamp("2026-03-08T05:01:10.000"),
+            ],
+            "Category": ["CarEvent", "CarEvent", "Flag", "CarEvent"],
+            "Message": [
+                "CAR 44 CRASH",
+                "CAR 1 STOPS",
+                "YELLOW FLAG",
+                "CAR 44 OFF TRACK",
+            ],
+            "Flag": [None, None, "YELLOW", None],
+            "Scope": [None, None, "Track", None],
+            "RacingNumber": ["44", None, None, None],
+            "Lap": [7, 9, None, None],
         }
     )
 

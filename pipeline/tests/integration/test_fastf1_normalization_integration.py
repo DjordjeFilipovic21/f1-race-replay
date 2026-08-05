@@ -321,7 +321,11 @@ def test_normalize_session_emits_explicit_v2_mode_for_supported_aliases(
     alias: str, expected_mode: str,
 ):
     # Arrange: the injected session exposes the same alias as FastF1 metadata.
-    session = build_complete_session()
+    session = (
+        build_qualifying_session()
+        if expected_mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}
+        else build_complete_session()
+    )
     session.name = alias
     selection = RaceSelection(year=2026, round_number=3, session=alias)
 
@@ -469,7 +473,8 @@ def test_normalize_session_rejects_unsupported_session_mode_end_to_end():
 
 def test_qualifying_fixture_with_empty_results_table_emits_typed_empty_results():
     # Arrange: a qualifying session whose timing/classification table is empty.
-    session = build_session_with_empty_table("results")
+    session = build_qualifying_session()
+    session.results = session.results.iloc[:0].copy()
     session.name = "Qualifying"
     factory = build_session_factory(session)
 

@@ -15,6 +15,10 @@ from typing import Literal
 
 
 ContractVersion = Literal["v1", "v2"]
+QualifyingPhase = Literal["Q1", "Q2", "Q3"]
+
+QUALIFYING_PHASES: tuple[QualifyingPhase, ...] = ("Q1", "Q2", "Q3")
+QUALIFYING_PHASE_COLUMN = "qualifying_phase"
 
 CANONICAL_PARQUET_V1 = "canonical-parquet-v1"
 CANONICAL_PARQUET_V2 = "canonical-parquet-v2"
@@ -115,5 +119,5 @@ __all__ = [
     "CANONICAL_TABLE_SCHEMA_TOKEN_V2", "CANONICAL_TABLE_SCHEMA_TOKENS_V1",
     "CANONICAL_TABLE_SCHEMA_TOKENS_V2",
     "CONTRACTS", "CanonicalContract", "ContractVersion", "get_canonical_contract",
-    "schema_dtype_token",
+    "QUALIFYING_PHASES", "QUALIFYING_PHASE_COLUMN", "QualifyingPhase", "schema_dtype_token",
 ]

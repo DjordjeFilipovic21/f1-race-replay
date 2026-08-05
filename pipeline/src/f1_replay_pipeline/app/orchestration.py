@@ -233,6 +233,7 @@ def normalize_session(session: object, selection: SessionSelection) -> Mapping[s
     """Produce exactly the canonical frames, preserving native telemetry streams."""
     metadata = _run_normalization_stage("session_metadata", selection, adapt_session_metadata, session)
     session_id = _metadata_session_id(metadata, selection)
+    session_mode = _metadata_session_mode(metadata, selection)
     drivers = _run_normalization_stage("drivers", selection, adapt_drivers, session, session_id)
     driver_ids = _source_driver_ids(drivers, selection)
     car_telemetry = _run_normalization_stage(
@@ -241,7 +242,9 @@ def normalize_session(session: object, selection: SessionSelection) -> Mapping[s
     position_telemetry = _run_normalization_stage(
         "position_telemetry", selection, adapt_position_telemetry, session, session_id, driver_ids
     )
-    laps = _run_normalization_stage("laps", selection, adapt_laps, session, session_id, driver_ids)
+    laps = _run_normalization_stage(
+        "laps", selection, adapt_laps, session, session_id, driver_ids, session_mode
+    )
     stints = _run_normalization_stage("stints", selection, adapt_stints, session, session_id, driver_ids, laps)
     weather = _run_normalization_stage("weather", selection, adapt_weather, session, session_id)
     track_status_intervals = _run_normalization_stage(
@@ -295,6 +298,20 @@ def _metadata_session_id(metadata: object, selection: SessionSelection) -> str:
             f"normalization failed during session_metadata identity for {_selection_context(selection)}"
         )
     return session_id
+
+
+def _metadata_session_mode(metadata: object, selection: SessionSelection) -> str:
+    try:
+        session_mode = getattr(metadata, "item")(0, "session_mode")
+    except Exception as error:
+        raise NormalizationError(
+            f"normalization failed during session_metadata mode for {_selection_context(selection)}"
+        ) from error
+    if not isinstance(session_mode, str) or not session_mode.strip():
+        raise NormalizationError(
+            f"normalization failed during session_metadata mode for {_selection_context(selection)}"
+        )
+    return session_mode
 
 
 def _run_normalization_stage(
