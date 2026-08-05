@@ -410,7 +410,11 @@ def test_non_race_browser_delivery_uses_native_boundary_without_race_artifacts(
     tmp_path: Path, session_mode: str,
 ) -> None:
     # Arrange: the session has no Lap 1, but native telemetry begins at zero.
-    frames = _canonical_frames(lap_number=2, lap_one_start_ms=0)
+    frames = _canonical_frames(
+        lap_number=2,
+        lap_one_start_ms=0,
+        qualifying_phase="Q1" if session_mode != "practice" else None,
+    )
     frames["session_metadata"] = frames["session_metadata"].with_columns(
         pl.lit(session_mode).alias("session_mode"),
     )
@@ -500,6 +504,64 @@ def test_testing_browser_delivery_is_rejected_at_the_active_boundary(tmp_path: P
         )
 
 
+@pytest.mark.parametrize("session_mode", ["race", "sprint"])
+def test_race_like_browser_delivery_keeps_race_semantics_without_qualifying_artifacts(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    # Arrange: race and sprint are race-like modes with lap timing and a penalty.
+    frames = _live_frames()
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit(session_mode).alias("session_mode"),
+    )
+    frames["race_control_messages"] = pl.DataFrame([
+        _row(
+            "race_control_messages", session_time_ms=9_000, message_index=0,
+            message=(
+                "FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 44 (HAM) - "
+                "CAUSING A COLLISION"
+            ),
+            driver_id="HAM", lap_number=1,
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["race_control_messages"]), strict=True)
+    canonical_parent = tmp_path / f"canonical-{session_mode}"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive and publish the race-like delivery with a passing quality gate.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / f"browser-{session_mode}",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: ordering, lap starts, and race artifacts are preserved unchanged,
+    # while no qualifying-only artifacts or phase data leak into the payload.
+    assert delivery.chunks[0].leaderboard_order[0] == ("HAM", "RUS")
+    assert delivery.manifest.lap_starts != ()
+    assert delivery.timeline_summary is not None
+    manifest = _load_json(published.manifest_path)
+    assert manifest["sessionMode"] == session_mode
+    assert manifest["penaltySidecar"]["path"] == "penalty-sidecar.json"
+    assert "qualifyingSummary" not in manifest
+    assert "qualifyingLapStatus" not in manifest
+    sidecar = _load_json(published.lap_sector_sidecar_path)
+    assert sidecar["phaseBoundaries"] == []
+    assert all(value is None for value in sidecar["drivers"]["HAM"]["qualifyingPhase"])
+    validate_complete_browser_delivery(
+        tmp_path / f"browser-{session_mode}",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
 @pytest.mark.parametrize("session_mode", ["practice", "qualifying", "sprint-shootout"])
 def test_non_race_delivery_uses_the_earliest_native_telemetry_boundary(
     tmp_path: Path, session_mode: str,
@@ -549,10 +611,12 @@ def test_qualifying_summary_publishes_q1_q2_q3_and_best_lap_data(tmp_path: Path)
         _row(
             "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
             lap_end_time_ms=90_000, lap_duration_ms=90_000, compound="MEDIUM",
+            qualifying_phase="Q1",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
             lap_end_time_ms=178_500, lap_duration_ms=88_500, compound="MEDIUM",
+            qualifying_phase="Q2",
         ),
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
     canonical_parent = tmp_path / "canonical-qualifying"
@@ -585,6 +649,12 @@ def test_qualifying_summary_publishes_q1_q2_q3_and_best_lap_data(tmp_path: Path)
         "bestLapNumber": [2],
         "bestLapTimeMs": [88_500],
     }
+    sidecar = _load_json(published.lap_sector_sidecar_path)
+    assert sidecar["drivers"]["HAM"]["qualifyingPhase"] == ["Q1", "Q2"]
+    assert sidecar["phaseBoundaries"] == [
+        {"phase": "Q1", "startMs": 0},
+        {"phase": "Q2", "startMs": 90_000},
+    ]
     validate_complete_browser_delivery(
         tmp_path / "browser-qualifying",
         expected_generation_id=published_canonical.generation_id,
@@ -609,18 +679,19 @@ def test_qualifying_summary_best_lap_ignores_deleted_and_null_duration_runs(tmp_
         _row(
             "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
             lap_end_time_ms=90_000, lap_duration_ms=90_000, deleted=True, compound="MEDIUM",
+            qualifying_phase="Q1",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
-            lap_end_time_ms=180_000, lap_duration_ms=None, compound="MEDIUM",
+            lap_end_time_ms=180_000, lap_duration_ms=None, compound="MEDIUM", qualifying_phase="Q2",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=3, lap_start_time_ms=180_000,
-            lap_end_time_ms=275_000, lap_duration_ms=95_000, compound="MEDIUM",
+            lap_end_time_ms=275_000, lap_duration_ms=95_000, compound="MEDIUM", qualifying_phase="Q3",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=4, lap_start_time_ms=275_000,
-            lap_end_time_ms=369_000, lap_duration_ms=94_000, compound="MEDIUM",
+            lap_end_time_ms=369_000, lap_duration_ms=94_000, compound="MEDIUM", qualifying_phase="Q3",
         ),
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
     canonical_parent = tmp_path / "canonical-qualifying-runs"
@@ -657,17 +728,17 @@ def test_qualifying_lap_status_sidecar_publishes_end_to_end(tmp_path: Path) -> N
         _row(
             "laps", driver_id="HAM", lap_number=1, lap_start_time_ms=0,
             lap_end_time_ms=90_000, lap_duration_ms=90_000, deleted=False,
-            compound="MEDIUM",
+            compound="MEDIUM", qualifying_phase="Q1",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=2, lap_start_time_ms=90_000,
             lap_end_time_ms=180_000, lap_duration_ms=90_000, deleted=True,
-            deleted_reason="TRACK LIMITS", compound="MEDIUM",
+            deleted_reason="TRACK LIMITS", compound="MEDIUM", qualifying_phase="Q2",
         ),
         _row(
             "laps", driver_id="HAM", lap_number=3, lap_start_time_ms=180_000,
             lap_end_time_ms=270_000, lap_duration_ms=90_000, deleted=False,
-            compound="MEDIUM",
+            compound="MEDIUM", qualifying_phase="Q3",
         ),
     ], schema=dict(CANONICAL_TABLE_SCHEMAS["laps"]), strict=True)
     frames["race_control_messages"] = pl.DataFrame([
@@ -725,6 +796,116 @@ def test_qualifying_lap_status_sidecar_publishes_end_to_end(tmp_path: Path) -> N
     ]
     validate_complete_browser_delivery(
         tmp_path / "browser-qualifying-lap-status",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
+def test_qualifying_timeline_publishes_end_to_end(tmp_path: Path) -> None:
+    # Arrange: a qualifying session with yellow/red track-status intervals and
+    # a terminal CarEvent incident marker in the canonical race-control stream.
+    frames = _canonical_frames(
+        lap_number=2, lap_one_start_ms=0, qualifying_phase="Q1",
+    )
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("qualifying").alias("session_mode"),
+    )
+    frames["track_status_intervals"] = pl.DataFrame([
+        _row("track_status_intervals", start_time_ms=0, end_time_ms=5_000, status="2"),
+        _row("track_status_intervals", start_time_ms=5_000, end_time_ms=None, status="5"),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True)
+    frames["race_control_messages"] = pl.DataFrame([
+        _row(
+            "race_control_messages", session_time_ms=7_000, message_index=0,
+            category="CarEvent", message="CAR 44 CRASH",
+            driver_id="HAM", lap_number=7,
+        ),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["race_control_messages"]), strict=True)
+    canonical_parent = tmp_path / "canonical-qualifying-timeline"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive and publish the v2 qualifying delivery with its timeline.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.qualifying_timeline is not None
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-qualifying-timeline",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: the manifest references the digested artifact with a v2 schema id,
+    # the race-only timelineSummary stays absent, and the payload carries
+    # bounded yellow/red intervals plus the causal incident marker.
+    manifest = _load_json(published.manifest_path)
+    assert manifest["qualifyingTimeline"]["path"] == "qualifying-timeline.json"
+    assert manifest["qualifyingTimeline"]["schemaId"].endswith(":v2:qualifying-timeline")
+    assert manifest["schemas"]["qualifyingTimeline"].endswith(":v2:qualifying-timeline")
+    assert "timelineSummary" not in manifest
+    timeline_path = published.qualifying_timeline_path
+    assert timeline_path is not None
+    timeline = _load_json(timeline_path)
+    assert timeline["intervals"] == [
+        {"kind": "yellow", "startMs": 0, "endMs": 5_000},
+        {"kind": "red", "startMs": 5_000, "endMs": 20_001},
+    ]
+    assert timeline["incidentMarkers"] == [{
+        "driverId": "HAM", "timeMs": 7_000,
+        "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+        "lapNumber": 7,
+    }]
+    validate_complete_browser_delivery(
+        tmp_path / "browser-qualifying-timeline",
+        expected_generation_id=published_canonical.generation_id,
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
+
+
+def test_qualifying_timeline_omitted_without_evidence_end_to_end(tmp_path: Path) -> None:
+    # Arrange: a qualifying session with no yellow/red intervals and no
+    # terminal CarEvent incident evidence.
+    frames = _canonical_frames(
+        lap_number=2, lap_one_start_ms=0, qualifying_phase="Q1",
+    )
+    frames["session_metadata"] = frames["session_metadata"].with_columns(
+        pl.lit("qualifying").alias("session_mode"),
+    )
+    canonical_parent = tmp_path / "canonical-qualifying-no-timeline"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v2",
+    )
+
+    # Act: derive and publish the qualifying delivery without the artifact.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.qualifying_timeline is None
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-qualifying-no-timeline",
+        delivery_version="delivery-v2",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+        contract_version="v2",
+    )
+
+    # Assert: the reference is absent, the delivery is still valid, and no
+    # fabricated OUT/DNF marker or race timelineSummary leaks into the manifest.
+    assert published.qualifying_timeline_path is None
+    assert "qualifying-timeline.json" not in published.artifact_digests
+    manifest = _load_json(published.manifest_path)
+    assert "qualifyingTimeline" not in manifest
+    assert "qualifyingTimeline" not in manifest["schemas"]
+    assert "timelineSummary" not in manifest
+    assert "dnfMarkers" not in manifest
+    validate_complete_browser_delivery(
+        tmp_path / "browser-qualifying-no-timeline",
         expected_generation_id=published_canonical.generation_id,
         expected_manifest_sha256=published_canonical.manifest_sha256,
         schema_root=CONTRACT_ROOT_V2 / "schemas",
@@ -1004,6 +1185,37 @@ def test_startup_guard_does_not_mix_asynchronous_per_driver_samples(tmp_path: Pa
     )
 
     assert _leaderboard_value(delivery, 4_000) == ("NOR", "RUS", "TSU", "OCO")
+
+
+def test_startup_guard_waits_for_a_reliable_delayed_projection_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_parent = tmp_path / "canonical"
+    distances = {"NOR": 130.0, "RUS": 120.0, "TSU": 110.0, "OCO": 95.0}
+    position_samples = {
+        driver: ((10_000, 100.0), (15_000, distance), (20_000, distance))
+        for driver, distance in distances.items()
+    }
+    frames = _startup_grid_frames(distances, position_samples=position_samples)
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    captured = {}
+    original = delivery_orchestration._derive_live_fields
+
+    def capture(*args, startup_plan=None, **kwargs):
+        captured["plan"] = startup_plan
+        return original(*args, startup_plan=startup_plan, **kwargs)
+
+    monkeypatch.setattr(delivery_orchestration, "_derive_live_fields", capture)
+
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _square_track_assets(),
+        quality_assessor=lambda *_: _assessment(True),
+    )
+
+    assert captured["plan"].timestamp_ms == 15_000
+    assert _leaderboard_value(delivery, 15_000) == ("NOR", "RUS", "TSU", "OCO")
 
 
 def test_shifted_ranking_cut_seeds_visual_origin_straddle_without_grid_branching(
@@ -1386,7 +1598,8 @@ def test_finished_leader_keeps_frozen_progress_and_p1_after_offtrack_data(
 def _canonical_frames(
     *, lap_number: int = 1, lap_one_start_ms: int | None = 0,
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
-    include_pre_race: bool = False, include_rpm: bool = False, year: int = 2026,
+    qualifying_phase: str | None = None, include_pre_race: bool = False,
+    include_rpm: bool = False, year: int = 2026,
 ) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
     rows["session_metadata"][0]["year"] = year
@@ -1445,7 +1658,7 @@ def _canonical_frames(
     rows["laps"] = [
         _row(
             "laps", driver_id=driver_id, lap_number=lap_number, lap_start_time_ms=lap_start_ms,
-            lap_end_time_ms=20_001, compound="MEDIUM",
+            lap_end_time_ms=20_001, compound="MEDIUM", qualifying_phase=qualifying_phase,
         )
         for driver_id, lap_start_ms in lap_rows
     ]

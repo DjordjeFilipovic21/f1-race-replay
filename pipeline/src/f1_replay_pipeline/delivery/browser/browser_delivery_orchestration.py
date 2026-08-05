@@ -23,6 +23,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserPenaltySidecar,
     BrowserPitLossModel,
     BrowserQualifyingLapStatusSidecar,
+    BrowserQualifyingTimeline,
     BrowserStintSummary,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
@@ -31,7 +32,11 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     deep_freeze_json,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import derive_browser_driver_fields
-from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import build_lap_sector_sidecar
+from f1_replay_pipeline.delivery.browser.browser_position_quality import sanitize_browser_positions
+from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import (
+    build_lap_sector_sidecar,
+    build_qualifying_timeline,
+)
 from f1_replay_pipeline.delivery.browser.browser_lap_status import (
     build_qualifying_lap_status_sidecar,
     has_qualifying_lap_status_messages,
@@ -68,7 +73,7 @@ from f1_replay_pipeline.domain.session_modes import SessionMode, normalize_sessi
 
 ProjectionQualityAssessor = Callable[[CanonicalGenerationSnapshot, Mapping[str, object]], ProjectionQualityAssessment]
 
-_STARTUP_PROJECTION_WINDOW_MS = 5_000
+_STARTUP_PROJECTION_WINDOW_MS = 20_000
 _MAX_SHIFTED_STARTUP_SPAN_FRACTION = 0.2
 _NON_STARTER_RESULT_STATUSES = frozenset({"dns", "didnotstart"})
 _RACE_SESSION_MODES = frozenset({"race", "sprint"})
@@ -117,6 +122,7 @@ class BrowserDeliveryBuild:
     pit_loss_model: BrowserPitLossModel | None = None
     penalty_sidecar: BrowserPenaltySidecar | None = None
     qualifying_lap_status_sidecar: BrowserQualifyingLapStatusSidecar | None = None
+    qualifying_timeline: BrowserQualifyingTimeline | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -139,6 +145,12 @@ class BrowserDeliveryBuild:
             raise TypeError(
                 "qualifying_lap_status_sidecar must be a "
                 "BrowserQualifyingLapStatusSidecar or None"
+            )
+        if self.qualifying_timeline is not None and not isinstance(
+            self.qualifying_timeline, BrowserQualifyingTimeline,
+        ):
+            raise TypeError(
+                "qualifying_timeline must be a BrowserQualifyingTimeline or None"
             )
 
 
@@ -168,13 +180,17 @@ def build_browser_delivery(
         race_semantics = session_mode in _RACE_SESSION_MODES
         season_metadata, telemetry_capabilities = _telemetry_metadata(session)
         _validate_track_assets(track_assets, fixture_id)
+        try:
+            geometry = _projection_geometry(track_assets)
+        except ProjectionGeometryError:
+            geometry = None
         driver_ids = tuple(snapshot.frames["drivers"].get_column("driver_id").to_list())
         replay_start_ms = _session_start_time_ms(snapshot, session_mode)
         timeline = _delivery_timeline(snapshot, replay_start_ms)
         if not timeline:
             raise ValueError("a browser delivery requires a canonical timestamp at or after the session boundary")
         drivers = {
-            driver_id: derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
+            driver_id: _sanitize_driver_fields(snapshot, driver_id, timeline, geometry)
             for driver_id in driver_ids
         }
         terminal_end_times: Mapping[str, int] = {}
@@ -193,8 +209,10 @@ def build_browser_delivery(
             }
             assessment = _assess_quality(snapshot, track_assets, quality_assessor)
         if race_semantics and assessment is not None and assessment.passed:
-            geometry = _projection_geometry(track_assets)
+            if geometry is None:
+                geometry = _projection_geometry(track_assets)
             pit_lane_starts = _pit_lane_starter_pit_out_times(snapshot, replay_start_ms)
+            pit_lane_entries = _pit_lane_entry_times(snapshot, replay_start_ms)
             startup_plan = _startup_seed_plan(
                 snapshot.frames["results"].to_dicts(), drivers, geometry, replay_start_ms,
                 excluded_driver_ids=frozenset(pit_lane_starts),
@@ -202,6 +220,7 @@ def build_browser_delivery(
             drivers, dynamic_orders = _derive_live_fields(
                 snapshot, geometry, drivers, timeline, terminal_end_times, finish_end_times,
                 startup_plan=startup_plan, pit_lane_starts=pit_lane_starts,
+                pit_lane_entries=pit_lane_entries,
             )
         globals_ = _global_fields(
             snapshot, timeline, driver_ids, dynamic_orders,
@@ -228,6 +247,8 @@ def build_browser_delivery(
             build_timeline_summary(snapshot, replay_start_ms, timeline[-1] + 1)
             if race_semantics else None
         )
+        # The sidecar carries canonical qualifying phases and source-derived
+        # phase starts; publication chooses the v1/v2 wire representation.
         lap_sector_sidecar = build_lap_sector_sidecar(snapshot)
         parsed_penalty_sidecar = build_penalty_sidecar(snapshot)
         penalty_sidecar = (
@@ -243,6 +264,13 @@ def build_browser_delivery(
                     snapshot.frames["race_control_messages"]
                 )
             ) else None
+        )
+        # The optional qualifying-safe timeline artifact (yellow/red intervals and
+        # incident markers) is derived once for qualifying-like sessions within the
+        # same replay window used by the chunks; publication omits it when absent.
+        qualifying_timeline = (
+            build_qualifying_timeline(snapshot, replay_start_ms, timeline[-1] + 1)
+            if session_mode in _QUALIFYING_SESSION_MODES else None
         )
         stint_summary = build_stint_summary(snapshot)
         if race_semantics and assessment is not None:
@@ -272,6 +300,7 @@ def build_browser_delivery(
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
         stint_summary, pit_loss_model, penalty_sidecar, qualifying_lap_status_sidecar,
+        qualifying_timeline,
     )
 
 
@@ -568,22 +597,31 @@ def _startup_seed_plan(
     candidates = _eligible_startup_candidates(results, drivers, excluded_driver_ids)
     if not candidates:
         return None
-    observation = _earliest_startup_projection(candidates, geometry, race_start_ms)
-    if observation is None:
-        raise ValueError(
-            "dynamic ranking rejected: synchronized startup projections are unreliable"
-        )
     length = geometry.circuit_length_meters
-    distances = tuple(
-        ranking_distance(projection.track_distance_meters, length)
-        for _, _, projection in observation.candidates
-    )
-    if len(set(distances)) != len(distances):
-        raise ValueError("dynamic ranking rejected: startup projections contain duplicate positions")
-    if max(distances) - min(distances) > length * _MAX_SHIFTED_STARTUP_SPAN_FRACTION:
-        raise ValueError(
-            "dynamic ranking rejected: startup projections are not a compact shifted grid"
+    observation = None
+    rejected_reason = None
+    after_ms = None
+    while observation is None:
+        candidate = _earliest_startup_projection(
+            candidates, geometry, race_start_ms, after_ms=after_ms,
         )
+        if candidate is None:
+            raise ValueError(rejected_reason or (
+                "dynamic ranking rejected: synchronized startup projections are unreliable"
+            ))
+        distances = tuple(
+            ranking_distance(projection.track_distance_meters, length)
+            for _, _, projection in candidate.candidates
+        )
+        if len(set(distances)) != len(distances):
+            rejected_reason = "dynamic ranking rejected: startup projections contain duplicate positions"
+            after_ms = candidate.timestamp_ms
+            continue
+        if max(distances) - min(distances) > length * _MAX_SHIFTED_STARTUP_SPAN_FRACTION:
+            rejected_reason = "dynamic ranking rejected: startup projections are not a compact shifted grid"
+            after_ms = candidate.timestamp_ms
+            continue
+        observation = candidate
 
     seeds = {}
     for candidate, lap_number, projection in observation.candidates:
@@ -639,8 +677,22 @@ def _pit_lane_starter_pit_out_times(
     })
 
 
+def _pit_lane_entry_times(
+    snapshot: CanonicalGenerationSnapshot, race_start_ms: int,
+) -> Mapping[str, tuple[int, ...]]:
+    """Return authoritative pit-entry boundaries without moving them earlier."""
+    entries: dict[str, set[int]] = {}
+    for row in snapshot.frames["laps"].to_dicts():
+        driver_id = row.get("driver_id")
+        pit_in = row.get("pit_in_time_ms")
+        if isinstance(driver_id, str) and type(pit_in) is int and pit_in >= race_start_ms:
+            entries.setdefault(driver_id, set()).add(pit_in)
+    return MappingProxyType({driver_id: tuple(sorted(times)) for driver_id, times in entries.items()})
+
+
 def _earliest_startup_projection(
     candidates: Sequence[_StartupCandidate], geometry: ProjectionGeometry, race_start_ms: int,
+    *, after_ms: int | None = None,
 ) -> _StartupProjection | None:
     if not candidates:
         return None
@@ -649,6 +701,8 @@ def _earliest_startup_projection(
         shared_timestamps.intersection_update(candidate.fields.time_ms)
     for time_ms in sorted(shared_timestamps):
         if time_ms < race_start_ms:
+            continue
+        if after_ms is not None and time_ms <= after_ms:
             continue
         if time_ms - race_start_ms > _STARTUP_PROJECTION_WINDOW_MS:
             break
@@ -673,9 +727,11 @@ def _derive_live_fields(
     snapshot, geometry, drivers, timeline, terminal_end_times, finish_end_times=None, *,
     startup_plan: _StartupSeedPlan | None = None,
     pit_lane_starts: Mapping[str, int] | None = None,
+    pit_lane_entries: Mapping[str, tuple[int, ...]] | None = None,
 ):
     finish_end_times = {} if finish_end_times is None else finish_end_times
     pit_lane_starts = {} if pit_lane_starts is None else pit_lane_starts
+    pit_lane_entries = {} if pit_lane_entries is None else pit_lane_entries
     result_statuses = {row["driver_id"]: row["status"] for row in snapshot.frames["results"].to_dicts()}
     states = {driver_id: ProgressState() for driver_id in drivers}
     distances = {driver_id: [] for driver_id in drivers}
@@ -731,6 +787,20 @@ def _derive_live_fields(
                     raise ValueError("dynamic ranking rejected: startup seed is not an active lap observation")
                 update = seed.update
                 states[driver_id] = seed.state
+            elif (
+                effective_lap is not None
+                and _is_pre_pit_dropout(
+                    fields, index, timeline, geometry, states[driver_id],
+                    pit_lane_entries.get(driver_id, ()),
+                )
+            ):
+                mode = ProgressMode.PRE_PIT
+                update = advance_progress(
+                    states[driver_id], session_time_ms=time_ms, lap_number=effective_lap,
+                    circuit_length_meters=geometry.circuit_length_meters, projection=None,
+                    mode=ProgressMode.PRE_PIT,
+                )
+                states[driver_id] = update.state
             elif effective_lap is None:
                 update = None
             else:
@@ -753,6 +823,49 @@ def _derive_live_fields(
         driver_id: _with_derived_fields(fields, distances[driver_id], gaps[driver_id], positions[driver_id])
         for driver_id, fields in drivers.items()
     }, tuple(orders)
+
+
+def _is_pre_pit_dropout(
+    fields: BrowserDriverFields,
+    index: int,
+    timeline: tuple[int, ...],
+    geometry: ProjectionGeometry,
+    state: ProgressState,
+    pit_entries: tuple[int, ...],
+) -> bool:
+    """Identify only a contiguous invalid run that ends at canonical pit-in."""
+    if state.last_valid_progress_meters is None or index >= len(fields.time_ms):
+        return False
+    if _has_trustworthy_projection(
+        fields.x[index], fields.y[index], geometry, state.last_track_distance_meters,
+    ):
+        return False
+    pit_time = next((value for value in pit_entries if value > timeline[index]), None)
+    if pit_time is None:
+        return False
+    try:
+        pit_index = timeline.index(pit_time)
+    except ValueError:
+        return False
+    if pit_index <= index:
+        return False
+    return all(
+        not _has_trustworthy_projection(
+            fields.x[future_index], fields.y[future_index], geometry,
+            state.last_track_distance_meters,
+        )
+        for future_index in range(index, pit_index)
+    )
+
+
+def _has_trustworthy_projection(
+    x: float | None, y: float | None, geometry: ProjectionGeometry,
+    previous_distance: float | None,
+) -> bool:
+    projection = project_meters(
+        x, y, geometry, previous_track_distance_meters=previous_distance,
+    )
+    return projection is not None and not projection.is_ambiguous
 
 
 def _pit_starter_cut_crossing_count(
@@ -783,6 +896,16 @@ def _projection_geometry(track_assets: Mapping[str, object]) -> ProjectionGeomet
         if isinstance(point, Mapping)
     )
     return ProjectionGeometry(points, cast(float, track_assets.get("circuitLengthMeters")))
+
+
+def _sanitize_driver_fields(
+    snapshot: CanonicalGenerationSnapshot,
+    driver_id: str,
+    timeline: tuple[int, ...],
+    geometry: ProjectionGeometry | None,
+) -> BrowserDriverFields:
+    fields = derive_browser_driver_fields(snapshot, driver_id, timeline=timeline)
+    return fields if geometry is None else sanitize_browser_positions(fields, geometry)
 
 
 def _terminal_end_times(snapshot, race_start_ms: int) -> dict[str, int]:

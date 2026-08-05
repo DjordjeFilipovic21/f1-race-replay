@@ -9,8 +9,13 @@ from fixtures.fake_fastf1_session import (
     build_practice_session,
     build_qualifying_session,
     build_qualifying_session_with_cancelled_q3,
+    build_qualifying_session_with_duplicate_partition,
+    build_qualifying_session_with_incomplete_partition,
+    build_qualifying_session_with_malformed_partition,
+    build_qualifying_session_with_missing_splitter,
+    build_qualifying_session_with_missing_status,
 )
-from f1_replay_pipeline.domain.canonical_schema import LAPS_SCHEMA, STINTS_SCHEMA
+from f1_replay_pipeline.domain.canonical_schema import LAPS_SCHEMA_V2 as LAPS_SCHEMA, STINTS_SCHEMA
 from f1_replay_pipeline.adapters.fastf1.laps_stints import adapt_laps, adapt_stints
 from f1_replay_pipeline.domain.normalizers import NormalizationError
 
@@ -32,6 +37,36 @@ class LapsOnlySession:
     @property
     def telemetry(self) -> object:
         raise AssertionError("laps adapter must not read merged telemetry")
+
+
+class _IndexedPartition:
+    def __init__(self, frame: pd.DataFrame, source_index: object) -> None:
+        self._frame = frame
+        self._source_index = source_index
+
+    def iterrows(self):  # type: ignore[no-untyped-def]
+        for _, row in self._frame.iterrows():
+            yield self._source_index, row
+
+
+class _PartitionedQualifyingLaps:
+    def __init__(
+        self,
+        source: pd.DataFrame,
+        partitions: list[object | None],
+        source_indexes: list[object] | None = None,
+    ) -> None:
+        self._source = source
+        self._partitions = partitions
+        self._source_indexes = source_indexes
+
+    def iterrows(self):  # type: ignore[no-untyped-def]
+        for position, (_, row) in enumerate(self._source.iterrows()):
+            source_index = self._source.index[position] if self._source_indexes is None else self._source_indexes[position]
+            yield source_index, row
+
+    def split_qualifying_sessions(self) -> list[object | None]:
+        return self._partitions
 
 
 def _lap(**changes: object) -> dict[str, object]:
@@ -324,10 +359,121 @@ def test_qualifying_fixture_laps_normalize_with_valid_times(builder):
     frame = adapt_laps(session, "2026-03-qualifying", PRACTICE_DRIVER_IDS)
 
     # Assert: both drivers keep their deterministic flying-lap durations.
-    assert frame.select("driver_id", "lap_duration_ms").to_dicts() == [
-        {"driver_id": "HAM", "lap_duration_ms": 105_123},
-        {"driver_id": "VER", "lap_duration_ms": 105_200},
+    expected = [
+        {"driver_id": "HAM", "lap_duration_ms": 105_123, "qualifying_phase": "Q1"},
+        {"driver_id": "VER", "lap_duration_ms": 105_200, "qualifying_phase": "Q2"},
     ]
+    if builder is build_qualifying_session:
+        expected.insert(1, {"driver_id": "HAM", "lap_duration_ms": 103_999, "qualifying_phase": "Q3"})
+    assert frame.select("driver_id", "lap_duration_ms", "qualifying_phase").to_dicts() == expected
+
+
+def test_qualifying_split_is_authoritative_and_phase_order_is_not_source_order():
+    frame = adapt_laps(build_qualifying_session(), "2026-03-qualifying", PRACTICE_DRIVER_IDS)
+
+    assert frame.select("lap_number", "qualifying_phase").to_dicts() == [
+        {"lap_number": 1, "qualifying_phase": "Q1"},
+        {"lap_number": 2, "qualifying_phase": "Q3"},
+        {"lap_number": 1, "qualifying_phase": "Q2"},
+    ]
+
+
+def test_non_qualifying_sessions_do_not_call_or_fabricate_qualifying_phases():
+    frame = adapt_laps(build_practice_session(), "2026-03-practice-1", PRACTICE_DRIVER_IDS)
+
+    assert frame.get_column("qualifying_phase").to_list() == [None, None]
+
+
+def test_cancelled_q3_without_eligible_laps_preserves_valid_phase_assignment():
+    frame = adapt_laps(
+        build_qualifying_session_with_cancelled_q3(), "2026-03-qualifying", PRACTICE_DRIVER_IDS
+    )
+
+    assert frame.get_column("qualifying_phase").to_list() == ["Q1", "Q2"]
+
+
+def test_missing_session_status_is_an_authoritative_split_failure():
+    with pytest.raises(NormalizationError, match="loaded session status data"):
+        adapt_laps(
+            build_qualifying_session_with_missing_status(),
+            "2026-03-qualifying",
+            PRACTICE_DRIVER_IDS,
+        )
+
+
+def test_missing_splitter_is_an_authoritative_split_failure():
+    with pytest.raises(NormalizationError, match="split_qualifying_sessions"):
+        adapt_laps(
+            build_qualifying_session_with_missing_splitter(),
+            "2026-03-qualifying",
+            PRACTICE_DRIVER_IDS,
+        )
+
+
+def test_incomplete_qualifying_partition_is_rejected():
+    with pytest.raises(NormalizationError, match="assignment is incomplete"):
+        adapt_laps(
+            build_qualifying_session_with_incomplete_partition(),
+            "2026-03-qualifying",
+            PRACTICE_DRIVER_IDS,
+        )
+
+
+def test_malformed_qualifying_partition_is_rejected():
+    with pytest.raises(NormalizationError, match="iterable mapping records"):
+        adapt_laps(
+            build_qualifying_session_with_malformed_partition(),
+            "2026-03-qualifying",
+            PRACTICE_DRIVER_IDS,
+        )
+
+
+def test_duplicate_qualifying_partition_rows_are_rejected():
+    with pytest.raises(NormalizationError, match="duplicate lap"):
+        adapt_laps(
+            build_qualifying_session_with_duplicate_partition(),
+            "2026-03-qualifying",
+            PRACTICE_DRIVER_IDS,
+        )
+
+
+@pytest.mark.parametrize(
+    "source_indexes",
+    ([0, 0, 2], [None, 1, 2], [[], 1, 2]),
+    ids=["duplicate", "missing", "unhashable"],
+)
+def test_qualifying_assignment_rejects_invalid_authoritative_source_indexes(source_indexes):
+    session = build_qualifying_session()
+    partitions = list(session.laps.split_qualifying_sessions())
+    session.laps = _PartitionedQualifyingLaps(session.laps, partitions, source_indexes)
+
+    with pytest.raises(NormalizationError, match="unique authoritative source lap indices"):
+        adapt_laps(session, "2026-03-qualifying", PRACTICE_DRIVER_IDS)
+
+
+@pytest.mark.parametrize("partition_index", [99, None, []], ids=["unknown", "missing", "unhashable"])
+def test_qualifying_assignment_rejects_invalid_partition_source_indexes(partition_index):
+    session = build_qualifying_session()
+    partitions = list(session.laps.split_qualifying_sessions())
+    assert isinstance(partitions[0], pd.DataFrame)
+    partitions[0] = _IndexedPartition(partitions[0], partition_index)
+    session.laps = _PartitionedQualifyingLaps(session.laps, partitions)
+
+    with pytest.raises(NormalizationError, match="unknown or mismatched source lap index"):
+        adapt_laps(session, "2026-03-qualifying", PRACTICE_DRIVER_IDS)
+
+
+def test_qualifying_assignment_rejects_record_mismatch_at_a_known_source_index():
+    session = build_qualifying_session()
+    partitions = list(session.laps.split_qualifying_sessions())
+    assert isinstance(partitions[0], pd.DataFrame)
+    mismatched = partitions[0].copy()
+    mismatched.loc[:, "LapNumber"] = 99
+    partitions[0] = mismatched
+    session.laps = _PartitionedQualifyingLaps(session.laps, partitions)
+
+    with pytest.raises(NormalizationError, match="unknown or mismatched source lap index"):
+        adapt_laps(session, "2026-03-qualifying", PRACTICE_DRIVER_IDS)
 
 
 def test_practice_fixture_stints_stay_empty_without_stint_labels():
@@ -379,4 +525,4 @@ def test_qualifying_fixture_laps_keep_absent_optional_flags_null():
         "is_accurate", "deleted", "deleted_reason",
         "sector_1_duration_ms", "sector_2_duration_ms", "sector_3_duration_ms",
     )
-    assert selected.null_count().row(0) == (2, 2, 2, 2, 2, 2)
+    assert selected.null_count().row(0) == (3, 3, 3, 3, 3, 3)

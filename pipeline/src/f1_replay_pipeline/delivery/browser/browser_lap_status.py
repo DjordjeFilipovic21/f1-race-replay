@@ -3,7 +3,9 @@
 FastF1 exposes the final ``Deleted`` flag on laps, but the raw race-control
 message is the only stable source for the causal event.  This module therefore
 matches explicit ``TIME ... DELETED`` and ``TIME ... REINSTATED`` messages to
-canonical laps without mutating either canonical table.
+canonical laps without mutating either canonical table.  Non-timed ``LAP
+DELETED`` advisories are source notifications, not causal events, and are
+ignored in their explicitly recognized form.
 """
 
 from __future__ import annotations
@@ -36,7 +38,13 @@ _TIME_STATUS = re.compile(
     r"(?P<status>DELETED|REINSTATED)\b(?P<suffix>.*)\Z",
     re.IGNORECASE,
 )
+_NON_TIMED_LAP_DELETED_ADVISORY = re.compile(
+    r"\A\s*CAR\s*#?\s*[0-9]+(?:\s*\([A-Za-z]{3}\))?\s+LAP\s+DELETED\b"
+    r"\s*-\s+.+?\bLAP\s+[0-9]+\b.+\Z",
+    re.IGNORECASE,
+)
 _STATUS_WORD = re.compile(r"\b(?:DELETED|REINSTATED)\b", re.IGNORECASE)
+_TIME_WORD = re.compile(r"\bTIME\b", re.IGNORECASE)
 _MESSAGE_KEYS = ("message", "Message", "raw_message", "rawMessage")
 _TIME_KEYS = ("session_time_ms", "sessionTimeMs")
 _INDEX_KEYS = ("message_index", "messageIndex")
@@ -106,9 +114,9 @@ def parse_race_control_lap_status_events(
 
 
 def has_qualifying_lap_status_messages(messages: object) -> bool:
-    """Return whether a message table contains an explicit status marker."""
+    """Return whether a message table contains actionable timed status evidence."""
     return any(
-        raw_message is not None and _STATUS_WORD.search(raw_message) is not None
+        raw_message is not None and _TIME_STATUS.search(raw_message) is not None
         for record in _records(messages, "race_control_messages")
         for raw_message in (_first_text(record, _MESSAGE_KEYS),)
     )
@@ -121,10 +129,12 @@ def _parse_record(
     lap_rows: tuple[Mapping[str, object], ...] | None,
 ) -> _ParsedEvent | None:
     raw_message = _first_text(record, _MESSAGE_KEYS)
-    recognized = raw_message is not None and bool(_STATUS_WORD.search(raw_message))
-    event_time_ms = _canonical_time(record)
     if raw_message is None:
         return None
+    if _is_non_timed_lap_deleted_advisory(raw_message):
+        return None
+    recognized = bool(_STATUS_WORD.search(raw_message))
+    event_time_ms = _canonical_time(record)
     if event_time_ms is None:
         if recognized:
             raise LapStatusReconciliationError("qualifying lap-status event has no canonical timestamp")
@@ -169,6 +179,15 @@ def _parse_record(
     if message_index is None:
         raise LapStatusReconciliationError("qualifying lap-status event has an invalid message index")
     return _ParsedEvent(event, message_index[0], message_index[1])
+
+
+def _is_non_timed_lap_deleted_advisory(message: str) -> bool:
+    """Identify FastF1's non-timed ``LAP DELETED`` notification form only."""
+    return (
+        _NON_TIMED_LAP_DELETED_ADVISORY.fullmatch(message) is not None
+        and len(_STATUS_WORD.findall(message)) == 1
+        and _TIME_WORD.search(message) is None
+    )
 
 
 def _match_lap(

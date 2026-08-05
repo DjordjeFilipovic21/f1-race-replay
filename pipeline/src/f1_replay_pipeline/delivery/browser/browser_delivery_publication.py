@@ -20,6 +20,7 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChu
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BrowserQualifyingLapStatusSidecar,
+    BrowserQualifyingTimeline,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     MAX_INT64,
     PENALTY_SIDECAR_SCHEMA_ID,
@@ -35,9 +36,13 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     V2_TIMELINE_SUMMARY_SCHEMA_ID,
     V2_TRACK_ASSETS_SCHEMA_ID,
     V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
+    V2_QUALIFYING_TIMELINE_SCHEMA_ID,
     QUALIFYING_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
+from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import (
+    build_qualifying_timeline,
+)
 from f1_replay_pipeline.delivery.browser.browser_lap_status import (
     build_qualifying_lap_status_sidecar,
     has_qualifying_lap_status_messages,
@@ -61,6 +66,7 @@ from f1_replay_pipeline.domain.session_modes import SessionMode, normalize_sessi
 
 
 _FORMAT_VERSION = "browser-delivery-v1"
+_QUALIFYING_LIKE_MODES = frozenset({"qualifying", "sprint-qualifying", "sprint-shootout"})
 _STAGING_PREFIX = ".browser-delivery-staging-"
 _NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
@@ -109,6 +115,7 @@ _CONTRACT_SPECS = {
         "penalty-sidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
         "qualifying-summary": QUALIFYING_SUMMARY_SCHEMA_ID,
         "qualifying-lap-status": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
+        "qualifying-timeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
     }),
 }
 
@@ -211,6 +218,7 @@ class PublishedBrowserDelivery:
     penalty_sidecar_path: Path | None = None
     qualifying_summary_path: Path | None = None
     qualifying_lap_status_path: Path | None = None
+    qualifying_timeline_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -234,6 +242,7 @@ def publish_browser_delivery(
         schema_root,
         include_qualifying_summary=spec.version == "v2",
         include_qualifying_lap_status=spec.version == "v2",
+        include_qualifying_timeline=spec.version == "v2",
     )
     validators = _contract_validators(schemas, registry)
     artifacts = _prepared_artifacts(version, delivery, validators, spec=spec, progress=emit)
@@ -287,6 +296,7 @@ def validate_complete_browser_delivery(
         penalty_reference = manifest.get("penaltySidecar")
         qualifying_reference = manifest.get("qualifyingSummary")
         qualifying_lap_status_reference = manifest.get("qualifyingLapStatus")
+        qualifying_timeline_reference = manifest.get("qualifyingTimeline")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
@@ -296,6 +306,7 @@ def validate_complete_browser_delivery(
             *((penalty_reference,) if penalty_reference is not None else ()),
             *((qualifying_reference,) if qualifying_reference is not None else ()),
             *((qualifying_lap_status_reference,) if qualifying_lap_status_reference is not None else ()),
+            *((qualifying_timeline_reference,) if qualifying_timeline_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -314,6 +325,7 @@ def validate_complete_browser_delivery(
             schema_root,
             include_qualifying_summary=spec.version == "v2",
             include_qualifying_lap_status=spec.version == "v2",
+            include_qualifying_timeline=spec.version == "v2",
         )
         _validate_stored_delivery_payloads(payloads, _contract_validators(schemas, registry), emit, spec=spec)
         verify_regular_file_identity(manifest_path, manifest_file, "browser manifest")
@@ -450,6 +462,16 @@ def _validate_stored_delivery_payloads(
                 "manifest qualifying lap status reference is invalid"
             )
         expected_paths.add("qualifying-lap-status.json")
+    qualifying_timeline_reference = manifest.get("qualifyingTimeline")
+    if qualifying_timeline_reference is not None:
+        if (
+            not isinstance(qualifying_timeline_reference, dict)
+            or qualifying_timeline_reference.get("path") != "qualifying-timeline.json"
+        ):
+            raise BrowserDeliveryPublicationError(
+                "manifest qualifying timeline reference is invalid"
+            )
+        expected_paths.add("qualifying-timeline.json")
     total = (
         len(chunk_refs) + 2
         + (1 if timeline_reference is not None else 0)
@@ -459,6 +481,7 @@ def _validate_stored_delivery_payloads(
         + (1 if penalty_reference is not None else 0)
         + (1 if qualifying_reference is not None else 0)
         + (1 if qualifying_lap_status_reference is not None else 0)
+        + (1 if qualifying_timeline_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -552,6 +575,25 @@ def _validate_stored_delivery_payloads(
         _emit_validation_progress(
             emit, completed, total, "qualifying lap status sidecar schema",
         )
+    if qualifying_timeline_reference is not None:
+        qualifying_timeline = json.loads(encoded["qualifying-timeline.json"])
+        if not isinstance(qualifying_timeline, dict):
+            raise BrowserDeliveryPublicationError(
+                "qualifying timeline must be a JSON object"
+            )
+        _validate_schema_instance(
+            validators["qualifying-timeline"],
+            qualifying_timeline,
+            "qualifying timeline",
+            spec,
+        )
+        _validate_qualifying_timeline_contract(
+            qualifying_timeline, manifest, spec,
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying timeline schema",
+        )
     if set(encoded) != expected_paths:
         raise BrowserDeliveryPublicationError("delivery contains unreferenced artifacts")
 
@@ -580,6 +622,9 @@ def _prepared_artifacts(
     qualifying_lap_status = _build_qualifying_lap_status(
         delivery, enabled=qualifying_like,
     )
+    qualifying_timeline = _build_qualifying_timeline(
+        delivery, enabled=qualifying_like,
+    )
     total = (
         2 * len(chunks) + 4
         + (2 if summary is not None else 0)
@@ -593,6 +638,7 @@ def _prepared_artifacts(
             else 0
         )
         + (2 if qualifying_lap_status is not None else 0)
+        + (2 if qualifying_timeline is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = _manifest_contract(delivery, spec, mode)
@@ -620,7 +666,7 @@ def _prepared_artifacts(
     sidecar_artifact: PreparedArtifact | None = None
     sidecar_contract = None
     if sidecar is not None:
-        sidecar_contract = _versioned_payload(sidecar.as_dict(), spec)
+        sidecar_contract = _lap_sector_sidecar_payload(sidecar, spec)
         _validate_schema_instance(
             validators["browser-lap-sector-sidecar"], sidecar_contract, "lap sector sidecar", spec,
         )
@@ -692,6 +738,30 @@ def _prepared_artifacts(
         completed += 1
         _emit_validation_progress(
             emit, completed, total, "qualifying lap status sidecar schema",
+        )
+
+    qualifying_timeline_artifact: PreparedArtifact | None = None
+    qualifying_timeline_contract = None
+    if qualifying_timeline is not None:
+        qualifying_timeline_contract = _versioned_payload(
+            qualifying_timeline.as_dict(), spec,
+        )
+        _validate_schema_instance(
+            validators["qualifying-timeline"],
+            qualifying_timeline_contract,
+            "qualifying timeline",
+            spec,
+        )
+        qualifying_timeline_artifact = _prepare_artifact(
+            "qualifying-timeline.json", qualifying_timeline_contract,
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying timeline",
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "qualifying timeline schema",
         )
 
     previous = None
@@ -791,6 +861,19 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest qualifying lap status reference has no sidecar payload"
         )
+    if qualifying_timeline_artifact is not None:
+        manifest["qualifyingTimeline"] = {
+            "path": qualifying_timeline_artifact.path,
+            "schemaId": spec.schema_ids["qualifying-timeline"],
+            "sha256": qualifying_timeline_artifact.sha256,
+        }
+        cast(dict[str, object], manifest["schemas"])["qualifyingTimeline"] = (
+            spec.schema_ids["qualifying-timeline"]
+        )
+    elif "qualifyingTimeline" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest qualifying timeline reference has no timeline payload"
+        )
     if timeline_contract is not None:
         _validate_timeline_summary_contract(timeline_contract, manifest, spec)
     if sidecar_contract is not None:
@@ -804,6 +887,10 @@ def _prepared_artifacts(
     if qualifying_lap_status_contract is not None:
         _validate_qualifying_lap_status_contract(
             qualifying_lap_status_contract, manifest, spec,
+        )
+    if qualifying_timeline_contract is not None:
+        _validate_qualifying_timeline_contract(
+            qualifying_timeline_contract, manifest, spec,
         )
     qualifying_artifact = _qualifying_artifact(delivery, manifest, mode, spec)
     if qualifying_artifact is not None:
@@ -822,7 +909,7 @@ def _prepared_artifacts(
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
         pit_loss_artifact, penalty_artifact, qualifying_artifact,
-        qualifying_lap_status_artifact, spec=spec,
+        qualifying_lap_status_artifact, qualifying_timeline_artifact, spec=spec,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest", spec)
@@ -837,6 +924,7 @@ def _prepared_artifacts(
         *((penalty_artifact,) if penalty_artifact is not None else ()),
         *((qualifying_artifact,) if qualifying_artifact is not None else ()),
         *((qualifying_lap_status_artifact,) if qualifying_lap_status_artifact is not None else ()),
+        *((qualifying_timeline_artifact,) if qualifying_timeline_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -882,6 +970,13 @@ def _versioned_payload(value: object, spec: _BrowserContractSpec) -> object:
     return payload
 
 
+def _lap_sector_sidecar_payload(sidecar, spec: _BrowserContractSpec) -> object:
+    """Serialize phase columns only in the versioned sidecar contract."""
+    return _versioned_payload(
+        sidecar.as_dict(include_qualifying_phase=spec.version == "v2"), spec,
+    )
+
+
 def _build_qualifying_lap_status(
     delivery: BrowserDeliveryBuild, *, enabled: bool,
 ) -> BrowserQualifyingLapStatusSidecar | None:
@@ -906,6 +1001,36 @@ def _build_qualifying_lap_status(
     except (KeyError, IndexError, TypeError, ValueError) as error:
         raise BrowserDeliveryPublicationError(
             "qualifying lap-status sidecar cannot be reconciled"
+        ) from error
+
+
+def _build_qualifying_timeline(
+    delivery: BrowserDeliveryBuild, *, enabled: bool,
+) -> BrowserQualifyingTimeline | None:
+    """Return the delivery's qualifying timeline or derive one from source.
+
+    The orchestration already derives the immutable timeline for qualifying-like
+    sessions; this fallback reuses that value and only derives from the source
+    snapshot when a directly-constructed delivery does not carry one.  Absence
+    (no evidence, non-qualifying mode, or missing inputs) fails closed to
+    ``None`` and the artifact is omitted entirely.
+    """
+    if not enabled:
+        return None
+    if delivery.qualifying_timeline is not None:
+        return delivery.qualifying_timeline
+    frame_names = frozenset(delivery.source.frames)
+    if not (frame_names & {"session_metadata", "track_status_intervals", "race_control_messages"}):
+        return None
+    try:
+        return build_qualifying_timeline(
+            delivery.source,
+            delivery.chunks[0].start_ms,
+            delivery.chunks[-1].end_ms,
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline cannot be derived"
         ) from error
 
 
@@ -978,6 +1103,7 @@ def _artifact_payloads(
         schema_root,
         include_qualifying_summary=spec.version == "v2",
         include_qualifying_lap_status=spec.version == "v2",
+        include_qualifying_timeline=spec.version == "v2",
     )
     return _prepared_artifacts(version, delivery, _contract_validators(schemas, registry), spec=spec)
 
@@ -1019,6 +1145,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("qualifying-summary.json")
         if {"drivers", "laps", "race_control_messages"} <= set(delivery.source.frames):
             expected_paths.add("qualifying-lap-status.json")
+        if delivery.qualifying_timeline is not None:
+            expected_paths.add("qualifying-timeline.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
         raise BrowserDeliveryPublicationError("prepared artifact digest disagrees")
 
@@ -1034,6 +1162,7 @@ def _validate_manifest_contract(
     penalty_artifact: PreparedArtifact | None = None,
     qualifying_artifact: PreparedArtifact | None = None,
     qualifying_lap_status_artifact: PreparedArtifact | None = None,
+    qualifying_timeline_artifact: PreparedArtifact | None = None,
     *,
     spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
 ) -> None:
@@ -1124,6 +1253,29 @@ def _validate_manifest_contract(
         raise BrowserDeliveryPublicationError(
             "qualifying lap status sidecar is valid only for qualifying-like modes"
         )
+    qualifying_timeline_reference = manifest.get("qualifyingTimeline")
+    if qualifying_timeline_artifact is None:
+        if qualifying_timeline_reference is not None:
+            raise BrowserDeliveryPublicationError(
+                "qualifying timeline reference has no timeline payload"
+            )
+    elif qualifying_timeline_reference != {
+        "path": qualifying_timeline_artifact.path,
+        "schemaId": spec.schema_ids["qualifying-timeline"],
+        "sha256": qualifying_timeline_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline reference disagrees with its payload"
+        )
+    if qualifying_timeline_artifact is not None and (
+        spec.version != "v2"
+        or manifest.get("sessionMode") not in {
+            "qualifying", "sprint-qualifying", "sprint-shootout",
+        }
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline is valid only for qualifying-like modes"
+        )
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -1213,6 +1365,75 @@ def _validate_lap_sector_sidecar_contract(
     driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
     if set(sidecar.get("drivers", {})) != driver_ids:
         raise BrowserDeliveryPublicationError("lap sector sidecar drivers disagree with the manifest")
+    boundary_phases: list[str] = []
+    boundary_starts: list[int] = []
+    column_names = (
+        "lapNumber", "lapStartMs", "lapEndMs", "lapDurationMs",
+        "sector1DurationMs", "sector2DurationMs", "sector3DurationMs",
+        "sector1SessionTimeMs", "sector2SessionTimeMs", "sector3SessionTimeMs",
+    )
+    if spec.version == "v2":
+        boundaries = sidecar.get("phaseBoundaries")
+        if not isinstance(boundaries, list):
+            raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries are invalid")
+        for boundary in boundaries:
+            if not isinstance(boundary, dict) or set(boundary) != {"phase", "startMs"}:
+                raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries are invalid")
+            phase, start_ms = boundary["phase"], boundary["startMs"]
+            if phase not in {"Q1", "Q2", "Q3"} or type(start_ms) is not int or not 0 <= start_ms <= MAX_INT64:
+                raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries are invalid")
+            boundary_phases.append(cast(str, phase))
+            boundary_starts.append(start_ms)
+        if boundary_phases != sorted(set(boundary_phases), key=("Q1", "Q2", "Q3").index):
+            raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries are not ordered")
+        if any(following <= current for current, following in zip(boundary_starts, boundary_starts[1:], strict=False)):
+            raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries are not increasing")
+        column_names += ("qualifyingPhase",)
+    expected_phase_starts: dict[str, int] = {}
+    for record in sidecar["drivers"].values():
+        if not isinstance(record, dict) or any(not isinstance(record.get(name), list) for name in column_names):
+            raise BrowserDeliveryPublicationError("lap sector sidecar driver columns are invalid")
+        columns = tuple(cast(list[object], record[name]) for name in column_names)
+        if len({len(column) for column in columns}) != 1:
+            raise BrowserDeliveryPublicationError("lap sector sidecar driver columns are not aligned")
+        if spec.version == "v2":
+            lap_kind = record.get("lapKind")
+            if lap_kind is not None:
+                if not isinstance(lap_kind, list) or len(lap_kind) != len(columns[0]):
+                    raise BrowserDeliveryPublicationError(
+                        "lap sector sidecar lapKind column is not aligned"
+                    )
+                if any(
+                    value not in {"flying", "outlap", "inlap", "unknown"}
+                    for value in lap_kind
+                ):
+                    raise BrowserDeliveryPublicationError(
+                        "lap sector sidecar lapKind values are invalid"
+                    )
+            phases = columns[-1]
+            if any(phase is not None and phase not in {"Q1", "Q2", "Q3"} for phase in phases):
+                raise BrowserDeliveryPublicationError("lap sector sidecar qualifying phases are invalid")
+            lap_starts = columns[1]
+            for phase, start_ms in zip(phases, lap_starts, strict=True):
+                if phase is not None:
+                    if type(start_ms) is not int:
+                        raise BrowserDeliveryPublicationError("lap sector sidecar lap starts are invalid")
+                    expected_phase_starts[cast(str, phase)] = min(
+                        expected_phase_starts.get(cast(str, phase), start_ms), start_ms,
+                    )
+    if spec.version == "v2":
+        qualifying_like = manifest.get("sessionMode") in _QUALIFYING_LIKE_MODES
+        if qualifying_like and not boundary_phases:
+            raise BrowserDeliveryPublicationError(
+                "qualifying-like lap sector sidecar requires at least one phase boundary"
+            )
+        if qualifying_like and not expected_phase_starts:
+            raise BrowserDeliveryPublicationError(
+                "qualifying-like lap sector sidecar requires at least one assigned phase lap"
+            )
+        expected_phases = sorted(expected_phase_starts, key=("Q1", "Q2", "Q3").index)
+        if boundary_phases != expected_phases or dict(zip(boundary_phases, boundary_starts, strict=True)) != expected_phase_starts:
+            raise BrowserDeliveryPublicationError("lap sector sidecar phase boundaries disagree with lap phases")
 
 
 def _validate_penalty_sidecar_contract(
@@ -1398,6 +1619,127 @@ def _validate_qualifying_lap_status_contract(
                 )
 
 
+def _validate_qualifying_timeline_contract(
+    timeline, manifest, spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
+) -> None:
+    """Apply semantic checks not expressible in the qualifying-timeline schema.
+
+    The artifact is qualifying-like-only; race DNF/OUT/finish semantics never
+    appear here.  Bounds must agree with the replay window, intervals must be
+    bounded half-open yellow/red and deterministically ordered, and incident
+    markers must reference published drivers, stay within bounds, and be
+    deterministically ordered without duplicates.
+    """
+    qualifying_modes = {"qualifying", "sprint-qualifying", "sprint-shootout"}
+    if (
+        spec.version != "v2"
+        or manifest.get("sessionMode") not in qualifying_modes
+        or timeline.get("contractVersion") != "v2"
+        or timeline.get("fixtureId") != manifest.get("fixtureId")
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline disagrees with the manifest"
+        )
+    schemas = manifest.get("schemas")
+    if not isinstance(schemas, dict) or schemas.get(
+        "qualifyingTimeline"
+    ) != spec.schema_ids["qualifying-timeline"]:
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline schema registry entry is invalid"
+        )
+    start_ms, end_ms = timeline.get("startMs"), timeline.get("endMs")
+    if any(
+        type(value) is not int or not 0 <= value <= MAX_INT64
+        for value in (start_ms, end_ms)
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline bounds are invalid"
+        )
+    start_ms, end_ms = cast(int, start_ms), cast(int, end_ms)
+    if start_ms >= end_ms:
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline bounds are invalid"
+        )
+    chunks = manifest.get("chunks")
+    if (
+        not isinstance(chunks, list)
+        or not chunks
+        or start_ms != chunks[0].get("startMs")
+        or end_ms != chunks[-1].get("endMs")
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline bounds disagree with replay bounds"
+        )
+    intervals = timeline.get("intervals")
+    markers = timeline.get("incidentMarkers")
+    if not isinstance(intervals, list) or not isinstance(markers, list):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline collections are invalid"
+        )
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            raise BrowserDeliveryPublicationError(
+                "qualifying timeline interval is invalid"
+            )
+        interval_start, interval_end = interval.get("startMs"), interval.get("endMs")
+        if (
+            interval.get("kind") not in {"yellow", "red"}
+            or any(type(value) is not int for value in (interval_start, interval_end))
+        ):
+            raise BrowserDeliveryPublicationError(
+                "qualifying timeline interval bounds are invalid"
+            )
+        interval_start, interval_end = cast(int, interval_start), cast(int, interval_end)
+        if not start_ms <= interval_start < interval_end <= end_ms:
+            raise BrowserDeliveryPublicationError(
+                "qualifying timeline interval bounds are invalid"
+            )
+    if intervals != sorted(
+        intervals, key=lambda value: (value["startMs"], value["endMs"], value["kind"]),
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying timeline intervals are not deterministically ordered"
+        )
+    driver_ids = {driver["id"] for driver in manifest.get("drivers", ())}
+    marker_keys: set[tuple[object, ...]] = set()
+    for marker in markers:
+        if not isinstance(marker, dict):
+            raise BrowserDeliveryPublicationError(
+                "qualifying incident marker is invalid"
+            )
+        driver_id, time_ms = marker.get("driverId"), marker.get("timeMs")
+        if (
+            not isinstance(driver_id, str)
+            or driver_id not in driver_ids
+            or type(time_ms) is not int
+            or not start_ms <= time_ms < end_ms
+            or marker.get("source") != "race-control-car-event"
+            or not isinstance(marker.get("rawMessage"), str)
+            or not marker["rawMessage"].strip()
+        ):
+            raise BrowserDeliveryPublicationError(
+                "qualifying incident markers are invalid"
+            )
+        lap_number = marker.get("lapNumber")
+        if lap_number is not None and (type(lap_number) is not int or lap_number < 1):
+            raise BrowserDeliveryPublicationError(
+                "qualifying incident markers are invalid"
+            )
+        key = (driver_id, time_ms, marker["rawMessage"])
+        if key in marker_keys:
+            raise BrowserDeliveryPublicationError(
+                "qualifying incident markers contain duplicates"
+            )
+        marker_keys.add(key)
+    if markers != sorted(
+        markers,
+        key=lambda value: (value["timeMs"], value["driverId"], value["rawMessage"]),
+    ):
+        raise BrowserDeliveryPublicationError(
+            "qualifying incident markers are not deterministically ordered"
+        )
+
+
 def _validate_stint_summary_contract(
     summary, manifest, spec: _BrowserContractSpec = _CONTRACT_SPECS["v1"],
 ) -> None:
@@ -1499,6 +1841,7 @@ def _load_contract_schemas(
     *,
     include_qualifying_summary: bool = False,
     include_qualifying_lap_status: bool = False,
+    include_qualifying_timeline: bool = False,
 ) -> tuple[dict[str, Mapping[str, object]], jsonschema_rs.Registry]:
     if not isinstance(schema_root, Path):
         raise TypeError("schema_root must be a pathlib.Path")
@@ -1512,6 +1855,8 @@ def _load_contract_schemas(
             names.append("qualifying-summary")
         if include_qualifying_lap_status:
             names.append("qualifying-lap-status")
+        if include_qualifying_timeline:
+            names.append("qualifying-timeline")
         for name in names:
             filename = (
                 "browser-qualifying-lap-status"
@@ -1770,6 +2115,7 @@ def _delivery_result(
         generation / "penalty-sidecar.json" if "penalty-sidecar.json" in digests else None,
         generation / "qualifying-summary.json" if "qualifying-summary.json" in digests else None,
         generation / "qualifying-lap-status.json" if "qualifying-lap-status.json" in digests else None,
+        generation / "qualifying-timeline.json" if "qualifying-timeline.json" in digests else None,
     )
 
 

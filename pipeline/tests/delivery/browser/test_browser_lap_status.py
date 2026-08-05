@@ -36,6 +36,7 @@ from f1_replay_pipeline.delivery.browser.browser_lap_status import (
     LapStatusReconciliationError,
     build_lap_status_sidecar,
     build_qualifying_lap_status_sidecar,
+    has_qualifying_lap_status_messages,
     parse_lap_status_events,
     parse_qualifying_lap_status_events,
     parse_race_control_lap_status_events,
@@ -52,10 +53,17 @@ DRIVER_METADATA = {"44": "HAM", "1": "VER"}
 
 # FastF1's race-control deletion format (see qualifying-api.md):
 # "CAR <number> .* TIME <m:ss.mmm> DELETED - <reason>"; the lap is carried in
-# the structured lap_number column, never as "LAP n" text.
+# the structured lap_number column for timed messages. Non-timed LAP DELETED
+# advisories with a textual lap number are covered by focused tests below.
 DELETED_MESSAGE = "CAR 44 TIME 1:30.000 DELETED - TRACK LIMITS"
 REINSTATED_MESSAGE = "CAR 44 TIME 1:30.000 REINSTATED"
 VER_REINSTATED_MESSAGE = "CAR 1 TIME 1:31.000 REINSTATED"
+CHINESE_GP_RUS_LAP_ADVISORY = (
+    "CAR 63 (RUS) LAP DELETED - TRACK LIMITS AT TURN 2 LAP 4 15:10:15 (PIT)"
+)
+CHINESE_GP_HAM_LAP_ADVISORY = (
+    "CAR 44 (HAM) LAP DELETED - TRACK LIMITS AT TURN 14 LAP 7 15:13:18"
+)
 
 
 def _lap(
@@ -265,6 +273,48 @@ class TestParseDeletionAndReinstatement:
         assert event.status == "reinstated"
         assert event.reason is None
         assert event.raw_message == REINSTATED_MESSAGE
+
+    @pytest.mark.parametrize(
+        "advisory",
+        (CHINESE_GP_RUS_LAP_ADVISORY, CHINESE_GP_HAM_LAP_ADVISORY),
+    )
+    def test_ignores_chinese_gp_non_timed_lap_deleted_advisory(self, advisory: str) -> None:
+        """✅ Positive: FastF1 LAP DELETED advisories do not create events."""
+        # Arrange: these messages report no lap duration and are not causal.
+        messages = [_message(185_000, advisory)]
+
+        # Act
+        events = parse_race_control_lap_status_events(messages, _canonical_laps(), DRIVER_METADATA)
+
+        # Assert
+        assert events == ()
+
+    def test_mixed_advisory_and_timed_status_publishes_only_timed_event(self) -> None:
+        """✅ Positive: an advisory cannot suppress a valid timed status event."""
+        # Arrange
+        messages = [
+            _message(181_000, CHINESE_GP_HAM_LAP_ADVISORY),
+            _message(185_000, DELETED_MESSAGE, None, 2),
+        ]
+
+        # Act
+        events = parse_race_control_lap_status_events(messages, _canonical_laps(), DRIVER_METADATA)
+
+        # Assert
+        assert has_qualifying_lap_status_messages(messages)
+        assert len(events) == 1
+        assert events[0].raw_message == DELETED_MESSAGE
+
+    def test_advisory_only_input_has_no_actionable_status_evidence(self) -> None:
+        """✅ Positive: advisory-only input does not trigger sidecar publication."""
+        # Arrange
+        messages = [
+            _message(181_000, CHINESE_GP_RUS_LAP_ADVISORY),
+            _message(182_000, CHINESE_GP_HAM_LAP_ADVISORY),
+        ]
+
+        # Act / Assert
+        assert not has_qualifying_lap_status_messages(messages)
 
     def test_resolves_driver_from_canonical_driver_id_column(self) -> None:
         """✅ Positive: the canonical driver_id column needs no driver metadata."""
@@ -598,8 +648,8 @@ class TestUnsupportedMessageForms:
         # Assert
         assert events == ()
 
-    def test_time_without_milliseconds_raises(self) -> None:
-        """❌ Negative: a status marker with an unsupported time form fails closed."""
+    def test_malformed_time_status_still_fails_closed(self) -> None:
+        """❌ Negative: malformed TIME status is not broadly ignored as an advisory."""
         # Arrange
         messages = [_message(185_000, "CAR 44 (HAM) LAP 2 TIME 1:30 DELETED - TRACK LIMITS")]
 

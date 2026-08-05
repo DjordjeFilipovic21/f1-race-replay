@@ -21,13 +21,20 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChu
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDnfMarker,
     BrowserDriverFields,
+    BrowserDriverLapSector,
     BrowserLapStart,
+    BrowserLapSectorSidecar,
     BrowserManifest,
+    BrowserQualifyingIncidentMarker,
+    BrowserQualifyingPhaseBoundary,
+    BrowserQualifyingTimeline,
+    BrowserQualifyingTimelineInterval,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
     CanonicalGenerationSnapshot,
     QUALIFYING_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
+    V2_QUALIFYING_TIMELINE_SCHEMA_ID,
     V2_TIMELINE_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
@@ -155,12 +162,31 @@ def _v2_qualifying_delivery(session_mode: str = "qualifying") -> BrowserDelivery
         _lap(1, 0, 90_000, 90_000),
         _lap(2, 90_000, 178_500, 88_500),
     ], schema=lap_schema, strict=True)
+    lap_sector_sidecar = BrowserLapSectorSidecar(
+        "race-one",
+        {
+            "HAM": BrowserDriverLapSector(
+                lap_number=(1, 2), lap_start_ms=(0, 90_000), lap_end_ms=(90_000, 178_500),
+                lap_duration_ms=(90_000, 88_500),
+                sector_1_duration_ms=(None, None), sector_2_duration_ms=(None, None),
+                sector_3_duration_ms=(None, None), sector_1_session_time_ms=(None, None),
+                sector_2_session_time_ms=(None, None), sector_3_session_time_ms=(None, None),
+                qualifying_phase=("Q1", "Q2"),
+            ),
+        },
+        contract_version="v2",
+        qualifying_phase_boundaries=(
+            BrowserQualifyingPhaseBoundary("Q1", 0),
+            BrowserQualifyingPhaseBoundary("Q2", 90_000),
+        ),
+    )
     return replace(
         delivery,
         source=CanonicalGenerationSnapshot(
             "canonical-one", "a" * 64,
             {"session_metadata": session_metadata, "results": results, "laps": laps},
         ),
+        lap_sector_sidecar=lap_sector_sidecar,
     )
 
 
@@ -254,6 +280,33 @@ def test_v2_qualifying_summary_rejects_partial_rankings(tmp_path: Path) -> None:
     assert not (tmp_path / "browser").exists()
 
 
+def test_v2_qualifying_publication_rejects_a_sidecar_without_assigned_phase_laps(
+    tmp_path: Path,
+) -> None:
+    delivery = _v2_qualifying_delivery()
+    sidecar = delivery.lap_sector_sidecar
+    assert sidecar is not None
+    empty_phases = replace(
+        sidecar.drivers["HAM"], qualifying_phase=(None, None),
+    )
+    incomplete = replace(
+        sidecar,
+        drivers={"HAM": empty_phases},
+        qualifying_phase_boundaries=(),
+    )
+
+    with pytest.raises(
+        BrowserDeliveryPublicationError,
+        match="requires at least one phase boundary",
+    ):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+            delivery=replace(delivery, lap_sector_sidecar=incomplete),
+            schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+        )
+    assert not (tmp_path / "browser").exists()
+
+
 def test_v2_qualifying_without_lap_status_inputs_omits_sidecar(tmp_path: Path) -> None:
     # Arrange: the qualifying delivery carries results and laps but no drivers
     # or race-control frames, so no causal lap-status sidecar can be derived.
@@ -269,6 +322,462 @@ def test_v2_qualifying_without_lap_status_inputs_omits_sidecar(tmp_path: Path) -
     assert "qualifyingLapStatus" not in manifest
     assert "qualifyingLapStatus" not in manifest["schemas"]
     assert result.qualifying_lap_status_path is None
+
+
+@pytest.mark.parametrize("session_mode", ["qualifying", "sprint-qualifying", "sprint-shootout"])
+def test_v2_qualifying_like_publication_emits_qualifying_timeline(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(session_mode),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert manifest["sessionMode"] == session_mode
+    assert manifest["qualifyingTimeline"] == {
+        "path": "qualifying-timeline.json",
+        "schemaId": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+        "sha256": result.artifact_digests["qualifying-timeline.json"],
+    }
+    assert manifest["schemas"]["qualifyingTimeline"] == V2_QUALIFYING_TIMELINE_SCHEMA_ID
+    # The race-only timelineSummary never leaks into a qualifying manifest.
+    assert "timelineSummary" not in manifest
+    assert "dnfMarkers" not in manifest
+
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    timeline = json.loads(timeline_path.read_bytes())
+    assert timeline["intervals"] == [{"kind": "yellow", "startMs": 100, "endMs": 200}]
+    assert timeline["incidentMarkers"] == [{
+        "driverId": "HAM", "timeMs": 1_500,
+        "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+    }]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def test_v2_qualifying_timeline_digests_bind_manifest_and_result(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    stored_digest = hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+    assert manifest["qualifyingTimeline"]["sha256"] == stored_digest
+    assert result.artifact_digests["qualifying-timeline.json"] == stored_digest
+
+
+def test_v2_qualifying_timeline_publication_is_byte_identical(tmp_path: Path) -> None:
+    delivery = _v2_qualifying_timeline_delivery()
+    first = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-one", delivery_version="delivery-v2",
+        delivery=delivery, schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    second = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-two", delivery_version="delivery-v2",
+        delivery=delivery, schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    assert first.qualifying_timeline_path is not None
+    assert second.qualifying_timeline_path is not None
+    assert (
+        first.qualifying_timeline_path.read_bytes()
+        == second.qualifying_timeline_path.read_bytes()
+    )
+
+
+def test_v2_qualifying_without_timeline_evidence_omits_reference(tmp_path: Path) -> None:
+    # Arrange: no yellow/red intervals and no incident markers exist.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_delivery(), schema_root=SCHEMA_ROOT_V2,
+        contract_version="v2",
+    )
+
+    # Act / Assert: the delivery remains valid and loadable without the artifact.
+    assert result.qualifying_timeline_path is None
+    assert "qualifying-timeline.json" not in result.artifact_digests
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert "qualifyingTimeline" not in manifest
+    assert "qualifyingTimeline" not in manifest["schemas"]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+@pytest.mark.parametrize("session_mode", ["race", "sprint", "practice"])
+def test_v2_non_qualifying_modes_omit_qualifying_timeline(
+    tmp_path: Path, session_mode: str,
+) -> None:
+    # Arrange: the delivery carries a qualifying-shaped timeline but the mode is
+    # not qualifying-like, so the qualifying-safe artifact must never publish.
+    delivery = replace(
+        _v2_qualifying_timeline_delivery(session_mode),
+        qualifying_timeline=None,
+    )
+
+    # Act / Assert: the reference stays absent and the delivery remains valid.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=delivery, schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    assert result.qualifying_timeline_path is None
+    assert "qualifying-timeline.json" not in result.artifact_digests
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert "qualifyingTimeline" not in manifest
+    assert "qualifyingTimeline" not in manifest["schemas"]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def test_v2_manifest_rejects_qualifying_timeline_for_non_qualifying_mode() -> None:
+    drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+                "colorHex": "#000000", "carNumber": "44"},)
+    reference = {
+        "path": "qualifying-timeline.json",
+        "schemaId": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(
+        ValueError, match="qualifying_timeline is valid only for qualifying-like modes",
+    ):
+        BrowserManifest(
+            "race-one", "Race One", drivers, qualifying_timeline=reference,
+            session_mode="race", contract_version="v2",
+        )
+
+
+def test_v2_manifest_rejects_v1_qualifying_timeline_reference() -> None:
+    drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+                "colorHex": "#000000", "carNumber": "44"},)
+    reference = {
+        "path": "qualifying-timeline.json",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:wrong",
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(ValueError, match="qualifying timeline reference is invalid"):
+        BrowserManifest(
+            "race-one", "Race One", drivers, qualifying_timeline=reference,
+            session_mode="qualifying", contract_version="v2",
+        )
+
+
+def test_complete_validator_rejects_a_schema_invalid_qualifying_timeline(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    timeline = json.loads(timeline_path.read_bytes())
+    timeline["intervals"][0]["kind"] = "blue"
+    timeline_bytes = json.dumps(timeline, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    timeline_path.write_bytes(timeline_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["qualifyingTimeline"]["sha256"] = hashlib.sha256(timeline_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "qualifying timeline fails replay-data v2 schema validation" in str(
+        error.value.__cause__
+    )
+
+
+def test_complete_validator_rejects_unsorted_qualifying_incident_markers(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    timeline = json.loads(timeline_path.read_bytes())
+    timeline["incidentMarkers"].append({
+        "driverId": "HAM",
+        "timeMs": 1_800,
+        "source": "race-control-car-event",
+        "rawMessage": "CAR 44 SPIN",
+    })
+    timeline["incidentMarkers"] = list(reversed(timeline["incidentMarkers"]))
+    timeline_bytes = json.dumps(timeline, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    timeline_path.write_bytes(timeline_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["qualifyingTimeline"]["sha256"] = hashlib.sha256(timeline_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "not deterministically ordered" in str(error.value.__cause__)
+
+
+def test_invalid_qualifying_timeline_cannot_replace_visible_pointer(tmp_path: Path) -> None:
+    # Arrange: publish a valid qualifying timeline delivery.
+    browser = tmp_path / "browser"
+    previous = publish_browser_delivery(
+        browser_parent=browser, delivery_version="delivery-one",
+        delivery=_v2_qualifying_timeline_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    pointer_before = previous.pointer_path.read_bytes()
+
+    # Act: attempt a second delivery whose timeline disagrees with the replay
+    # bounds; the artifact is schema-valid but semantically invalid.
+    invalid_timeline = BrowserQualifyingTimeline(
+        "race-one", 0, 5_000,
+        (BrowserQualifyingTimelineInterval("yellow", 100, 200),),
+        (BrowserQualifyingIncidentMarker("HAM", 1_500, "CAR 44 CRASH"),),
+    )
+    with pytest.raises(
+        BrowserDeliveryPublicationError, match="bounds disagree with replay bounds",
+    ):
+        publish_browser_delivery(
+            browser_parent=browser, delivery_version="delivery-two",
+            delivery=replace(
+                _v2_qualifying_timeline_delivery(),
+                qualifying_timeline=invalid_timeline,
+            ),
+            schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+        )
+
+    # Assert: the visible pointer still selects the previous valid delivery and
+    # the rejected delivery was never committed.
+    assert previous.pointer_path.read_bytes() == pointer_before
+    assert json.loads(previous.pointer_path.read_bytes())["deliveryVersion"] == "delivery-one"
+    assert not (browser / "generations" / "delivery-two").exists()
+
+
+def test_v2_qualifying_timeline_incident_keeps_classification_without_dnf_semantics(
+    tmp_path: Path,
+) -> None:
+    # Arrange & Act: publish a qualifying delivery with an incident marker.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    timeline = json.loads(timeline_path.read_bytes())
+    manifest = json.loads(result.manifest_path.read_bytes())
+    summary = json.loads(result.qualifying_summary_path.read_bytes())  # type: ignore[arg-type]
+
+    # Assert: the driver with an incident marker stays in the classification...
+    assert "HAM" in summary["drivers"]
+    assert summary["drivers"]["HAM"]["qualifyingPosition"] == [1]
+    # ...and the incident is published only as a qualifying-safe marker, never
+    # as a race DNF/OUT semantic.
+    assert timeline["incidentMarkers"] == [{
+        "driverId": "HAM", "timeMs": 1_500,
+        "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+    }]
+    assert "dnfMarkers" not in timeline
+    assert "OUT" not in timeline
+    assert "timelineSummary" not in manifest
+    assert "dnfMarkers" not in manifest
+
+
+def _v2_sprint_timeline_summary_delivery() -> BrowserDeliveryBuild:
+    """A v2 sprint delivery carrying the race-shaped timeline summary."""
+    delivery = _v2_delivery()
+    session_metadata = pl.DataFrame([{
+        "session_id": "race-one", "year": 2026, "round_number": 1,
+        "event_name": "Sprint", "session_name": "Sprint", "session_type": "S",
+        "session_mode": "sprint", "session_start_time_utc": None,
+    }], schema={
+        "session_id": pl.String, "year": pl.Int16, "round_number": pl.Int16,
+        "event_name": pl.String, "session_name": pl.String, "session_type": pl.String,
+        "session_mode": pl.String, "session_start_time_utc": pl.Datetime("ms", "UTC"),
+    })
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "canonical-one", "a" * 64, {"session_metadata": session_metadata},
+        ),
+        timeline_summary=_timeline_summary(),
+    )
+
+
+def test_v2_sprint_timeline_summary_behavior_unchanged(tmp_path: Path) -> None:
+    # Arrange & Act: publish a v2 sprint delivery with a race-shaped summary.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_sprint_timeline_summary_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+    summary_path = result.timeline_summary_path
+    assert summary_path is not None
+
+    # Assert: the race/sprint timelineSummary (including DNF markers) publishes
+    # unchanged, while the qualifying-safe artifact never leaks into sprint.
+    assert manifest["sessionMode"] == "sprint"
+    assert manifest["timelineSummary"] == {
+        "path": "timeline-summary.json",
+        "schemaId": V2_TIMELINE_SUMMARY_SCHEMA_ID,
+        "sha256": result.artifact_digests["timeline-summary.json"],
+    }
+    assert json.loads(summary_path.read_bytes()) == {
+        **_timeline_summary().as_dict(), "contractVersion": "v2",
+    }
+    assert json.loads(summary_path.read_bytes())["dnfMarkers"] == [
+        {"driverId": "HAM", "timeMs": 1_500},
+    ]
+    assert "qualifyingTimeline" not in manifest
+    assert result.qualifying_timeline_path is None
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def _v2_qualifying_lap_kind_delivery() -> BrowserDeliveryBuild:
+    """A v2 qualifying delivery whose sidecar carries aligned lapKind values."""
+    delivery = _v2_qualifying_delivery()
+    sidecar = delivery.lap_sector_sidecar
+    assert sidecar is not None
+    driver = replace(
+        sidecar.drivers["HAM"],
+        lap_kind=("flying", "flying"),
+    )
+    return replace(
+        delivery,
+        lap_sector_sidecar=replace(sidecar, drivers={"HAM": driver}),
+    )
+
+
+def test_v2_qualifying_lap_sector_sidecar_publishes_aligned_lap_kind(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_lap_kind_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    sidecar_path = result.lap_sector_sidecar_path
+    assert sidecar_path is not None
+    sidecar = json.loads(sidecar_path.read_bytes())
+    assert sidecar["drivers"]["HAM"]["lapKind"] == ["flying", "flying"]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
+def test_complete_validator_rejects_a_sidecar_with_misaligned_lap_kind(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_lap_kind_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    sidecar_path = result.lap_sector_sidecar_path
+    assert sidecar_path is not None
+    sidecar = json.loads(sidecar_path.read_bytes())
+    sidecar["drivers"]["HAM"]["lapKind"].append("flying")
+    sidecar_bytes = json.dumps(sidecar, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    sidecar_path.write_bytes(sidecar_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["lapSectorSidecar"]["sha256"] = hashlib.sha256(sidecar_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "lapKind column is not aligned" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_a_sidecar_with_invalid_lap_kind_value(
+    tmp_path: Path,
+) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_lap_kind_delivery(),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+    sidecar_path = result.lap_sector_sidecar_path
+    assert sidecar_path is not None
+    sidecar = json.loads(sidecar_path.read_bytes())
+    sidecar["drivers"]["HAM"]["lapKind"][0] = "fast"
+    sidecar_bytes = json.dumps(sidecar, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    sidecar_path.write_bytes(sidecar_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["lapSectorSidecar"]["sha256"] = hashlib.sha256(sidecar_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+        )
+    assert error.value.__cause__ is not None
+    assert "lap sector sidecar fails replay-data v2 schema validation" in str(
+        error.value.__cause__
+    )
+
+
+def _v2_qualifying_timeline_delivery(
+    session_mode: str = "qualifying",
+    timeline: BrowserQualifyingTimeline | None = None,
+) -> BrowserDeliveryBuild:
+    """A v2 qualifying delivery carrying an explicit qualifying timeline."""
+    delivery = _v2_qualifying_delivery(session_mode)
+    if timeline is None:
+        timeline = BrowserQualifyingTimeline(
+            "race-one", 0, 2_000,
+            (BrowserQualifyingTimelineInterval("yellow", 100, 200),),
+            (BrowserQualifyingIncidentMarker("HAM", 1_500, "CAR 44 CRASH"),),
+        )
+    return replace(delivery, qualifying_timeline=timeline)
 
 
 def test_v2_manifest_rejects_race_only_sidecars_for_non_race_modes() -> None:

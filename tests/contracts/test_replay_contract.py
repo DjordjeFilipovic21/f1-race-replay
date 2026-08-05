@@ -99,7 +99,7 @@ def schema_registry(contract_bundle):
 def v2_schema_registry():
     registry = Registry()
 
-    for name in ("manifest", "qualifying-summary"):
+    for name in ("manifest", "qualifying-summary", "browser-lap-sector-sidecar"):
         schema = load_json(V2_SCHEMA_ROOT / f"{name}.schema.json")
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
 
@@ -1224,3 +1224,288 @@ def test_v2_qualifying_summary_payload_validates_against_frozen_schema(v2_schema
     payload["drivers"]["HAM"]["qualifyingPosition"] = [0]
     with pytest.raises(ValidationError):
         validate_instance(schema, payload, v2_schema_registry)
+
+
+V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar"
+
+
+def v2_browser_lap_sector_sidecar_payload(*, qualifying: bool = True) -> dict:
+    """Return a schema-valid v2 lap-sector sidecar with aligned phase columns."""
+    payload = {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "phaseBoundaries": (
+            [
+                {"phase": "Q1", "startMs": 0},
+                {"phase": "Q2", "startMs": 105_123},
+                {"phase": "Q3", "startMs": 210_000},
+            ]
+            if qualifying
+            else []
+        ),
+        "drivers": {
+            "HAM": {
+                "lapNumber": [1, 2, 3],
+                "lapStartMs": [0, 105_123, 210_000],
+                "lapEndMs": [105_123, 210_000, 313_999],
+                "lapDurationMs": [105_123, 104_877, 103_999],
+                "sector1DurationMs": [35_041, 34_959, 34_666],
+                "sector2DurationMs": [35_041, 34_959, 34_666],
+                "sector3DurationMs": [35_041, 34_959, 34_667],
+                "sector1SessionTimeMs": [35_041, 140_164, 244_666],
+                "sector2SessionTimeMs": [70_082, 175_123, 279_332],
+                "sector3SessionTimeMs": [105_123, 210_000, 313_999],
+                "qualifyingPhase": ["Q1", "Q2", "Q3"] if qualifying else [None, None, None],
+            },
+        },
+    }
+    return payload
+
+
+def test_v2_browser_lap_sector_sidecar_schema_is_valid_and_frozen(v2_schema_registry):
+    # Arrange / Act: load the v2 browser lap-sector sidecar schema.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+
+    # Assert: the schema is valid draft 2020-12 with the v2 sidecar identity and
+    # requires the qualifying phase column and boundary array.
+    Draft202012Validator.check_schema(schema)
+    assert schema["$id"] == V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
+    assert schema["properties"]["contractVersion"]["const"] == "v2"
+    assert "phaseBoundaries" in schema["required"]
+    assert "qualifyingPhase" in schema["$defs"]["columns"]["required"]
+
+
+def test_v2_browser_lap_sector_sidecar_with_phase_data_validates(v2_schema_registry):
+    # Arrange: a qualifying payload with per-lap phases and ordered boundaries.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=True)
+
+    # Act / Assert: the authoritative Q-phase sidecar payload validates.
+    validate_instance(schema, payload, v2_schema_registry)
+
+
+def test_v2_browser_lap_sector_sidecar_accepts_backward_safe_non_qualifying_payload(
+    v2_schema_registry,
+):
+    # Arrange: a race-shaped v2 sidecar with null phases and no boundaries.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=False)
+
+    # Act / Assert: non-qualifying payloads remain schema-valid (backward safe).
+    validate_instance(schema, payload, v2_schema_registry)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["drivers"]["HAM"].update(qualifyingPhase=["Q4", "Q2", "Q3"]),
+        lambda payload: payload["phaseBoundaries"].append({"phase": "Q4", "startMs": 400_000}),
+        lambda payload: payload["phaseBoundaries"].append({"phase": "Q1", "startMs": -1}),
+        lambda payload: payload["drivers"]["HAM"].pop("qualifyingPhase"),
+        lambda payload: payload.pop("phaseBoundaries"),
+    ],
+)
+def test_v2_browser_lap_sector_sidecar_rejects_invalid_phase_or_boundary_payloads(
+    v2_schema_registry, mutation,
+):
+    # Arrange: a valid qualifying payload with a targeted structural defect.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=True)
+    mutation(payload)
+
+    # Act / Assert: the frozen v2 schema rejects the malformed phase payload.
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)
+
+
+# ===========================================================================
+# V2 qualifying timeline contract
+# ===========================================================================
+
+V2_QUALIFYING_TIMELINE_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline"
+
+
+def qualifying_timeline_payload(
+    *, intervals=None, markers=None, start_ms=0, end_ms=600_000,
+) -> dict:
+    """Return a schema-valid v2 qualifying timeline payload."""
+    return {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "startMs": start_ms,
+        "endMs": end_ms,
+        "intervals": intervals if intervals is not None else [
+            {"kind": "yellow", "startMs": 10_000, "endMs": 20_000},
+            {"kind": "red", "startMs": 30_000, "endMs": 40_000},
+        ],
+        "incidentMarkers": markers if markers is not None else [{
+            "driverId": "HAM", "timeMs": 15_000,
+            "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+            "lapNumber": 7,
+        }],
+    }
+
+
+def qualifying_timeline_reference() -> dict[str, str]:
+    return {
+        "path": "qualifying-timeline.json",
+        "schemaId": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def assert_qualifying_timeline_semantics(payload):
+    """Semantic invariants the JSON schema cannot express directly."""
+    start_ms, end_ms = payload["startMs"], payload["endMs"]
+    assert start_ms < end_ms
+    assert "dnfMarkers" not in payload
+    assert "OUT" not in payload
+    for interval in payload["intervals"]:
+        assert start_ms <= interval["startMs"] < interval["endMs"] <= end_ms
+    assert payload["intervals"] == sorted(
+        payload["intervals"],
+        key=lambda item: (item["startMs"], item["endMs"], item["kind"]),
+    )
+    markers = payload["incidentMarkers"]
+    assert markers == sorted(
+        markers, key=lambda item: (item["timeMs"], item["driverId"], item["rawMessage"])
+    )
+    for marker in markers:
+        assert start_ms <= marker["timeMs"] < end_ms
+
+
+def test_v2_qualifying_timeline_schema_is_valid_and_frozen():
+    # Arrange / Act: load the v2 qualifying timeline schema.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+
+    # Assert: the schema is valid draft 2020-12 with the v2 identity, and it
+    # never represents race DNF/OUT/finish semantics.
+    Draft202012Validator.check_schema(schema)
+    assert schema["$id"] == V2_QUALIFYING_TIMELINE_SCHEMA_ID
+    assert schema["properties"]["contractVersion"]["const"] == "v2"
+    assert {
+        "contractVersion", "fixtureId", "startMs", "endMs",
+        "intervals", "incidentMarkers",
+    } <= set(schema["required"])
+    assert "dnfMarkers" not in schema["properties"]
+    assert "OUT" not in schema["properties"]
+
+
+def test_v2_qualifying_timeline_payload_validates(v2_schema_registry):
+    # Arrange
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload()
+
+    # Act / Assert: the populated payload validates and satisfies semantics.
+    validate_instance(schema, payload, v2_schema_registry)
+    assert_qualifying_timeline_semantics(payload)
+
+    # Assert: empty collections remain schema-valid; the artifact is omitted
+    # entirely at publication when there is nothing to publish (fail closed).
+    empty = qualifying_timeline_payload(intervals=[], markers=[])
+    validate_instance(schema, empty, v2_schema_registry)
+    assert_qualifying_timeline_semantics(empty)
+
+
+def test_v2_manifest_accepts_old_manifest_without_qualifying_timeline(
+    v2_schema_registry,
+):
+    # Arrange: an old v2 manifest published before the qualifying timeline
+    # existed (no reference and no schemas entry).
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    legacy = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    assert "qualifyingTimeline" not in legacy
+
+    # Act / Assert: the backward-compatible manifest remains valid, and the
+    # optional artifact can be added without breaking the contract.
+    validate_instance(manifest_schema, legacy, v2_schema_registry)
+    with_timeline = dict(legacy)
+    with_timeline["qualifyingTimeline"] = qualifying_timeline_reference()
+    with_timeline["schemas"] = {
+        **legacy["schemas"], "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+    }
+    validate_instance(manifest_schema, with_timeline, v2_schema_registry)
+
+
+@pytest.mark.parametrize("mode", ["race", "sprint", "practice"])
+def test_v2_manifest_rejects_qualifying_timeline_for_non_qualifying_modes(
+    v2_schema_registry, mode,
+):
+    # Arrange: a non-qualifying manifest carrying a timeline reference.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode=mode, qualifying_summary=False)
+    manifest["qualifyingTimeline"] = qualifying_timeline_reference()
+
+    # Act / Assert: wrong-mode rejection at the schema boundary.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+    # Assert: a schemas-registry leak is rejected outside qualifying-like modes.
+    leaked = v2_manifest_payload(session_mode=mode, qualifying_summary=False)
+    leaked["schemas"] = {
+        **leaked["schemas"], "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+    }
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, leaked, v2_schema_registry)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", "other-timeline.json"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_v2_manifest_rejects_invalid_qualifying_timeline_reference(
+    v2_schema_registry, field, value,
+):
+    # Arrange: a qualifying manifest with a structurally invalid reference.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    reference = qualifying_timeline_reference()
+    reference[field] = value
+    manifest["qualifyingTimeline"] = reference
+
+    # Act / Assert: digest/path/schemaId validation fails closed.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+
+def test_v2_qualifying_timeline_requires_deterministic_marker_ordering(
+    v2_schema_registry,
+):
+    # Arrange: markers are schema-valid but out of deterministic order.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "VER", "timeMs": 30_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 1 STOPS"},
+        {"driverId": "HAM", "timeMs": 15_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 44 CRASH"},
+        {"driverId": "HAM", "timeMs": 15_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 44 STALLED"},
+    ])
+
+    # Act / Assert: the JSON schema is order-agnostic...
+    validate_instance(schema, payload, v2_schema_registry)
+    # ...but the deterministic (timeMs, driverId, rawMessage) ordering is a
+    # mandatory semantic enforced by the pipeline and consumers.
+    with pytest.raises(AssertionError):
+        assert_qualifying_timeline_semantics(payload)
+
+
+def test_v2_qualifying_timeline_requires_deterministic_interval_ordering(
+    v2_schema_registry,
+):
+    # Arrange: intervals are schema-valid but out of deterministic order.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(intervals=[
+        {"kind": "red", "startMs": 30_000, "endMs": 40_000},
+        {"kind": "yellow", "startMs": 10_000, "endMs": 20_000},
+    ])
+
+    # Act / Assert: schema-valid, but the deterministic interval ordering
+    # (startMs, endMs, kind) semantic is mandatory.
+    validate_instance(schema, payload, v2_schema_registry)
+    with pytest.raises(AssertionError):
+        assert_qualifying_timeline_semantics(payload)
