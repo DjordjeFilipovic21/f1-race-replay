@@ -1,7 +1,7 @@
 # F1 Race Replay Web
 
 The web package is a Vite + React replay application. It provides a
-framework-independent replay-data v1 loader, a replay engine for clocking,
+framework-independent browser-delivery-v2 loader, a replay engine for clocking,
 sampling, caching, and event delivery, and React feature modules for the
 workspace, playback controls, telemetry, leaderboard, and track map.
 
@@ -23,9 +23,11 @@ npm run ci
 `src/data/replay/` accepts an injected asynchronous byte source. Production
 builds read `VITE_REPLAY_SEASONS_BASE_URL`; the checked-in production default
 is `https://data.f1racereplay.app/seasons/`. Tests use the committed fixture
-under `../contracts/` directly. The loader validates v1 identities, safe
-relative paths, column alignment, chunk ownership and overlap, and SHA-256
-digests whenever a pointer or artifact reference supplies one. Returned public
+under `../contracts/` directly. The loader validates V2 identities, safe
+relative paths, V2 schema identities, column alignment, chunk ownership and
+overlap, and SHA-256 digests whenever a pointer or artifact reference supplies
+one. The active reader rejects V1 or mixed-version artifacts; V1 schemas and
+fixtures remain frozen historical contract references only. Returned public
 values are read-only frozen values.
 
 The public season catalog is browser-delivery only. A validated session needs

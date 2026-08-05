@@ -6,7 +6,7 @@ import { loadReplayData } from '../../../src/data/replay/loader'
 import type { DriverColumns, ReplayChunk, ReplayData, ReplaySource } from '../../../src/data/replay/types'
 import { prepareReplaySampler, samplePreparedReplayAt, sampleReplayAt } from '../../../src/engine/replay/sampler'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v2/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
 
 describe('replay-engine sampler', () => {
@@ -220,12 +220,12 @@ function syntheticReplay(x: readonly (number | null)[], timeMs = [0, 100, 200, 3
   const nulls = timeMs.map(() => null)
   const driver: DriverColumns = { x, y: nulls, trackDistanceMeters: nulls, speed: nulls, throttle: nulls, brake: nulls, gapToLeaderMs: nulls, lap: nulls, position: nulls, gear: nulls, drs: nulls, tyreCompound: nulls, status: nulls, isInPitLane: nulls, ...overrides }
   const chunk: ReplayChunk = {
-    contractVersion: 'v1', fixtureId: 'synthetic', chunkId: 'chunk-001', sequence: 1, startMs: 0, endMs: 2_000,
+    contractVersion: 'v2', fixtureId: 'synthetic', chunkId: 'chunk-001', sequence: 1, startMs: 0, endMs: 2_000,
     overlap: { kind: 'none', previousChunkPath: null, range: null, authoritativeFromMs: null }, timeMs, authoritativeStartIndex: 0,
     drivers: { HAM: driver },
     leaderboardOrder: nulls, trackStatusCode: nulls, weatherState: nulls, events: [],
   }
-  return { manifest: { contractVersion: 'v1', fixtureId: 'synthetic', fixtureName: 'Synthetic', schemas: { manifest: '', chunk: '', trackAssets: '' }, trackAssets: { path: '', schemaId: '' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] }, trackAssets: {} as ReplayData['trackAssets'], chunks: [chunk] }
+  return { manifest: { contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: 'race', fixtureId: 'synthetic', fixtureName: 'Synthetic', schemas: { manifest: 'urn:f1-cache-replay:schema:replay-data:v2:manifest', chunk: 'urn:f1-cache-replay:schema:replay-data:v2:chunk', trackAssets: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, trackAssets: { path: 'track-assets.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] }, trackAssets: {} as ReplayData['trackAssets'], chunks: [chunk] }
 }
 
 function stripMetadataSource(): ReplaySource {
@@ -252,12 +252,12 @@ function derivedReplay(overrides: Partial<DriverColumns>, circuitLengthMeters = 
     ...overrides,
   }
   const chunk: ReplayChunk = {
-    contractVersion: 'v1', fixtureId: 'derived', chunkId: 'chunk-001', sequence: 1, startMs: 0, endMs: 2_000,
+    contractVersion: 'v2', fixtureId: 'derived', chunkId: 'chunk-001', sequence: 1, startMs: 0, endMs: 2_000,
     overlap: { kind: 'none', previousChunkPath: null, range: null, authoritativeFromMs: null }, timeMs, authoritativeStartIndex: 0,
     drivers: { HAM: driver }, leaderboardOrder: [['HAM'], ['HAM']], trackStatusCode: nulls, weatherState: nulls, events: [],
   }
   return {
-    manifest: { contractVersion: 'v1', fixtureId: 'derived', fixtureName: 'Derived', schemas: { manifest: '', chunk: '', trackAssets: '' }, trackAssets: { path: '', schemaId: '' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] },
+    manifest: { contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: 'race', fixtureId: 'derived', fixtureName: 'Derived', schemas: { manifest: 'urn:f1-cache-replay:schema:replay-data:v2:manifest', chunk: 'urn:f1-cache-replay:schema:replay-data:v2:chunk', trackAssets: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, trackAssets: { path: 'track-assets.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, chunks: [], drivers: [{ id: 'HAM', displayName: 'Hamilton', teamName: 'Mercedes', colorHex: '#000000', carNumber: '44' }] },
     trackAssets: { circuitLengthMeters } as ReplayData['trackAssets'], chunks: [chunk],
   }
 }

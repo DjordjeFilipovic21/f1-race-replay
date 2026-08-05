@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url))
 const localSeasonsRoot = fileURLToPath(new URL('../artifacts/seasons/', import.meta.url))
+const localReplayRoot = fileURLToPath(new URL('../../f1-race-replay/artifacts/seasons/2024/browser/2024-round-21-sao-paulo-grand-prix/', import.meta.url))
 
 export default defineConfig(({ command, mode }) => {
   const environment = loadEnv(mode, process.cwd(), '')
@@ -33,7 +34,7 @@ export default defineConfig(({ command, mode }) => {
       },
     },
     server: {
-      fs: { allow: [workspaceRoot] },
+      fs: { allow: [workspaceRoot, localReplayRoot] },
     },
   }
 })

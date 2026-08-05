@@ -39,3 +39,20 @@ test('uses the leaderboard neutral fallback for an invalid team colour', () => {
 
   expect(container.querySelector('.driver-info-panel')?.getAttribute('style')).toContain('--driver-info-team-color: #7a8794')
 })
+
+test('exposes unavailable position data until authoritative PIT state applies', () => {
+  const unavailable = {
+    ...snapshot,
+    drivers: {
+      ...snapshot.drivers,
+      VER: { ...snapshot.drivers.VER, x: null, y: null, isInPitLane: false },
+    },
+  }
+  const { rerender } = render(<DriverInfoPanel drivers={drivers} selectedDriverId="VER" snapshot={unavailable} />)
+
+  expect(screen.getByText('POSITION DATA UNAVAILABLE')).toBeTruthy()
+
+  rerender(<DriverInfoPanel drivers={drivers} selectedDriverId="VER" snapshot={{ ...unavailable, drivers: { ...unavailable.drivers, VER: { ...unavailable.drivers.VER, isInPitLane: true } } }} />)
+
+  expect(screen.getByText('PIT')).toBeTruthy()
+})

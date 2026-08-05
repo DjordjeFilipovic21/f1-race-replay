@@ -26,7 +26,7 @@ function createPenalty(driverId: string, sessionTimeMs: number): PenaltyIssuance
 
 function createSidecar(...penaltyIssuances: PenaltyIssuance[]): PenaltySidecar {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'test-fixture',
     penaltyIssuances,
   }

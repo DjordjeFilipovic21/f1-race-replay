@@ -14,8 +14,8 @@ import { parseVisualMetadata } from '../../../src/data/catalog/guards'
 const readySession = {
   session_code: 'R',
   session_name: 'Race',
-  generation_id: '2024-round-05-r',
-  delivery_version: '2024-round-05-r',
+  generation_id: '2024-round-05-session-race-mode-race',
+  delivery_version: '2024-round-05-session-race-mode-race',
   outcome: 'generated',
   validated: true,
   canonical_pointer: null,
@@ -36,6 +36,18 @@ function catalog(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 describe('catalog v2 guards and selection', () => {
+  test.each([
+    ['fp1', 'Practice 1', 'practice-1', 'practice'],
+    ['q', 'Qualifying', 'qualifying', 'qualifying'],
+    ['r', 'Race', 'race', 'race'],
+  ] as const)('accepts the v2 %s session identity', (code, name, identity, mode) => {
+    const session = { ...readySession, session_code: code, session_name: name,
+      generation_id: `2024-round-05-session-${identity}-mode-${mode}`,
+      delivery_version: `2024-round-05-session-${identity}-mode-${mode}`,
+      browser_pointer: `browser/2024-round-05/sessions/${code}/browser-current.json` }
+    expect(parseCatalogV2(catalog({ races: [{ race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [session] }] })).races[0].sessions[0].session_code).toBe(code)
+  })
+
   test('parses the Python catalog v2 shape and freezes the result', () => {
     const parsed = parseCatalogV2(catalog())
 
@@ -344,7 +356,7 @@ describe('parseCatalogV2Race with visual metadata', () => {
         },
         {
           race_id: '2024-round-06', round_number: 6, event_name: 'Japanese Grand Prix',
-          sessions: [{ ...readySession, session_code: 'R2' }],
+          sessions: [{ ...readySession, session_code: 'r', generation_id: '2024-round-06-session-race-mode-race', delivery_version: '2024-round-06-session-race-mode-race', browser_pointer: 'browser/2024-round-06/sessions/r/browser-current.json' }],
         },
       ],
     })
@@ -404,5 +416,211 @@ describe('selectRace and selectSession', () => {
 
     // Act + Assert
     expect(selectReplaySession(parsed, '2024-round-05', 'R')).toBeNull()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────
+// Strict active V2 identities across sprint and testing variants
+// ──────────────────────────────────────────────────────────────
+
+describe('strict active v2 catalog identities', () => {
+  test.each([
+    ['sprint', 'Sprint', 'sprint', 'sprint', 's'],
+    ['sprint-qualifying', 'Sprint qualifying', 'sprint-qualifying', 'sprint-qualifying', 'sq'],
+    ['sprint-shootout', 'Sprint shootout', 'sprint-shootout', 'sprint-shootout', 'ss'],
+    ['testing', 'Testing', 'testing', 'testing', 'testing'],
+  ] as const)('accepts the v2 %s session identity as replay-ready', (_label, name, identity, mode, code) => {
+    // Arrange
+    const session = {
+      ...readySession, session_code: code, session_name: name,
+      generation_id: `2024-round-05-session-${identity}-mode-${mode}`,
+      delivery_version: `2024-round-05-session-${identity}-mode-${mode}`,
+      browser_pointer: `browser/2024-round-05/sessions/${code}/browser-current.json`,
+    }
+    const race = { race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [session] }
+
+    // Act
+    const parsed = parseCatalogV2(catalog({ races: [race] }))
+    const parsedSession = parsed.races[0].sessions[0]
+
+    // Assert
+    expect(parsedSession.session_code).toBe(code)
+    expect(parsedSession.session_name).toBe(name)
+    expect(isSessionReplayReady(parsedSession)).toBe(true)
+    expect(getReplayReadySessions(parsed.races[0]).map((entry) => entry.session_code)).toEqual([code])
+  })
+
+  test('accepts every practice session identity with the mode practice', () => {
+    // Arrange
+    const sessions = (['practice-1', 'practice-2', 'practice-3'] as const).map((identity, index) => ({
+      ...readySession,
+      session_code: `fp${index + 1}`,
+      session_name: `Practice ${index + 1}`,
+      generation_id: `2024-round-05-session-${identity}-mode-practice`,
+      delivery_version: `2024-round-05-session-${identity}-mode-practice`,
+      browser_pointer: `browser/2024-round-05/sessions/fp${index + 1}/browser-current.json`,
+    }))
+
+    // Act
+    const parsed = parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions,
+    }]}))
+
+    // Assert
+    expect(parsed.races[0].sessions.map((session) => session.session_code)).toEqual(['fp1', 'fp2', 'fp3'])
+    expect(parsed.races[0].sessions.every((session) => session.session_name.startsWith('Practice'))).toBe(true)
+  })
+
+  test('accepts publisher force and browser suffixes on a valid v2 identity', () => {
+    const generationId = '2024-round-05-session-race-mode-race-force-1-browser-2'
+    const session = {
+      ...readySession,
+      generation_id: generationId,
+      delivery_version: generationId,
+    }
+
+    const parsed = parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [session],
+    }] }))
+
+    expect(parsed.races[0].sessions[0].generation_id).toBe(generationId)
+    expect(isSessionReplayReady(parsed.races[0].sessions[0])).toBe(true)
+  })
+
+  test('rejects an unsupported suffix on an otherwise valid v2 identity', () => {
+    const session = {
+      ...readySession,
+      generation_id: '2024-round-05-session-race-mode-race-retry-1',
+    }
+
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [session],
+    }] }))).toThrow('generation_id is not a v2 identity')
+  })
+
+  test('rejects a v1 generation identity even when pointers are complete', () => {
+    // Arrange
+    const v1Session = {
+      ...readySession,
+      generation_id: '2024-round-05-session-race',
+      delivery_version: null,
+      canonical_pointer: null,
+      browser_pointer: null,
+    }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [v1Session],
+    }] }))).toThrow('generation_id is not a v2 identity')
+  })
+
+  test('rejects a generation identity whose year disagrees with the catalog year', () => {
+    // Arrange
+    const mismatched = { ...readySession, generation_id: '2025-round-05-session-race-mode-race', delivery_version: '2025-round-05-session-race-mode-race' }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [mismatched],
+    }] }))).toThrow('mixed-version identity')
+  })
+
+  test('rejects a generation identity whose round disagrees with the race round', () => {
+    // Arrange
+    const mismatched = { ...readySession, generation_id: '2024-round-06-session-race-mode-race', delivery_version: '2024-round-06-session-race-mode-race' }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [mismatched],
+    }] }))).toThrow('mixed-version identity')
+  })
+
+  test('rejects a generation identity whose mode disagrees with its identity', () => {
+    // Arrange — identity race but mode practice is not a practice-1/2/3 exception
+    const mismatched = { ...readySession, generation_id: '2024-round-05-session-race-mode-practice', delivery_version: '2024-round-05-session-race-mode-practice' }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [mismatched],
+    }] }))).toThrow('mixed-version identity')
+  })
+
+  test('rejects a session whose code disagrees with its generation identity', () => {
+    // Arrange — qualifying identity but the session_code claims race
+    const disagreeing = { ...readySession, session_code: 'r', generation_id: '2024-round-05-session-qualifying-mode-qualifying', delivery_version: '2024-round-05-session-qualifying-mode-qualifying', browser_pointer: 'browser/2024-round-05/sessions/r/browser-current.json' }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [disagreeing],
+    }] }))).toThrow('disagrees with generation_id')
+  })
+
+  test('rejects a race whose identity disagrees with its catalog round', () => {
+    // Arrange — race_id claims round 5 but round_number is 6
+    const race = { race_id: '2024-round-05', round_number: 6, event_name: 'Chinese Grand Prix', sessions: [readySession] }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [race] }))).toThrow('mixed-version identity')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────
+// Invalid mode/artifact combinations and replay-readiness gating
+// ──────────────────────────────────────────────────────────────
+
+describe('catalog v2 artifact reference gating', () => {
+  test('rejects a validated session without complete artifact references', () => {
+    // Arrange — validated with no browser pointer
+    const incomplete = { ...readySession, canonical_pointer: null, browser_pointer: null }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [incomplete],
+    }] }))).toThrow('validated sessions require complete artifact references')
+  })
+
+  test('rejects an unvalidated session that claims pointer paths', () => {
+    // Arrange — validated false but a browser pointer is present
+    const claiming = { ...readySession, validated: false }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [claiming],
+    }] }))).toThrow('unvalidated sessions must not claim pointer paths')
+  })
+
+  test('rejects pointers without generation and delivery metadata', () => {
+    // Arrange — browser pointer present but generation identity missing
+    const missing = { ...readySession, generation_id: null, delivery_version: null }
+
+    // Act + Assert
+    expect(() => parseCatalogV2(catalog({ races: [{
+      race_id: '2024-round-05', round_number: 5, event_name: 'Chinese Grand Prix', sessions: [missing],
+    }] }))).toThrow('pointers require generation_id and delivery_version')
+  })
+
+  test('isSessionReplayReady is false for missing or unsafe metadata', () => {
+    // Arrange — each session misses exactly one replay-readiness requirement
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['unvalidated', { validated: false }],
+      ['v1 generation', { generation_id: '2024-round-05-session-race', delivery_version: null }],
+      ['missing delivery version', { delivery_version: null, browser_pointer: null }],
+      ['missing browser pointer', { browser_pointer: null }],
+      ['unsafe browser pointer', { browser_pointer: '../escape/browser-current.json' }],
+    ]
+
+    // Act + Assert
+    for (const [_description, overrides] of cases) {
+      expect(isSessionReplayReady({ ...readySession, ...overrides })).toBe(false)
+    }
+  })
+
+  test('selectReplaySession rejects unsafe and mismatched browser pointers', () => {
+    // Act + Assert — unsafe traversal and a session-code identity mismatch
+    expect(() => resolveBrowserPointer(
+      'browser/2024-round-05/sessions/r/../browser-current.json', '2024-round-05', 'r',
+    )).toThrow('Unsafe replay-data path')
+    expect(() => resolveBrowserPointer(
+      'browser/2024-round-05/sessions/r/browser-current.json', '2024-round-05', 'q',
+    )).toThrow('session identity disagrees')
   })
 })

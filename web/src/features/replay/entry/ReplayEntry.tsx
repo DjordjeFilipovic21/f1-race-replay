@@ -1,4 +1,5 @@
 import type { CoordinateInterpolationStrategy } from '../../../engine/replay'
+import { getSessionLabel } from '../session-capabilities'
 import { ReplayControls } from '../shell/ReplayControls'
 import { ReplayErrorBoundary } from '../shell/ReplayErrorBoundary'
 import { useReplayEntry } from './useReplayEntry'
@@ -23,7 +24,7 @@ export function ReplayEntry({ browserBaseUrl, browserPointerPath, onChangeSessio
           </svg>
           Change session
         </button>
-        <span className="replay-shell__context" aria-hidden="true">F1 / Race replay</span>
+        <span className="replay-shell__context" aria-hidden="true">F1 / {replay === null ? 'Replay' : `${getSessionLabel(replay.sessionMode)} replay`}</span>
       </nav>
       {replay !== null && <ReplayErrorBoundary label="Replay workspace"><ReplayControls {...replay} /></ReplayErrorBoundary>}
       {replay === null && error === null && <p className="app-diagnostic" role="status" aria-label="Replay loading">Loading replay data…</p>}

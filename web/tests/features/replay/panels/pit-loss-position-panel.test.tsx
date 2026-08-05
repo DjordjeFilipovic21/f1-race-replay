@@ -24,7 +24,7 @@ function createPitLossModel(overrides: {
 } = {}): PitLossModel {
   const baselineMs = overrides.baselineMs ?? 22_000
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'fixture-1',
     method: 'global-prior-weighted-mean-v1',
     baselineMs,

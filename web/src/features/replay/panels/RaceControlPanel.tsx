@@ -1,7 +1,8 @@
 import { memo } from 'react'
 import fiaLogo from '../../../assets/fia/fia.png'
-import type { ReplayEvent } from '../../../data/replay/types'
+import type { ReplayEvent, SessionMode } from '../../../data/replay/types'
 import type { ReplayControllerSnapshot } from '../../../engine/replay'
+import { getSessionLabel } from '../session-capabilities'
 import { formatTrackStatus } from './track-status'
 
 export { formatTrackStatus } from './track-status'
@@ -13,17 +14,19 @@ export interface RaceControlPanelProps {
   readonly snapshot: ReplayControllerSnapshot
   readonly activeMessage: ReplayEvent | null
   readonly isMessageExiting: boolean
+  readonly sessionMode?: SessionMode
 }
 
 /** Presents sampled race state and the current transient race-control message. */
-export const RaceControlPanel = memo(function RaceControlPanel({ snapshot, activeMessage, isMessageExiting }: RaceControlPanelProps) {
+export const RaceControlPanel = memo(function RaceControlPanel({ snapshot, activeMessage, isMessageExiting, sessionMode = 'race' }: RaceControlPanelProps) {
   const replay = snapshot.replay
   const message = activeMessage === null ? null : formatRaceControlMessage(activeMessage)
+  const sessionLabel = getSessionLabel(sessionMode)
   return (
     <article className="race-control-panel" aria-labelledby="race-control-title">
       <header className="race-control-panel__header">
-        <p className="race-control-panel__eyebrow">Live race state</p>
-        <h2 id="race-control-title">Race control</h2>
+        <p className="race-control-panel__eyebrow">Live {sessionLabel.toLowerCase()} state</p>
+        <h2 id="race-control-title">{sessionLabel} control</h2>
       </header>
       <dl className="race-control-panel__status" aria-label="Active race state">
         <div className="race-control-panel__status-item">

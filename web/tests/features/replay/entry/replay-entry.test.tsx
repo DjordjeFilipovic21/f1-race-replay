@@ -53,3 +53,16 @@ test('composes ready replay controls inside the replay error boundary', () => {
   expect(screen.getByText('Replay controls')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Change session' })).toBeTruthy()
 })
+
+test.each([
+  ['race', 'F1 / Race replay'],
+  ['practice', 'F1 / Practice replay'],
+  ['qualifying', 'F1 / Qualifying replay'],
+  ['sprint', 'F1 / Sprint replay'],
+] as const)('reports the %s session mode truthfully in the navigation context', (_mode, label) => {
+  vi.mocked(useReplayEntry).mockReturnValue({ replay: { sessionMode: _mode } as ReadyReplay, error: null, retry: vi.fn() })
+
+  render(<ReplayEntry {...entryProps} />)
+
+  expect(screen.getByText(label)).toBeTruthy()
+})

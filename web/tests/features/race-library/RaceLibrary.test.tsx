@@ -19,8 +19,8 @@ function createSession(overrides: Partial<CatalogV2Session> = {}): CatalogV2Sess
   return {
     session_code: 'r',
     session_name: 'Race',
-    generation_id: 'gen-1',
-    delivery_version: 'v1',
+    generation_id: '2024-round-01-session-race-mode-race',
+    delivery_version: '2024-round-01-session-race-mode-race',
     outcome: 'classified',
     validated: true,
     canonical_pointer: 'canonical/race-1/sessions/r/manifest.json',

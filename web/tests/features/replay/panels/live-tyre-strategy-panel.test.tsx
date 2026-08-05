@@ -27,7 +27,7 @@ function replay(sessionTimeMs: number, lap: number): ReplaySnapshot {
 
 function createStintSummary(): StintSummary {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'fixture-1',
     drivers: {
       VER: {
@@ -195,6 +195,53 @@ test('driver-selection changes render from the latest retained throttled snapsho
   )
   expect(screen.getAllByText('Soft').length).toBeGreaterThanOrEqual(1)
   expect(screen.getAllByText('Medium').length).toBeGreaterThanOrEqual(1)
+
+  source.controller.dispose()
+})
+
+test('labels practice stint data as Tyre runs without race claims', () => {
+  const stintSummary = createStintSummary()
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, replay: replay(60_000, 10), crossedEvents: [], error: null })
+
+  render(
+    <LiveTyreStrategyPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      stintSummary={stintSummary}
+      totalLaps={20}
+      sessionMode="practice"
+    />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'Tyre runs' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Strategy' })).toBeNull()
+  expect(screen.queryByText('Race distance timeline')).toBeNull()
+  const timeline = document.querySelector('[aria-label*="distance timeline"], [aria-label*="stint timeline"]')
+  expect(timeline?.getAttribute('aria-label')).toContain('Session')
+
+  source.controller.dispose()
+})
+
+test('keeps race labels when the session mode is explicitly race', () => {
+  const stintSummary = createStintSummary()
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, replay: replay(60_000, 10), crossedEvents: [], error: null })
+
+  render(
+    <LiveTyreStrategyPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      stintSummary={stintSummary}
+      totalLaps={20}
+      sessionMode="race"
+    />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'Strategy' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Tyre runs' })).toBeNull()
 
   source.controller.dispose()
 })

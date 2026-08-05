@@ -27,7 +27,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 const trackAssets: TrackAssets = {
-  contractVersion: 'v1', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
+  contractVersion: 'v2', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
   coordinateSpace: { units: 'meters', origin: 'test origin' }, circuitLengthMeters: 1000, rotationDegrees: 0,
   startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
   centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
@@ -36,10 +36,10 @@ const trackAssets: TrackAssets = {
 }
 
 const index = {
-  manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] },
+  manifest: { contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: 'race', fixtureId: 'test-race', fixtureName: 'Test Race', schemas: { manifest: 'urn:f1-cache-replay:schema:replay-data:v2:manifest', chunk: 'urn:f1-cache-replay:schema:replay-data:v2:chunk', trackAssets: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, trackAssets: { path: 'track-assets.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets' }, chunks: [{ sequence: 1, path: 'chunks/chunk-001.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:chunk', startMs: 0, endMs: 3000, overlapWithPreviousMs: 0 }], drivers: [] },
   trackAssets,
   timelineSummary: {
-    contractVersion: 'v1', fixtureId: 'test-race', startMs: 0, endMs: 3000,
+    contractVersion: 'v2', fixtureId: 'test-race', startMs: 0, endMs: 3000,
     intervals: [{ kind: 'yellow', startMs: 500, endMs: 1000 }], dnfMarkers: [],
   },
 } as unknown as ReplayIndex
@@ -54,10 +54,28 @@ const catalog: CatalogV2 = {
     event_name: 'Bahrain Grand Prix',
     country: 'Bahrain',
     sessions: [{
+      session_code: 'fp1',
+      session_name: 'Practice 1',
+      generation_id: '2024-round-01-session-practice-1-mode-practice',
+       delivery_version: '2024-round-01-session-practice-1-mode-practice',
+      outcome: 'classified',
+      validated: true,
+      canonical_pointer: 'canonical/race-1/sessions/fp1/manifest.json',
+      browser_pointer: 'browser/race-1/sessions/fp1/browser-current.json',
+    }, {
+      session_code: 'q',
+      session_name: 'Qualifying',
+      generation_id: '2024-round-01-session-qualifying-mode-qualifying',
+       delivery_version: '2024-round-01-session-qualifying-mode-qualifying',
+      outcome: 'classified',
+      validated: true,
+      canonical_pointer: 'canonical/race-1/sessions/q/manifest.json',
+      browser_pointer: 'browser/race-1/sessions/q/browser-current.json',
+    }, {
       session_code: 'r',
       session_name: 'Race',
-      generation_id: 'gen-1',
-      delivery_version: 'v1',
+      generation_id: '2024-round-01-session-race-mode-race',
+       delivery_version: '2024-round-01-session-race-mode-race',
       outcome: 'classified',
       validated: true,
       canonical_pointer: 'canonical/race-1/sessions/r/manifest.json',
@@ -267,4 +285,55 @@ test('uses directional transitions for browser back and forward navigation', asy
   })
   expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
   expect(directions).toEqual(['backward', 'forward'])
+})
+
+test('opens a qualifying session workspace with truthful classification labels', async () => {
+  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=q')
+  const qualifyingIndex = {
+    ...index,
+    manifest: { ...index.manifest, sessionMode: 'qualifying' },
+    qualifyingSummary: {
+      contractVersion: 'v2',
+      fixtureId: 'test-race',
+      drivers: {
+        HAM: {
+          qualifyingPosition: [1],
+          q1TimeMs: [55_200],
+          q2TimeMs: [54_800],
+          q3TimeMs: [54_100],
+          bestLapNumber: [3],
+          bestLapTimeMs: [54_100],
+        },
+      },
+    },
+  } as unknown as ReplayIndex
+  vi.mocked(loadReplayIndex).mockResolvedValue(qualifyingIndex)
+  render(<App />)
+
+  expect(await screen.findByRole('heading', { name: 'F1 Qualifying Replay' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Qualifying classification' })).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Qualifying metric' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Leader' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Lap time' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Tyres' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Sectors' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Q1' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Best lap' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+})
+
+test('opens a practice session workspace without race-only panels', async () => {
+  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=fp1')
+  const practiceIndex = {
+    ...index,
+    manifest: { ...index.manifest, sessionMode: 'practice' },
+  } as unknown as ReplayIndex
+  vi.mocked(loadReplayIndex).mockResolvedValue(practiceIndex)
+  render(<App />)
+
+  expect(await screen.findByRole('heading', { name: 'F1 Practice Replay' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+  expect(screen.queryByRole('table')).toBeNull()
+  expect(screen.queryByText('Race control')).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Practice control' })).toBeTruthy()
 })

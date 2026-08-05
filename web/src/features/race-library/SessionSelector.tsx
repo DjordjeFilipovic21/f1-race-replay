@@ -64,6 +64,7 @@ export function SessionSelector({ sessions, selectedSessionCode, onSelectSession
       {sessions.map((session, index) => {
         const isReady = isSessionReplayReady(session)
         const isSelected = session.session_code === selectedSessionCode
+        const sessionLabel = session.session_name.trim() || formatSessionCode(session.session_code)
         return (
           <button
             key={session.session_code}
@@ -71,7 +72,7 @@ export function SessionSelector({ sessions, selectedSessionCode, onSelectSession
             role="radio"
             aria-checked={isSelected}
             aria-disabled={!isReady}
-            aria-label={`${session.session_name}${!isReady ? ' — not yet available for replay' : ''}`}
+            aria-label={`${sessionLabel}${!isReady ? ' — not yet available for replay' : ''}`}
             className="library-session-button"
             disabled={!isReady}
             ref={(button) => { sessionButtonRefs.current[index] = button }}
@@ -80,7 +81,7 @@ export function SessionSelector({ sessions, selectedSessionCode, onSelectSession
             onKeyDown={(event) => handleSessionKeyDown(event, index)}
           >
             <div className="library-session-button__info">
-              <span className="library-session-button__name">{session.session_name}</span>
+              <span className="library-session-button__name">{sessionLabel}</span>
               <span className="library-session-button__status" aria-live="polite">
                 {describeSessionStatus(session, isReady)}
               </span>
@@ -93,6 +94,11 @@ export function SessionSelector({ sessions, selectedSessionCode, onSelectSession
       })}
     </div>
   )
+}
+
+function formatSessionCode(sessionCode: string): string {
+  const words = sessionCode.replace(/[-_]+/g, ' ').trim().split(/\s+/)
+  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ') || 'Session'
 }
 
 function describeSessionStatus(session: CatalogV2Session, isReady: boolean): string {

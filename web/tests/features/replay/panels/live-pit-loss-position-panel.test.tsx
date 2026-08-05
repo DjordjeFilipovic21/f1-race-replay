@@ -29,7 +29,7 @@ function replay(sessionTimeMs: number, lap: number): ReplaySnapshot {
 
 function createPitLossModel(): PitLossModel {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'fixture-1',
     method: 'global-prior-weighted-mean-v1',
     baselineMs: 22_000,

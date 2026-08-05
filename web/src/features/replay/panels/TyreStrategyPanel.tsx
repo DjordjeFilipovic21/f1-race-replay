@@ -1,5 +1,5 @@
 import { memo, useMemo, type CSSProperties } from 'react'
-import type { DriverMetadata, StintSummary } from '../../../data/replay/types'
+import type { DriverMetadata, SessionMode, StintSummary } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 import { selectStintData, type VisibleStint } from '../selectors/stint-selectors'
 import hardTyreImage from '../../../assets/tyres/hard.png'
@@ -14,6 +14,7 @@ export interface TyreStrategyPanelProps {
   readonly snapshot: ReplaySnapshot | null
   readonly stintSummary: StintSummary | null | undefined
   readonly totalLaps?: number | null
+  readonly sessionMode?: SessionMode
 }
 
 const COMPOUND_COLORS: Readonly<Record<string, string>> = Object.freeze({
@@ -46,6 +47,7 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
   snapshot,
   stintSummary,
   totalLaps,
+  sessionMode = 'race',
 }: TyreStrategyPanelProps) {
   // All hooks are called unconditionally before any early return so hook order
   // cannot change between renders — null-safe inputs keep selectors cheap.
@@ -63,10 +65,12 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
       <section
         className="tyre-strategy-panel"
         style={panelStyle()}
-        aria-label="Tyre strategy"
+        aria-label={sessionMode === 'race' || sessionMode === 'sprint' ? 'Tyre strategy' : 'Tyre runs'}
       >
         <p className="tyre-strategy-panel__empty" style={emptyStyle()} role="status">
-          Tyre strategy is unavailable. Select a driver to view it.
+          {sessionMode === 'race' || sessionMode === 'sprint'
+            ? 'Tyre strategy is unavailable. Select a driver to view it.'
+            : 'Tyre runs are unavailable. Select a driver to view them.'}
         </p>
       </section>
     )
@@ -82,7 +86,7 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
         style={panelStyle()}
         aria-labelledby="tyre-strategy-title"
       >
-        {renderHeader(driver)}
+        {renderHeader(driver, sessionMode)}
         <p className="tyre-strategy-panel__empty" style={emptyStyle()} role="status">
           No stint data is available yet.
         </p>
@@ -96,13 +100,14 @@ export const TyreStrategyPanel = memo(function TyreStrategyPanel({
       style={panelStyle()}
       aria-labelledby="tyre-strategy-title"
     >
-      {renderHeader(driver)}
+      {renderHeader(driver, sessionMode)}
       <div className="tyre-strategy-panel__layout" style={layoutStyle()}>
         <RaceDistanceTimeline
           stints={stintSelection.stints}
           sessionTimeMs={snapshot.sessionTimeMs}
           totalLaps={resolvedTotalLaps}
           currentLap={currentDriverLap}
+          sessionMode={sessionMode}
         />
       </div>
     </article>
@@ -115,12 +120,12 @@ function normalizeTotalLaps(totalLaps: number | null | undefined): number | null
   return totalLaps
 }
 
-function renderHeader(driver: DriverMetadata): React.JSX.Element {
+function renderHeader(driver: DriverMetadata, sessionMode: SessionMode): React.JSX.Element {
   return (
     <header className="tyre-strategy-panel__header" style={headerStyle(teamAccentValue(driver.colorHex))}>
       <span className="tyre-strategy-panel__accent" style={accentBarStyle(teamAccentValue(driver.colorHex))} aria-hidden="true" />
       <div>
-        <h2 id="tyre-strategy-title" style={titleStyle()}>Strategy</h2>
+        <h2 id="tyre-strategy-title" style={titleStyle()}>{sessionMode === 'race' || sessionMode === 'sprint' ? 'Strategy' : 'Tyre runs'}</h2>
       </div>
     </header>
   )
@@ -133,14 +138,15 @@ interface RaceDistanceTimelineProps {
   readonly sessionTimeMs: number
   readonly totalLaps: number | null
   readonly currentLap: number | null
+  readonly sessionMode: SessionMode
 }
 
-function RaceDistanceTimeline({ stints, sessionTimeMs, totalLaps, currentLap }: RaceDistanceTimelineProps) {
+function RaceDistanceTimeline({ stints, sessionTimeMs, totalLaps, currentLap, sessionMode }: RaceDistanceTimelineProps) {
   const segments = buildTimelineSegments(stints, sessionTimeMs, totalLaps, currentLap)
 
   if (segments.length === 0) {
     return (
-      <div className="tyre-strategy-panel__timeline" style={timelineStyle()} role="status" aria-label="Stint timeline">
+      <div className="tyre-strategy-panel__timeline" style={timelineStyle()} role="status" aria-label={`${sessionMode === 'race' || sessionMode === 'sprint' ? 'Race' : 'Session'} stint timeline`}>
         <p style={timelineEmptyStyle()}>No visible stints.</p>
       </div>
     )
@@ -151,7 +157,7 @@ function RaceDistanceTimeline({ stints, sessionTimeMs, totalLaps, currentLap }: 
       className="tyre-strategy-panel__timeline"
       style={timelineStyle()}
       role="list"
-      aria-label="Race distance timeline"
+       aria-label={`${sessionMode === 'race' || sessionMode === 'sprint' ? 'Race' : 'Session'} distance timeline`}
     >
       <div style={timelineBarStyle()}>
         {segments.map((segment, index) => {

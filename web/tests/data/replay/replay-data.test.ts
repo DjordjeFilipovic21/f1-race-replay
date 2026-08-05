@@ -7,12 +7,12 @@ import { loadReplayData, loadReplayIndex } from '../../../src/data/replay/loader
 import { assertSafeRelativePath, resolveRelativePath } from '../../../src/data/replay/source'
 import type { ReplaySource } from '../../../src/data/replay/types'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v2/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 
-describe('replay-data v1 loader', () => {
+describe('replay-data v2 loader', () => {
   test('loads a lazy index before reading chunks, then validates the complete fixture', async () => {
     const reads: string[] = []
     const source: ReplaySource = { read: async (path) => { reads.push(path); return fixtureSource.read(path) } }
@@ -469,7 +469,7 @@ describe('replay-data v1 loader', () => {
     const schemaSource = mutateFixture('manifest.json', (manifest) => {
       ;(manifest as { trackAssets: { schemaId: string } }).trackAssets.schemaId = 'urn:unsupported'
     })
-    await expect(loadReplayIndex({ source: schemaSource })).rejects.toThrow('track asset schema identity is unsupported')
+    await expect(loadReplayIndex({ source: schemaSource })).rejects.toThrow('track asset schema identity or path is unsupported')
     const metadataSource = mutateFixture('manifest.json', (manifest) => {
       ;(manifest as { sourceManifestSha256?: unknown }).sourceManifestSha256 = 'invalid'
     })
@@ -558,6 +558,115 @@ describe('replay-data v1 loader', () => {
   })
 })
 
+// ──────────────────────────────────────────────────────────────
+// Strict V2 session-mode loading and artifact-mode gating
+// ──────────────────────────────────────────────────────────────
+
+describe('replay-data v2 session-mode gating', () => {
+  test.each([
+    'practice', 'qualifying', 'sprint', 'sprint-qualifying', 'sprint-shootout', 'testing',
+  ] as const)('accepts a %s session mode manifest and preserves it', async (mode) => {
+    // Arrange — the deterministic fixture carries no race-only sidecars
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = mode
+    })
+
+    // Act
+    const index = await loadReplayIndex({ source })
+
+    // Assert
+    expect(index.manifest.sessionMode).toBe(mode)
+  })
+
+  test('rejects a v1 contract manifest', async () => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { contractVersion: string }).contractVersion = 'v1'
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('manifest must be contract version v2')
+  })
+
+  test('rejects an unknown session mode', async () => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = 'shakedown'
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('manifest.sessionMode is invalid')
+  })
+
+  test.each([
+    ['practice', 'timelineSummary'],
+    ['qualifying', 'timelineSummary'],
+    ['testing', 'pitLossModel'],
+  ] as const)('rejects the race-only %s artifact for a %s session', async (mode, artifactField) => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = mode
+      ;(manifest as Record<string, unknown>)[artifactField] = artifactField === 'timelineSummary' ? timelineSummaryReference() : pitLossModelReference()
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('race-only browser sidecars are invalid for this session mode')
+  })
+
+  test.each([
+    ['race', 'qualifyingSummary'],
+    ['race', 'qualifyingLapStatus'],
+    ['practice', 'qualifyingSummary'],
+  ] as const)('rejects the qualifying %s artifact for a non-qualifying %s session', async (mode, artifactField) => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = mode
+      ;(manifest as Record<string, unknown>)[artifactField] = artifactField === 'qualifyingSummary' ? qualifyingSummaryReference() : qualifyingLapStatusReference()
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('qualifying artifacts are valid only for qualifying-like modes')
+  })
+
+  test('rejects a qualifying summary reference with an unsupported schema identity', async () => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = 'qualifying'
+      ;(manifest as Record<string, unknown>).qualifyingSummary = { ...qualifyingSummaryReference(), schemaId: 'urn:unsupported' }
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('schema identity is unsupported')
+  })
+
+  test('rejects a qualifying summary reference whose path disagrees with its identity', async () => {
+    // Arrange
+    const source = mutateFixture('manifest.json', (manifest) => {
+      ;(manifest as { sessionMode: string }).sessionMode = 'qualifying'
+      ;(manifest as Record<string, unknown>).qualifyingSummary = { ...qualifyingSummaryReference(), path: 'wrong.json' }
+    })
+
+    // Act + Assert
+    await expect(loadReplayIndex({ source })).rejects.toThrow('qualifying summary path is unsupported')
+  })
+})
+
+function qualifyingSummaryReference(): Record<string, string> {
+  return {
+    path: 'qualifying-summary.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary',
+    sha256: 'a'.repeat(64),
+  }
+}
+
+function qualifyingLapStatusReference(): Record<string, string> {
+  return {
+    path: 'qualifying-lap-status.json',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status',
+    sha256: 'a'.repeat(64),
+  }
+}
+
 function mutateFixture(target: string, mutate: (value: unknown) => void): ReplaySource {
   return {
     async read(path) {
@@ -594,8 +703,9 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
   const chunkReferences = manifest.chunks as Array<Record<string, unknown>>
   chunkReferences[0].sha256 = options.corruptChunkDigest ? '0'.repeat(64) : await sha256Hex(chunkOne)
   chunkReferences[1].sha256 = await sha256Hex(chunkTwo)
-  manifest.formatVersion = 'browser-delivery-v1'
-  manifest.deliveryVersion = 'demo-v1'
+  manifest.formatVersion = 'browser-delivery-v2'
+  manifest.sessionMode = manifest.sessionMode ?? 'race'
+  manifest.deliveryVersion = 'demo'
   if (timelineSummary) {
     manifest.timelineSummary = { ...timelineSummaryReference(), sha256: options.corruptTimelineSummaryDigest ? '0'.repeat(64) : await sha256Hex(timelineSummary) }
   }
@@ -608,7 +718,7 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
   ])
   if (timelineSummary) files.set('generations/demo/timeline-summary.json', timelineSummary)
   files.set('browser-current.json', encoder.encode(JSON.stringify({
-    formatVersion: 'browser-delivery-v1', deliveryVersion: 'demo-v1',
+    formatVersion: 'browser-delivery-v2', deliveryVersion: 'demo',
     manifestPath: 'generations/demo/manifest.json', manifestSha256: await sha256Hex(manifestBytes),
   })))
   const reads: string[] = []
@@ -618,7 +728,7 @@ async function publishedFixtureSource(options: { corruptTrackDigest?: boolean; c
 function lapSectorSidecarReference(): Record<string, string> {
   return {
     path: 'lap-sector-sidecar.json',
-    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar',
     sha256: 'a'.repeat(64),
   }
 }
@@ -626,7 +736,7 @@ function lapSectorSidecarReference(): Record<string, string> {
 function stintSummaryReference(): Record<string, string> {
   return {
     path: 'stint-summary.json',
-    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:stint-summary',
     sha256: 'a'.repeat(64),
   }
 }
@@ -634,14 +744,14 @@ function stintSummaryReference(): Record<string, string> {
 function pitLossModelReference(): Record<string, string> {
   return {
     path: 'pit-loss-model.json',
-    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model',
     sha256: 'a'.repeat(64),
   }
 }
 
 function timelineSummaryPayload(): Record<string, unknown> {
   return {
-    contractVersion: 'v1', fixtureId: 'deterministic-race', startMs: 0, endMs: 4_000,
+    contractVersion: 'v2', fixtureId: 'deterministic-race', startMs: 0, endMs: 4_000,
     intervals: [
       { kind: 'yellow', startMs: 500, endMs: 1_000 },
       { kind: 'sc', startMs: 1_200, endMs: 1_300 },
@@ -655,7 +765,7 @@ function timelineSummaryPayload(): Record<string, unknown> {
 function timelineSummaryReference(): Record<string, string> {
   return {
     path: 'timeline-summary.json',
-    schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary',
+    schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:timeline-summary',
     sha256: 'a'.repeat(64),
   }
 }
