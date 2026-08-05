@@ -121,7 +121,10 @@ Calibration is currently provisional from one Bahrain race and awaits a
 multi-circuit corpus, including varied pit layouts and close/grade-separated
 geometry. Gap quality depends on available leader history. Terminal timing is
 inferred only after the final position sample; it is not a direct canonical
-retirement timestamp.
+retirement timestamp. The curated pit-loss catalog covers the full 2024-2026
+physical-circuit union (26 circuits); low-evidence circuits carry explicit
+derived/proxy estimates with provenance and low or medium confidence, and
+generation is fully offline.
 
 ## 7. Optional lap/sector sidecar
 
@@ -204,7 +207,71 @@ See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#o
 for the full contract including placeholder semantics, refinement rules,
 eligibility criteria, and causal availability.
 
-## 10. Optional issued-penalty sidecar
+## 10. Optional status-aware pit-loss estimate sidecar
+
+The browser delivery may publish an additive
+`pit-loss-estimate-sidecar.json` artifact for the selected fixture and track:
+
+- The manifest reference is `pitLossEstimateSidecar` with the fixed path,
+  versioned schema ID, and SHA-256 digest.
+- The artifact binds `fixtureId` to the manifest and `trackId` to
+  `track-assets.json`; cross-race circuit aggregation is outside this
+  delivery boundary.
+- **Catalog-backed values.** Production values come from the versioned,
+  repository-local pit-loss baseline catalog
+  (`pit-loss-baseline-catalog.schema.json`), so generation is deterministic and
+  performs no live network access. The curated method is
+  `curated-track-baseline-v1`; each public sidecar carries only its identity,
+  method, and replay-start timelines. Catalog audit metadata (`catalogVersion`,
+  `sourceStatus`, provenance, evidence count, confidence, and derivation
+  details) remains repository-internal. Current-race gap-difference estimates
+  are diagnostic-only and never alter these values.
+- **2024-2026 physical-circuit union.** The catalog ships one fixture-less
+  entry per physical circuit used in the 2024, 2025, and 2026 calendars (26
+  circuits), reusing one stable `trackId` per circuit across seasons. Distinct
+  venues are separate entries: `bahrain` (Sakhir) and `sepang`, and
+  `barcelona-catalunya` and `madring` (Madrid). A deterministic identity
+  registry maps fixture and track-asset names onto circuits; bare names shared
+  by two circuits resolve only with a season qualifier. Australia is bound to
+  its 2026 season opener; all other entries are fixture-less.
+- **Per-status source status.** Every Green/VSC/SC value is `direct`,
+  `derived`, or `proxy` and carries its own metric definition, provenance,
+  evidence count, and confidence; derived/proxy values include an explicit
+  derivation record. `sourceStatus` is catalog-only: it is never serialized
+  into the sidecar payload or exposed to the frontend, and the sidecar
+  schema's `additionalProperties: false` rejects it.
+- **Non-universal discounts.** The fixed `Green − 7 s` / `Green − 10 s` rule
+  is not mandatory. Australia keeps those legacy defaults, but other circuits
+  use direct track-specific status values (Canada, Monaco, Monza, Baku) or the
+  bounded proportional policy (VSC ≈ 0.55–0.70 × Green, SC ≈ 0.45–0.55 ×
+  Green), and discounts may exceed the legacy 5–10 s window with provenance.
+  The invariant `SC <= VSC <= Green` is validated and malformed entries are
+  rejected.
+- **Australia entry.** Green 19300 ms, VSC 12300 ms, SC 9300 ms.
+- **Replay-start availability.** The curated sidecar always resolves Green,
+  Safety Car, and Virtual Safety Car values from the catalog — one point at
+  replay start per timeline — even when Safety Car or Virtual Safety Car never
+  occurred in the current race. Status code `1` selects Green, code `4` Safety
+  Car, and codes `6`/`7` Virtual Safety Car.
+- **Fail-closed unknown tracks.** Unknown tracks have no catalog entry: no
+  curated sidecar is emitted and no 22 s fallback is silently applied. The
+  delivery remains publishable through the legacy path, where pit-loss data is
+  unavailable unless a legacy `pitLossModel` is present.
+- Publication validates the direct sidecar contract, catalog binding,
+  fixture/track identity, deterministic serialization, and digest before the
+  immutable browser pointer is replaced.
+- **Core chunks are unchanged**: no new chunk fields, no canonical Parquet
+  rewrite, and no format-version bump. Delivery never touches `templates/`, and
+  R2 publication behavior is unchanged.
+- **Backward compatibility**: manifests without this sidecar, including
+  legacy `pitLossModel`-only and `track-status-median-v1` sidecar manifests,
+  remain valid and replayable.
+
+See [Replay Data Contract — Optional status-aware pit-loss estimate sidecar](replay-data-contract.md#optional-status-aware-pit-loss-estimate-sidecar)
+for the full schema, catalog provenance, availability, fallback, and
+generation-time rules.
+
+## 11. Optional issued-penalty sidecar
 
 The manifest may carry a `penaltySidecar` reference (`path`, `schemaId`, and
 `sha256`) pointing to `penalty-sidecar.json`. The sidecar contains definitive

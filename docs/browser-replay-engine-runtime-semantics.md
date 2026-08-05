@@ -75,6 +75,53 @@ history. There is no constant-speed heuristic. The leader is zero; insufficient
 leader history produces null. At sampling time, the current leader is normalized
 to zero when its sampled position is 1, including after continuous interpolation.
 
+## Pit-loss estimate semantics
+
+When the optional `pitLossEstimateSidecar` is loaded, pit-loss position
+prediction uses the replay snapshot's exact `trackStatusCode` and the static
+generation-time values resolved from the versioned, repository-local pit-loss
+baseline catalog:
+
+- code `1` (All Clear) selects the Green value;
+- code `4` selects the Safety Car value;
+- codes `6` and `7` select the Virtual Safety Car value.
+
+The catalog covers the 2024-2026 physical-circuit union (26 circuits) with one
+stable entry per circuit, so the same Green/VSC/SC values resolve across
+seasons; `bahrain` (Sakhir) and `sepang`, and `barcelona-catalunya` and
+`madring` (Madrid), are distinct entries. Curated
+(`curated-track-baseline-v1`) sidecars always carry Green, Safety Car, and
+Virtual Safety Car values, each a single replay-start point, so known catalog
+values are available from replay start even when Safety Car or Virtual Safety
+Car did not occur in the current race. Australia resolves to Green 19300 ms,
+VSC 12300 ms, SC 9300 ms.
+
+Each catalog status is `direct`, `derived`, or `proxy` with its own metric
+definition, provenance, evidence count, and confidence, but that internal
+`sourceStatus` is catalog-only: it is never serialized into the sidecar
+payload or the browser types/guards, and it is not rendered. Catalog provenance,
+evidence count, confidence, and derivation details likewise remain internal;
+the sidecar exposes only identity, method, and status timelines. The panel
+renders the selected status label and produces no `Baseline` label for curated
+values. Curated timelines never carry `observedSampleCount`, and current-race
+observation counts are not fabricated for catalog values. Current-race
+gap-difference estimates remain diagnostic-only and never change a resolved
+value.
+
+Unknown or unsupported statuses (yellow, red, missing, mixed) do not reuse the
+Green value: for a curated sidecar they fail closed to unavailable, falling
+back only to a legacy `pitLossModel` when the delivery still carries one. An
+unknown track never receives a fabricated 22 s value — generation emits no
+curated sidecar for tracks without a catalog entry, and the browser shows
+pit-loss data as unavailable unless a legacy model is present.
+
+Legacy `track-status-median-v1` sidecars remain readable: their
+status-specific timelines are emitted only when the status occurred, and
+unavailable or omitted statuses fall back to the race timeline. Older
+deliveries without the sidecar continue to use the legacy pit-loss model or
+show pit-loss data as unavailable; the replay sampler and controller remain
+unchanged.
+
 ## Deterministic control behavior
 
 `sampleReplayAt`, playback, and seek use the same prepared sampler and therefore
@@ -114,5 +161,10 @@ The one-race Bahrain calibration is provisional pending a multi-circuit corpus.
 Gap availability depends on leader-history coverage. Finish timing is inferred
 after the final position sample from completion and completed-lap evidence, not
 read as a canonical terminal timestamp. Legacy chunks may omit `isFinished`.
+The curated pit-loss catalog covers the full 2024-2026 physical-circuit union
+(26 circuits); low-evidence circuits carry explicit derived/proxy estimates
+with provenance and low or medium confidence, and generation is fully offline
+(no catalog value is fetched from the network at build time). Gap-difference
+pit-loss estimates are diagnostic-only and never become production values.
 Quality assessment is internal `BrowserDeliveryBuild` provenance and is not in
 the serialized v1 manifest in this phase.
