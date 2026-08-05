@@ -1,0 +1,23 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline",
+  "title":"Browser delivery v2 qualifying timeline and incident markers",
+  "type":"object","additionalProperties":false,
+  "required":["contractVersion","fixtureId","startMs","endMs","intervals","incidentMarkers"],
+  "$comment":"Qualifying-safe timeline artifact. Carries bounded half-open [startMs, endMs) yellow/red track-status intervals plus separately named incidentMarkers for track-map marker hiding. Race semantics (dnfMarkers, OUT, finish, position) are never represented here. The artifact is optional and qualifying-like-only; absence means no interval rendering and no incident marker hiding (fail closed). When present, intervals and incidentMarkers are both required keys and each may be an empty array; the artifact should be omitted entirely when there is nothing to publish. Marker and interval times are causal (effective when <= replayTimeMs). incidentMarkers are ordered deterministically by timeMs, then driverId, then rawMessage; later implementation validates ordering, artifact bounds (startMs <= time < endMs), driver identity against the manifest, and digest.",
+  "$defs":{
+    "time":{"type":"integer","minimum":0,"maximum":9223372036854775807},
+    "driver":{"type":"string","pattern":"^[A-Z0-9]{2,4}$"},
+    "interval":{"type":"object","additionalProperties":false,"required":["kind","startMs","endMs"],"properties":{"kind":{"enum":["yellow","red"]},"startMs":{"$ref":"#/$defs/time"},"endMs":{"$ref":"#/$defs/time"}}},
+    "incidentMarker":{"type":"object","additionalProperties":false,"required":["driverId","timeMs","source","rawMessage"],"properties":{"driverId":{"$ref":"#/$defs/driver"},"timeMs":{"$ref":"#/$defs/time"},"source":{"const":"race-control-car-event"},"rawMessage":{"type":"string","minLength":1},"lapNumber":{"type":"integer","minimum":1}}},
+    "reference":{"type":"object","additionalProperties":false,"required":["path","schemaId","sha256"],"properties":{"path":{"const":"qualifying-timeline.json"},"schemaId":{"const":"urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}
+  },
+  "properties":{
+    "contractVersion":{"const":"v2"},
+    "fixtureId":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "startMs":{"$ref":"#/$defs/time"},
+    "endMs":{"$ref":"#/$defs/time"},
+    "intervals":{"type":"array","items":{"$ref":"#/$defs/interval"}},
+    "incidentMarkers":{"type":"array","items":{"$ref":"#/$defs/incidentMarker"}}
+  }
+}
