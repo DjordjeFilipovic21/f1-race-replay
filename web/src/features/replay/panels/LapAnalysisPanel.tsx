@@ -26,7 +26,7 @@ export const LapAnalysisPanel = memo(function LapAnalysisPanel({
   const [historyExpanded, setHistoryExpanded] = useState(false)
 
   const driver = selectedDriverId === null ? null : drivers.find(({ id }) => id === selectedDriverId) ?? null
-  const completedLaps = lapSector.laps
+  const completedLaps = useMemo(() => lapSector.laps.filter(isCompletedLap), [lapSector.laps])
   const hasCompletedLaps = completedLaps.length > 0
 
   const sectorMap = useMemo(() => groupSectorsByLap(sectorColours.sectors), [sectorColours.sectors])
@@ -234,6 +234,10 @@ function findBestLap(laps: readonly VisibleLap[]): VisibleLap | null {
     if (best === null || lap.lapDurationMs < (best.lapDurationMs ?? Infinity)) best = lap
   }
   return best
+}
+
+function isCompletedLap(lap: VisibleLap): boolean {
+  return lap.lapDurationMs !== null && Number.isFinite(lap.lapDurationMs) && lap.lapDurationMs > 0
 }
 
 function groupSectorsByLap(sectors: readonly ColouredSector[]): ReadonlyMap<number, readonly ColouredSector[]> {

@@ -6,10 +6,11 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { parseElapsedParts, ReplayControls, type ReplayControlsProps, selectDriverId } from '../../../../src/features/replay/shell/ReplayControls'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
+import type { LapSectorSidecar, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline } from '../../../../src/data/replay/types'
 
 const drivers = [{ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }]
 const trackAssets = {
-  contractVersion: 'v1', fixtureId: 'test-grand-prix', trackId: 'test-circuit', trackName: 'Test Circuit',
+  contractVersion: 'v2', fixtureId: 'test-grand-prix', trackId: 'test-circuit', trackName: 'Test Circuit',
   coordinateSpace: { units: 'meters', origin: 'test' }, circuitLengthMeters: 1000, rotationDegrees: 0,
   startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
   centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
@@ -43,6 +44,29 @@ function createController(snapshot: ReplayControllerSnapshot) {
 const readySnapshot: ReplayControllerSnapshot = {
   status: 'ready', timeMs: 1500, speed: 1, isPlaying: false, crossedEvents: [], error: null,
   replay: { sessionTimeMs: 1500, leaderboardOrder: null, trackStatusCode: null, weatherState: null, events: [], drivers: { VER: { x: null, y: null, trackDistanceMeters: null, speed: 246.4, throttle: null, brake: null, gapToLeaderMs: null, lap: null, position: 1, gear: 7, drs: null, tyreCompound: null, status: null, isInPitLane: null } } },
+}
+
+const minimalStintSummary = {
+  contractVersion: 'v2' as const,
+  fixtureId: 'test-grand-prix',
+  drivers: {
+    VER: {
+      stintNumber: [1], compound: ['SOFT'], startLap: [1], endLap: [null],
+      startTimeMs: [0], endTimeMs: [null], tyreLifeAtStart: [0],
+      isFreshTyre: [true], pitInTimeMs: [null], pitOutTimeMs: [null],
+    },
+  },
+}
+
+const minimalPitLossModel = {
+  contractVersion: 'v2' as const,
+  fixtureId: 'test-grand-prix',
+  method: 'global-prior-weighted-mean-v1' as const,
+  baselineMs: 22000,
+  priorWeight: 2,
+  timeMs: [90000],
+  estimatedLossMs: [22000],
+  observedSampleCount: [0],
 }
 
 afterEach(() => {
@@ -100,7 +124,7 @@ test('accepts optional telemetry metadata without changing sampled telemetry', (
 
 test('renders status bands and DNF markers behind the sole native seek control', () => {
   const { controller } = createController({ ...readySnapshot, timeMs: 15_000 })
-  render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} trackAssets={trackAssets} timelineSummary={{ contractVersion: 'v1', fixtureId: 'test-grand-prix', startMs: 10_000, endMs: 20_000, intervals: [{ kind: 'yellow', startMs: 11_000, endMs: 12_500 }, { kind: 'sc', startMs: 13_000, endMs: 14_000 }, { kind: 'red', startMs: 15_000, endMs: 16_000 }, { kind: 'vsc', startMs: 17_000, endMs: 19_000 }], dnfMarkers: [{ driverId: 'VER', timeMs: 17_500 }] }} />)
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} trackAssets={trackAssets} timelineSummary={{ contractVersion: 'v2', fixtureId: 'test-grand-prix', startMs: 10_000, endMs: 20_000, intervals: [{ kind: 'yellow', startMs: 11_000, endMs: 12_500 }, { kind: 'sc', startMs: 13_000, endMs: 14_000 }, { kind: 'red', startMs: 15_000, endMs: 16_000 }, { kind: 'vsc', startMs: 17_000, endMs: 19_000 }], dnfMarkers: [{ driverId: 'VER', timeMs: 17_500 }] }} />)
 
   const timeline = screen.getByRole('group', { name: 'Race status timeline' })
   expect(timeline.querySelector('.race-timeline__band--yellow')?.getAttribute('style')).toContain('left: 10%')
@@ -118,6 +142,39 @@ test('omits the race timeline when no optional summary is delivered', () => {
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+})
+
+test('renders qualifying flag intervals and separately named causal incident markers', () => {
+  const qualifyingTimeline: QualifyingTimeline = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    startMs: 10_000,
+    endMs: 20_000,
+    intervals: [
+      { kind: 'yellow', startMs: 11_000, endMs: 12_500 },
+      { kind: 'red', startMs: 15_000, endMs: 16_000 },
+    ],
+    incidentMarkers: [{ driverId: 'VER', timeMs: 17_500, source: 'race-control-car-event', rawMessage: 'CAR 1 CRASH' }],
+  }
+  const { controller } = createController({ ...readySnapshot, timeMs: 15_000 })
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={20_000} drivers={drivers} trackAssets={trackAssets} sessionMode="qualifying" qualifyingTimeline={qualifyingTimeline} />)
+
+  const timeline = screen.getByRole('group', { name: 'Qualifying phase timeline' })
+  expect(timeline.querySelector('.race-timeline__band--yellow')?.getAttribute('style')).toContain('left: 10%')
+  expect(timeline.querySelector('.race-timeline__band--red')?.getAttribute('style')).toContain('left: 50%')
+  expect(screen.getByLabelText('Qualifying incident: VER at 0:00:07.500 — CAR 1 CRASH').getAttribute('class')).toContain('qualifying-incident-marker')
+  expect(screen.queryByLabelText('DNF: VER at 0:00:07.500')).toBeNull()
+  expect(screen.getAllByRole('slider', { name: 'Seek replay' })).toHaveLength(1)
+})
+
+test('renders qualifying phase markers without fabricating flags or incidents when the artifact is absent', () => {
+  const { controller } = createController({ ...readySnapshot, timeMs: 1_500 })
+  render(<ReplayControls controller={controller} startMs={0} endMs={3_000} drivers={drivers} trackAssets={trackAssets} sessionMode="qualifying" lapSectorSidecar={qualifyingLapSectorSidecarWithoutTimeline} />)
+
+  const timeline = screen.getByRole('group', { name: 'Qualifying phase timeline' })
+  expect(timeline.querySelectorAll('.race-timeline__band')).toHaveLength(0)
+  expect(timeline.querySelectorAll('.race-timeline__qualifying-incident-marker')).toHaveLength(0)
+  expect(screen.getByLabelText('Q1 boundary at 0:00:00.000')).toBeTruthy()
 })
 
 test('toggles replay playback with Space outside editable controls', () => {
@@ -177,7 +234,7 @@ test('jumps to the previous and next indexed lap with indicative controls', asyn
 
 test('renders persistent workspace headers in canonical order with definition-driven spans', () => {
   const { controller } = createController(readySnapshot)
-  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} stintSummary={minimalStintSummary} pitLossModel={minimalPitLossModel} />)
 
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.getAttribute('class'))).toEqual([
     'replay-panel-frame',
@@ -217,7 +274,7 @@ test('unpins and restores timestamp and lap navigation with the Player panel', (
 
 test('removes an unpinned panel frame and restores it with its drag handle from Panel Manager', () => {
   const { controller } = createController(readySnapshot)
-  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} stintSummary={minimalStintSummary} pitLossModel={minimalPitLossModel} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
 
@@ -231,7 +288,7 @@ test('removes an unpinned panel frame and restores it with its drag handle from 
 
 test('unpins and restores panels while cleaning up and remounting specialized subscriptions', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
-  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} stintSummary={minimalStintSummary} pitLossModel={minimalPitLossModel} />)
 
   fireEvent.click(screen.getByRole('button', { name: 'Unpin Track map panel' }))
   expect(screen.queryByRole('group', { name: 'Test Circuit live track map' })).toBeNull()
@@ -645,7 +702,7 @@ test.each(['Hours', 'Minutes', 'Seconds', 'Milliseconds'])('opens the %s timesta
 
 test('unsubscribes when the adapter unmounts', () => {
   const { controller, getUnsubscribeCalls } = createController(readySnapshot)
-  const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+  const { unmount } = render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} stintSummary={minimalStintSummary} pitLossModel={minimalPitLossModel} />)
   unmount()
   expect(controller.subscribe).toHaveBeenCalledTimes(5)
   expect(getUnsubscribeCalls()).toBe(5)
@@ -697,36 +754,17 @@ test('propagates sidecar data to the lap analysis and strategy panels and the le
     drivers: { ...readySnapshot.replay!.drivers, NOR: { ...readySnapshot.replay!.drivers.VER, position: 2 } },
   }
   const lapSectorSidecar = {
-    contractVersion: 'v1' as const,
+    contractVersion: 'v2' as const,
     fixtureId: 'test-grand-prix',
+    phaseBoundaries: [],
     drivers: {
       VER: {
         lapNumber: [1], lapStartMs: [0], lapEndMs: [90000], lapDurationMs: [90000],
         sector1DurationMs: [28000], sector2DurationMs: [32000], sector3DurationMs: [30000],
         sector1SessionTimeMs: [28000], sector2SessionTimeMs: [60000], sector3SessionTimeMs: [90000],
+        qualifyingPhase: [null],
       },
     },
-  }
-  const stintSummary = {
-    contractVersion: 'v1' as const,
-    fixtureId: 'test-grand-prix',
-    drivers: {
-      VER: {
-        stintNumber: [1], compound: ['SOFT'], startLap: [1], endLap: [null],
-        startTimeMs: [0], endTimeMs: [null], tyreLifeAtStart: [0],
-        isFreshTyre: [true], pitInTimeMs: [null], pitOutTimeMs: [null],
-      },
-    },
-  }
-  const pitLossModel = {
-    contractVersion: 'v1' as const,
-    fixtureId: 'test-grand-prix',
-    method: 'global-prior-weighted-mean-v1' as const,
-    baselineMs: 22000,
-    priorWeight: 2,
-    timeMs: [90000],
-    estimatedLossMs: [22000],
-    observedSampleCount: [0],
   }
   const { controller } = createController({ ...readySnapshot, timeMs: 95_000, replay })
   render(
@@ -737,13 +775,14 @@ test('propagates sidecar data to the lap analysis and strategy panels and the le
       drivers={twoDrivers}
       trackAssets={trackAssets}
       lapSectorSidecar={lapSectorSidecar}
-      stintSummary={stintSummary}
-      pitLossModel={pitLossModel}
+      stintSummary={minimalStintSummary}
+      pitLossModel={minimalPitLossModel}
     />,
   )
 
   expect(screen.getByRole('region', { name: 'Lap analysis' })).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Strategy' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Pit loss position' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Sectors' }).getAttribute('aria-pressed')).toBe('false')
 })
 
@@ -752,7 +791,539 @@ test('renders empty states without errors when sidecar data is absent', () => {
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
 
   expect(screen.getByRole('region', { name: 'Lap analysis' })).toBeTruthy()
-  expect(screen.getByRole('region', { name: 'Strategy' })).toBeTruthy()
+  expect(screen.queryByRole('region', { name: 'Strategy' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Pit loss position' })).toBeNull()
   expect(screen.getByText(/no completed laps yet/i)).toBeTruthy()
-  expect(screen.getByText(/no stint data is available yet/i)).toBeTruthy()
+})
+
+// ---------------------------------------------------------------------------
+// Mode-aware panel composition, accessible labels, and truthful session claims
+// ---------------------------------------------------------------------------
+
+const qualifyingSummary: QualifyingSummary = {
+  contractVersion: 'v2',
+  fixtureId: 'test-grand-prix',
+  drivers: {
+    VER: {
+      qualifyingPosition: [1],
+      q1TimeMs: [55_200],
+      q2TimeMs: [54_800],
+      q3TimeMs: [54_100],
+      bestLapNumber: [3],
+      bestLapTimeMs: [54_100],
+    },
+  },
+}
+
+const qualifyingLapStatus: QualifyingLapStatusSidecar = {
+  contractVersion: 'v2',
+  fixtureId: 'test-grand-prix',
+  drivers: {
+    VER: {
+      lapNumber: [3],
+      lapStartMs: [140_000],
+      lapEndMs: [210_000],
+      status: ['valid'],
+      deletedReason: [null],
+    },
+  },
+  events: [
+    { driverId: 'VER', lapNumber: 3, eventTimeMs: 200_000, status: 'deleted', reason: 'track limits at turn 4', rawMessage: 'LAP 3 DELETED' },
+    { driverId: 'VER', lapNumber: 3, eventTimeMs: 220_000, status: 'reinstated', reason: null, rawMessage: 'LAP 3 REINSTATED' },
+  ],
+}
+
+const qualifyingLapSectorSidecar: LapSectorSidecar = {
+  contractVersion: 'v2',
+  fixtureId: 'test-grand-prix',
+  phaseBoundaries: [
+    { phase: 'Q1', startMs: 0 },
+    { phase: 'Q2', startMs: 1_000 },
+    { phase: 'Q3', startMs: 2_000 },
+  ],
+  drivers: {
+    VER: {
+      lapNumber: [1, 2, 3], lapStartMs: [0, 1_000, 2_000], lapEndMs: [900, 1_900, 2_900],
+      lapDurationMs: [900, 900, 900], sector1DurationMs: [300, 300, 300], sector2DurationMs: [300, 300, 300], sector3DurationMs: [300, 300, 300],
+      sector1SessionTimeMs: [300, 1_300, 2_300], sector2SessionTimeMs: [600, 1_600, 2_600], sector3SessionTimeMs: [900, 1_900, 2_900], qualifyingPhase: ['Q1', 'Q2', 'Q3'],
+    },
+  },
+}
+
+const qualifyingLapSectorSidecarWithoutTimeline: LapSectorSidecar = {
+  ...qualifyingLapSectorSidecar,
+  phaseBoundaries: [{ phase: 'Q1', startMs: 0 }],
+}
+
+function renderQualifyingControls(timeMs = 1_500, sidecar: LapSectorSidecar = qualifyingLapSectorSidecar) {
+  const { controller } = createController({ ...readySnapshot, timeMs, replay: { ...readySnapshot.replay!, sessionTimeMs: timeMs } })
+  render(
+    <ReplayControls
+      controller={controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      lapSectorSidecar={sidecar}
+    />,
+  )
+  return controller
+}
+
+test('displays the authoritative current Q, seeks available phase boundaries, and labels markers', async () => {
+  const user = userEvent.setup()
+  const controller = renderQualifyingControls()
+
+  expect(screen.getByRole('button', { name: 'Edit current qualifying phase' }).textContent).toBe('Q2')
+  expect(screen.getByText('/ Q3')).toBeTruthy()
+  expect(screen.getByLabelText('Q1 boundary at 0:00:00.000')).toBeTruthy()
+  expect(screen.getByLabelText('Q2 boundary at 0:00:01.000')).toBeTruthy()
+  expect(screen.getByLabelText('Q3 boundary at 0:00:02.000')).toBeTruthy()
+
+  await user.click(screen.getByRole('button', { name: 'Previous qualifying phase' }))
+  await user.click(screen.getByRole('button', { name: 'Next qualifying phase' }))
+
+  expect(controller.seek).toHaveBeenNthCalledWith(1, 0)
+  expect(controller.seek).toHaveBeenNthCalledWith(2, 2_000)
+})
+
+test('clips qualifying range, elapsed time, and phase markers at Q1', () => {
+  const { controller } = createController({
+    ...readySnapshot,
+    timeMs: 11_500,
+    replay: { ...readySnapshot.replay!, sessionTimeMs: 11_500 },
+  })
+  const sidecar = {
+    ...qualifyingLapSectorSidecar,
+    phaseBoundaries: [{ phase: 'Q1', startMs: 10_000 }, { phase: 'Q2', startMs: 12_000 }, { phase: 'Q3', startMs: 14_000 }] as const,
+  }
+
+  render(<ReplayControls controller={controller} startMs={10_000} endMs={16_000} drivers={drivers} trackAssets={trackAssets} sessionMode="qualifying" lapSectorSidecar={sidecar} />)
+
+  const slider = screen.getByRole('slider', { name: 'Seek replay' }) as HTMLInputElement
+  expect(slider.min).toBe('10000')
+  expect(slider.max).toBe('16000')
+  expect(slider.getAttribute('aria-valuetext')).toBe('0:00:01.500')
+  expect(screen.getByLabelText('Q1 boundary at 0:00:00.000')).toBeTruthy()
+  expect(screen.getByLabelText('Q2 boundary at 0:00:02.000')).toBeTruthy()
+})
+
+test('disables Q navigation at the available phase edges and when a phase is cancelled', () => {
+  const atFirstPhase = createController({
+    ...readySnapshot,
+    timeMs: 500,
+    replay: { ...readySnapshot.replay!, sessionTimeMs: 500 },
+  })
+  const { rerender } = render(
+    <ReplayControls
+      controller={atFirstPhase.controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      lapSectorSidecar={qualifyingLapSectorSidecar}
+    />,
+  )
+
+  const previous = screen.getByRole('button', { name: 'Previous qualifying phase' }) as HTMLButtonElement
+  const next = screen.getByRole('button', { name: 'Next qualifying phase' }) as HTMLButtonElement
+  expect(previous.disabled).toBe(true)
+  expect(next.disabled).toBe(false)
+  expect(screen.getByRole('form', { name: 'Qualifying phase navigation' }).textContent).toContain('Q1 / Q3')
+
+  const atLastAvailablePhase = createController({
+    ...readySnapshot,
+    timeMs: 1_500,
+    replay: { ...readySnapshot.replay!, sessionTimeMs: 1_500 },
+  })
+  const cancelledQ3 = { ...qualifyingLapSectorSidecar, phaseBoundaries: qualifyingLapSectorSidecar.phaseBoundaries.slice(0, 2) }
+  rerender(
+    <ReplayControls
+      controller={atLastAvailablePhase.controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      lapSectorSidecar={cancelledQ3}
+    />,
+  )
+
+  expect((screen.getByRole('button', { name: 'Previous qualifying phase' }) as HTMLButtonElement).disabled).toBe(false)
+  expect((screen.getByRole('button', { name: 'Next qualifying phase' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByRole('form', { name: 'Qualifying phase navigation' }).textContent).toContain('Q2 / Q3')
+
+  const unavailable = createController(readySnapshot)
+  rerender(
+    <ReplayControls
+      controller={unavailable.controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      lapSectorSidecar={{ ...qualifyingLapSectorSidecar, phaseBoundaries: [] }}
+    />,
+  )
+
+  expect((screen.getByRole('button', { name: 'Previous qualifying phase' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Next qualifying phase' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Edit current qualifying phase' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText('Qualifying phase seek unavailable')).toBeTruthy()
+})
+
+test('keeps the current Q, classification cursor, and timeline at the same sought boundary', () => {
+  const initial = createController({
+    ...readySnapshot,
+    timeMs: 1_500,
+    replay: { ...readySnapshot.replay!, sessionTimeMs: 1_500 },
+  })
+  const view = render(
+    <ReplayControls
+      controller={initial.controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      lapSectorSidecar={qualifyingLapSectorSidecar}
+    />,
+  )
+
+  expect(screen.getByRole('button', { name: 'Edit current qualifying phase' }).textContent).toBe('Q2')
+  expect(within(screen.getByRole('table', { name: 'Qualifying classification' })).getAllByRole('row')[1].textContent).toContain('No Time')
+  expect(screen.getByLabelText('Q2 boundary at 0:00:01.000')).toBeTruthy()
+
+  const sought = createController({
+    ...readySnapshot,
+    timeMs: 2_000,
+    replay: { ...readySnapshot.replay!, sessionTimeMs: 2_000 },
+  })
+  view.rerender(
+    <ReplayControls
+      controller={sought.controller}
+      startMs={0}
+      endMs={3_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      lapSectorSidecar={qualifyingLapSectorSidecar}
+    />,
+  )
+
+  expect(screen.getByRole('button', { name: 'Edit current qualifying phase' }).textContent).toBe('Q3')
+  expect(screen.getByRole('group', { name: 'Qualifying phase timeline' }).querySelector('.race-timeline__elapsed')?.getAttribute('style')).toContain('width: 66.66666666666666%')
+})
+
+test('edits, commits, and cancels the current Q with the race lap editor interaction', async () => {
+  const user = userEvent.setup()
+  const controller = renderQualifyingControls()
+
+  await user.click(screen.getByRole('button', { name: 'Edit current qualifying phase' }))
+  const phaseInput = screen.getByRole('textbox', { name: 'Current qualifying phase' })
+  await user.clear(phaseInput)
+  await user.type(phaseInput, '3')
+  await user.keyboard('{Enter}')
+  expect(controller.seek).toHaveBeenCalledWith(2_000)
+
+  await user.click(screen.getByRole('button', { name: 'Edit current qualifying phase' }))
+  const cancelledInput = screen.getByRole('textbox', { name: 'Current qualifying phase' })
+  await user.clear(cancelledInput)
+  await user.type(cancelledInput, '1')
+  await user.keyboard('{Escape}')
+
+  expect(screen.getByRole('button', { name: 'Edit current qualifying phase' }).textContent).toBe('Q2')
+  expect(controller.seek).toHaveBeenCalledTimes(1)
+})
+
+test('reports unavailable qualifying phases without seeking to an inferred time', async () => {
+  const user = userEvent.setup()
+  const sidecar = { ...qualifyingLapSectorSidecar, phaseBoundaries: [qualifyingLapSectorSidecar.phaseBoundaries[0], qualifyingLapSectorSidecar.phaseBoundaries[2]] }
+  const controller = renderQualifyingControls(500, sidecar)
+
+  await user.click(screen.getByRole('button', { name: 'Edit current qualifying phase' }))
+  const phaseInput = screen.getByRole('textbox', { name: 'Current qualifying phase' })
+  await user.clear(phaseInput)
+  await user.type(phaseInput, '2{Enter}')
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.getByRole('alert').textContent).toBe('Enter an available qualifying phase.')
+})
+
+test('passes existing qualifying sidecar evidence to the live track map', () => {
+  const lapSectorSidecar: LapSectorSidecar = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    phaseBoundaries: [],
+    drivers: {
+      VER: {
+        lapNumber: [1], lapStartMs: [0], lapEndMs: [90], lapDurationMs: [90],
+        sector1DurationMs: [30], sector2DurationMs: [30], sector3DurationMs: [30],
+        sector1SessionTimeMs: [40], sector2SessionTimeMs: [null], sector3SessionTimeMs: [null],
+        qualifyingPhase: [null],
+      },
+    },
+  }
+  const replay = {
+    ...readySnapshot.replay!,
+    sessionTimeMs: 50,
+    drivers: { VER: { ...readySnapshot.replay!.drivers.VER, x: 5, y: 2, lap: 1 } },
+  }
+  const { controller } = createController({ ...readySnapshot, replay })
+
+  render(
+    <ReplayControls
+      controller={controller}
+      startMs={0}
+      endMs={300_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      lapSectorSidecar={lapSectorSidecar}
+    />,
+  )
+
+  const marker = screen.getByRole('img', { name: /Max Verstappen \(VER\)/ })
+  expect(marker.getAttribute('data-qualifying-lap-state')).toBe('flying')
+  expect(marker.getAttribute('aria-label')).toContain('qualifying lap state: Flying')
+})
+
+test('composes a qualifying classification panel with live metric controls', () => {
+  const { controller } = createController({ ...readySnapshot, timeMs: 150_000, replay: { ...readySnapshot.replay!, sessionTimeMs: 150_000 } })
+  render(
+    <ReplayControls
+      controller={controller}
+      startMs={0}
+      endMs={300_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+    />,
+  )
+
+  // Accessible labels claim the qualifying session, not race semantics.
+  expect(screen.getByRole('heading', { name: 'F1 Qualifying Replay' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Qualifying control' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Qualifying classification' })).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Qualifying metric' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Leader' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Lap time' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Tyres' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Sectors' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Q1' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Q2' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Q3' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Best lap' })).toBeNull()
+  expect(screen.getByRole('table', { name: 'Qualifying classification' })).toBeTruthy()
+  expect(screen.getByText('No Time')).toBeTruthy()
+  expect(screen.queryByText(/54\.100/)).toBeNull()
+
+  // Race-only claims are absent.
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+  expect(screen.queryByRole('table', { name: 'Live race leaderboard' })).toBeNull()
+  expect(screen.queryByText('Race control')).toBeNull()
+
+})
+
+test('omits the qualifying classification panel when no qualifying summary is delivered', () => {
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="qualifying" />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'F1 Qualifying Replay' })).toBeTruthy()
+  expect(screen.queryByRole('region', { name: 'Qualifying classification' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Qualifying metric' })).toBeNull()
+})
+
+test('composes a practice workspace without race-only claims', () => {
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="practice" />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'F1 Practice Replay' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Practice control' })).toBeTruthy()
+  expect(screen.queryByText('Race control')).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+  expect(screen.queryByRole('table')).toBeNull()
+  expect(screen.queryByText('Pit loss position')).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Strategy' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Tyre runs' })).toBeNull()
+})
+
+test('labels practice stint data as Tyre runs with session semantics', () => {
+  const stintSummary = {
+    contractVersion: 'v2' as const,
+    fixtureId: 'test-grand-prix',
+    drivers: {
+      VER: {
+        stintNumber: [1], compound: ['SOFT'], startLap: [1], endLap: [null],
+        startTimeMs: [0], endTimeMs: [null], tyreLifeAtStart: [0],
+        isFreshTyre: [true], pitInTimeMs: [null], pitOutTimeMs: [null],
+      },
+    },
+  }
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="practice" stintSummary={stintSummary} />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'Tyre runs' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Strategy' })).toBeNull()
+  const timeline = document.querySelector('[aria-label*="distance timeline"], [aria-label*="stint timeline"]')
+  expect(timeline?.getAttribute('aria-label')).toContain('Session')
+})
+
+test('composes a testing workspace without race-only panels', () => {
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="testing" />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'F1 Testing Replay' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Testing control' })).toBeTruthy()
+  expect(screen.queryByRole('table')).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Race status timeline' })).toBeNull()
+  expect(screen.queryByText('Race control')).toBeNull()
+})
+
+test('practice lap seek errors reference the practice session, not the race', async () => {
+  const user = userEvent.setup()
+  const replay = {
+    ...readySnapshot.replay!,
+    leaderboardOrder: ['VER'],
+    drivers: { VER: { ...readySnapshot.replay!.drivers.VER, lap: 1 } },
+  }
+  const { controller } = createController({ ...readySnapshot, replay })
+  render(
+    <ReplayControls
+      controller={controller}
+      startMs={10_000}
+      endMs={20_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="practice"
+      lapStarts={[{ lap: 1, startMs: 10_000 }, { lap: 3, startMs: 17_500 }]}
+    />,
+  )
+
+  await user.click(screen.getByRole('button', { name: 'Edit current lap' }))
+  const lap = screen.getByLabelText('Current lap')
+  await user.clear(lap)
+  await user.type(lap, '2{Enter}')
+
+  expect(controller.seek).not.toHaveBeenCalled()
+  expect(screen.getByRole('alert').textContent).toContain('Enter an available practice lap')
+  expect(screen.getByRole('alert').textContent).not.toContain('race lap')
+})
+
+test('composes a sprint workspace with race-like panels and no qualifying claims', () => {
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="sprint" />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'F1 Sprint Replay' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Sprint control' })).toBeTruthy()
+  expect(screen.getByRole('table', { name: 'Live race leaderboard' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Strategy' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Sprint classification' })).toBeNull()
+})
+
+test('keeps race mode claims unchanged when the mode is passed explicitly', () => {
+  const { controller } = createController(readySnapshot)
+  render(
+    <ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} sessionMode="race" />,
+  )
+
+  expect(screen.getByRole('heading', { name: 'F1 Race Replay' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Race control' })).toBeTruthy()
+  expect(screen.getByRole('table', { name: 'Live race leaderboard' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Strategy' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Pit loss position' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Qualifying classification' })).toBeNull()
+})
+
+test('keeps a phase-scoped qualifying time causal across deletion and reinstatement', () => {
+  const qualifyingCausalSidecar: LapSectorSidecar = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    phaseBoundaries: [
+      { phase: 'Q1', startMs: 0 },
+      { phase: 'Q2', startMs: 70_000 },
+      { phase: 'Q3', startMs: 130_000 },
+    ],
+    drivers: {
+      VER: {
+        lapNumber: [3], lapStartMs: [140_000], lapEndMs: [210_000], lapDurationMs: [54_100],
+        sector1DurationMs: [18_000], sector2DurationMs: [18_000], sector3DurationMs: [18_100],
+        sector1SessionTimeMs: [158_000], sector2SessionTimeMs: [176_000], sector3SessionTimeMs: [194_100],
+        qualifyingPhase: ['Q3'], lapKind: ['flying'],
+      },
+    },
+  }
+  const renderAt = (timeMs: number) => {
+    const { controller } = createController({
+      ...readySnapshot,
+      timeMs,
+      replay: { ...readySnapshot.replay!, sessionTimeMs: timeMs },
+    })
+    return render(
+      <ReplayControls
+        controller={controller}
+        startMs={0}
+        endMs={300_000}
+        drivers={drivers}
+        trackAssets={trackAssets}
+        sessionMode="qualifying"
+        qualifyingSummary={qualifyingSummary}
+        qualifyingLapStatus={qualifyingLapStatus}
+        lapSectorSidecar={qualifyingCausalSidecar}
+      />,
+    )
+  }
+
+  // Before lap completion there is no causal time yet.
+  const first = renderAt(150_000)
+  expect(screen.getByText('No Time')).toBeTruthy()
+
+  // After completion, but while the lap is deleted, it remains unavailable.
+  first.rerender(
+    <ReplayControls
+      controller={createController({ ...readySnapshot, timeMs: 210_000, replay: { ...readySnapshot.replay!, sessionTimeMs: 210_000 } }).controller}
+      startMs={0}
+      endMs={300_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      qualifyingLapStatus={qualifyingLapStatus}
+      lapSectorSidecar={qualifyingCausalSidecar}
+    />,
+  )
+  expect(screen.getByText('No Time')).toBeTruthy()
+
+  // After reinstatement the phase-scoped causal time is restored.
+  first.rerender(
+    <ReplayControls
+      controller={createController({ ...readySnapshot, timeMs: 230_000, replay: { ...readySnapshot.replay!, sessionTimeMs: 230_000 } }).controller}
+      startMs={0}
+      endMs={300_000}
+      drivers={drivers}
+      trackAssets={trackAssets}
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      qualifyingLapStatus={qualifyingLapStatus}
+      lapSectorSidecar={qualifyingCausalSidecar}
+    />,
+  )
+  expect(within(screen.getByRole('table', { name: 'Qualifying classification' })).getByText('0:54.100')).toBeTruthy()
+  expect(screen.queryByText(/54\.100 · L3/)).toBeNull()
 })

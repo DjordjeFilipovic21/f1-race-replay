@@ -8,11 +8,23 @@ export interface ReplaySource {
 }
 
 export interface BrowserPointer {
-  readonly formatVersion: 'browser-delivery-v1'
+  readonly formatVersion: 'browser-delivery-v2'
   readonly deliveryVersion: string
   readonly manifestPath: string
   readonly manifestSha256: string
 }
+
+export type SessionMode = 'race' | 'practice' | 'qualifying' | 'sprint' | 'sprint-qualifying' | 'sprint-shootout' | 'testing'
+
+export type QualifyingSessionMode = 'qualifying' | 'sprint-qualifying' | 'sprint-shootout'
+
+/**
+ * Explicit per-lap classification emitted only for qualifying-like sessions.
+ * An absent column means the capability is unavailable (fail closed); `unknown`
+ * is the fail-closed value for insufficient source evidence. `unknown` is
+ * distinct from `false` or `OUT`; it never contributes timing.
+ */
+export type LapKind = 'flying' | 'outlap' | 'inlap' | 'unknown'
 
 export interface ArtifactReference {
   readonly path: string
@@ -22,31 +34,38 @@ export interface ArtifactReference {
 
 export interface TimelineSummaryReference extends ArtifactReference {
   readonly path: 'timeline-summary.json'
-  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:timeline-summary'
   readonly sha256: string
 }
 
 export interface LapSectorSidecarReference extends ArtifactReference {
   readonly path: 'lap-sector-sidecar.json'
-  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar'
   readonly sha256: string
+}
+
+export type QualifyingPhase = 'Q1' | 'Q2' | 'Q3'
+
+export interface QualifyingPhaseBoundary {
+  readonly phase: QualifyingPhase
+  readonly startMs: number
 }
 
 export interface StintSummaryReference extends ArtifactReference {
   readonly path: 'stint-summary.json'
-  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:stint-summary'
   readonly sha256: string
 }
 
 export interface PitLossModelReference extends ArtifactReference {
   readonly path: 'pit-loss-model.json'
-  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model'
   readonly sha256: string
 }
 
 export interface PenaltySidecarReference extends ArtifactReference {
   readonly path: 'penalty-sidecar.json'
-  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar'
   readonly sha256: string
 }
 
@@ -61,13 +80,29 @@ export interface LapSectorDriverColumns {
   readonly sector1SessionTimeMs: readonly (number | null)[]
   readonly sector2SessionTimeMs: readonly (number | null)[]
   readonly sector3SessionTimeMs: readonly (number | null)[]
+  /** Present and aligned with lapNumber in V2 sidecars; absent in V1 sidecars. */
+  readonly qualifyingPhase?: readonly (QualifyingPhase | null)[]
+  /** Optional aligned lap classification; absent means the capability is unavailable (fail closed). */
+  readonly lapKind?: readonly LapKind[]
 }
 
-export interface LapSectorSidecar {
+export interface LapSectorSidecarV1 {
   readonly contractVersion: 'v1'
   readonly fixtureId: string
+  readonly phaseBoundaries?: never
   readonly drivers: Readonly<Record<string, LapSectorDriverColumns>>
 }
+
+export interface LapSectorSidecarV2 {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly phaseBoundaries: readonly QualifyingPhaseBoundary[]
+  readonly drivers: Readonly<Record<string, LapSectorDriverColumns & {
+    readonly qualifyingPhase: readonly (QualifyingPhase | null)[]
+  }>>
+}
+
+export type LapSectorSidecar = LapSectorSidecarV1 | LapSectorSidecarV2
 
 export interface StintDriverColumns {
   readonly stintNumber: readonly number[]
@@ -83,13 +118,13 @@ export interface StintDriverColumns {
 }
 
 export interface StintSummary {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly drivers: Readonly<Record<string, StintDriverColumns>>
 }
 
 export interface PitLossModel {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly method: 'global-prior-weighted-mean-v1'
   readonly baselineMs: number
@@ -110,9 +145,116 @@ export interface PenaltyIssuance {
 
 /** Penalties record issuance; they do not indicate an active or unserved state. */
 export interface PenaltySidecar {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly penaltyIssuances: readonly PenaltyIssuance[]
+}
+
+export interface QualifyingSummaryReference extends ArtifactReference {
+  readonly path: 'qualifying-summary.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary'
+  readonly sha256: string
+}
+
+/** V2 manifest reference for the optional qualifying lap-status artifact. */
+export interface QualifyingLapStatusReference extends ArtifactReference {
+  readonly path: 'qualifying-lap-status.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status'
+  readonly sha256: string
+}
+
+/** V2 manifest reference for the optional qualifying-safe timeline/incident artifact. */
+export interface QualifyingTimelineReference extends ArtifactReference {
+  readonly path: 'qualifying-timeline.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline'
+  readonly sha256: string
+}
+
+export type QualifyingLapStatus = 'valid' | 'deleted'
+export type QualifyingLapStatusEventStatus = 'deleted' | 'reinstated'
+
+export interface QualifyingLapStatusEvent {
+  readonly driverId: string
+  readonly lapNumber: number
+  readonly eventTimeMs: number
+  readonly status: QualifyingLapStatusEventStatus
+  readonly reason: string | null
+  readonly rawMessage: string
+}
+
+export interface QualifyingLapStatusRecord {
+  readonly lapNumber: readonly number[]
+  readonly lapStartMs: readonly number[]
+  readonly lapEndMs: readonly number[]
+  readonly status: readonly QualifyingLapStatus[]
+  readonly deletedReason: readonly (string | null)[]
+}
+
+export interface QualifyingLapStatusSidecar {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly drivers: Readonly<Record<string, QualifyingLapStatusRecord>>
+  readonly events: readonly QualifyingLapStatusEvent[]
+}
+
+/** Descriptive aliases matching the producer's immutable model names. */
+export type BrowserQualifyingLapStatusEvent = QualifyingLapStatusEvent
+export type BrowserQualifyingLapStatusRecord = QualifyingLapStatusRecord
+export type BrowserQualifyingLapStatusSidecar = QualifyingLapStatusSidecar
+
+/**
+ * Qualifying-safe track-status intervals. Restricted to yellow/red; SC/VSC
+ * equivalents are intentionally not exposed in this revision.
+ */
+export type QualifyingTimelineIntervalKind = 'yellow' | 'red'
+
+/** Half-open [startMs, endMs) track-status interval bounded by the artifact window. */
+export interface QualifyingTimelineInterval {
+  readonly kind: QualifyingTimelineIntervalKind
+  readonly startMs: number
+  readonly endMs: number
+}
+
+/**
+ * Qualifying incident marker for track-map marker hiding (visibility only).
+ * Effective when `timeMs <= replayTimeMs`; never carries race DNF semantics.
+ */
+export interface QualifyingIncidentMarker {
+  readonly driverId: string
+  readonly timeMs: number
+  readonly source: 'race-control-car-event'
+  readonly rawMessage: string
+  readonly lapNumber?: number
+}
+
+/**
+ * Optional qualifying-safe timeline/incident artifact. Modeled on
+ * qualifyingLapStatus, not race-only timelineSummary: no DNF markers, no OUT,
+ * no finish/position semantics. Absent artifact means no interval rendering and
+ * no incident marker hiding (fail closed), never "no incident occurred".
+ */
+export interface QualifyingTimeline {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly startMs: number
+  readonly endMs: number
+  readonly intervals: readonly QualifyingTimelineInterval[]
+  readonly incidentMarkers: readonly QualifyingIncidentMarker[]
+}
+
+export interface QualifyingDriverColumns {
+  readonly qualifyingPosition: readonly (number | null)[]
+  readonly q1TimeMs: readonly (number | null)[]
+  readonly q2TimeMs: readonly (number | null)[]
+  readonly q3TimeMs: readonly (number | null)[]
+  readonly bestLapNumber: readonly (number | null)[]
+  readonly bestLapTimeMs: readonly (number | null)[]
+}
+
+export interface QualifyingSummary {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly drivers: Readonly<Record<string, QualifyingDriverColumns>>
 }
 
 export interface ChunkReference extends ArtifactReference {
@@ -149,7 +291,9 @@ export interface LapStart {
 }
 
 export interface ReplayManifest {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
+  readonly formatVersion: 'browser-delivery-v2'
+  readonly sessionMode: SessionMode
   readonly fixtureId: string
   readonly fixtureName: string
   readonly schemas: Readonly<{ readonly manifest: string; readonly chunk: string; readonly trackAssets: string }>
@@ -161,11 +305,13 @@ export interface ReplayManifest {
   readonly stintSummary?: StintSummaryReference
   readonly pitLossModel?: PitLossModelReference
   readonly penaltySidecar?: PenaltySidecarReference
+  readonly qualifyingSummary?: QualifyingSummaryReference
+  readonly qualifyingLapStatus?: QualifyingLapStatusReference
+  readonly qualifyingTimeline?: QualifyingTimelineReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
   readonly description?: string
-  readonly formatVersion?: 'browser-delivery-v1'
   readonly deliveryVersion?: string
   readonly sourceGenerationId?: string
   readonly sourceManifestSha256?: string
@@ -187,7 +333,7 @@ export interface DnfMarker {
 }
 
 export interface TimelineSummary {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly startMs: number
   readonly endMs: number
@@ -198,7 +344,7 @@ export interface TimelineSummary {
 export interface TrackPoint { readonly x: number; readonly y: number }
 export interface DrsZone { readonly startMeters: number; readonly endMeters: number }
 export interface TrackAssets {
-  readonly contractVersion: 'v1'
+  readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly trackId: string
   readonly trackName: string
@@ -257,7 +403,7 @@ export interface HandoffOverlap {
 export type ReplayOverlap = NoOverlap | HandoffOverlap
 
 export interface ReplayChunk {
-  readonly contractVersion: 'v1'; readonly fixtureId: string; readonly chunkId: string; readonly sequence: number
+  readonly contractVersion: 'v2'; readonly fixtureId: string; readonly chunkId: string; readonly sequence: number
   readonly startMs: number; readonly endMs: number
   readonly overlap: ReplayOverlap
   readonly timeMs: readonly number[]; readonly authoritativeStartIndex: number
@@ -278,6 +424,9 @@ export interface ReplayData {
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
   readonly penaltySidecar?: PenaltySidecar
+  readonly qualifyingSummary?: QualifyingSummary
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
+  readonly qualifyingTimeline?: QualifyingTimeline
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -292,6 +441,9 @@ export interface ReplayIndex {
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
   readonly penaltySidecar?: PenaltySidecar
+  readonly qualifyingSummary?: QualifyingSummary
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
+  readonly qualifyingTimeline?: QualifyingTimeline
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

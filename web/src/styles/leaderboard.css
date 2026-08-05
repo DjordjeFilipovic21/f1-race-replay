@@ -24,15 +24,25 @@ select { border: 1px solid var(--border); background: var(--surface-muted); colo
 .live-leaderboard__driver button { background: transparent; border: 0; box-sizing: border-box; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; min-height: 2rem; padding: 0 1.125rem 0 0; text-align: left; width: 100%; }
 .live-leaderboard__driver button:hover:not(:disabled) { color: var(--focus); }
 .live-leaderboard__row--selected > .live-leaderboard__driver, .live-leaderboard__row--selected > .live-leaderboard__gap { background: color-mix(in srgb, var(--live-leaderboard-team-color) 18%, #111315) !important; }
+.live-leaderboard__row--qualifying-cutoff > * { box-shadow: inset 0 -2px 0 var(--danger); }
 .live-leaderboard__driver button[aria-pressed='true'] { color: #fff; }
 .live-leaderboard__gap { background: rgb(0 0 0 / 35%) !important; color: #f3f4f5; font-size: .7rem; font-variant-numeric: tabular-nums; font-weight: 800; text-align: right !important; white-space: nowrap; }
 .live-leaderboard__penalty-indicator { align-items: center; background: var(--timeline-red, #ff5158); border-radius: .125rem; color: #fff; display: inline-flex; font-size: .6rem; font-weight: 900; height: .875rem; justify-content: center; line-height: 1; pointer-events: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: .875rem; }
+.live-leaderboard__parked-indicator { background: #fff; color: #000; font-size: 1.05rem; height: 1.35rem; font-weight: 1000; width: 1.35rem; }
 .live-leaderboard__tyre { align-items: center; display: inline-flex; gap: .35rem; justify-content: flex-end; }
+.live-leaderboard__tyre-value { align-items: center; display: inline-flex; gap: .35rem; justify-content: flex-end; }
 .live-leaderboard__tyre-image { display: block; height: 1.4rem; object-fit: contain; width: 1.4rem; }
 .live-leaderboard__tyre-age { min-width: 3.25rem; }
 .live-leaderboard__tyre-unavailable { color: var(--text-muted); }
 .live-leaderboard__gap--finished { background: #111315 !important; position: relative; }
-.live-leaderboard__gap--finished::before { background: conic-gradient(#f4f5f6 25%, #050607 0 50%, #f4f5f6 0 75%, #050607 0) 0 / .6rem .6rem; bottom: 0; content: ''; inset: 0; mask-image: linear-gradient(to left, #000 8%, rgb(0 0 0 / 22%) 72%, transparent); pointer-events: none; position: absolute; top: 0; -webkit-mask-image: linear-gradient(to left, #000 8%, rgb(0 0 0 / 22%) 72%, transparent); }
+.live-leaderboard__gap--finished::before { background: conic-gradient(#f4f5f6 25%, #050607 0 50%, #f4f5f6 0 75%, #050607 0) 0 / .6rem .6rem; bottom: 0; content: ''; inset: 0; mask-image: linear-gradient(to left, rgb(0 0 0 / 30%) 8%, rgb(0 0 0 / 8%) 72%, transparent); pointer-events: none; position: absolute; top: 0; z-index: 0; -webkit-mask-image: linear-gradient(to left, rgb(0 0 0 / 30%) 8%, rgb(0 0 0 / 8%) 72%, transparent); }
+.live-leaderboard__gap--finished > * { background: #111315; position: relative; z-index: 1; }
+.live-leaderboard__gap--finished > .live-leaderboard__tyre-value { background: transparent; }
+.live-leaderboard__gap--finished > .live-leaderboard__tyre-value .live-leaderboard__tyre-age,
+.live-leaderboard__gap--finished > .live-leaderboard__tyre-value .live-leaderboard__tyre-unavailable { background: #111315; padding: 0 .15rem; }
+.live-leaderboard__finish-text { background: #111315; display: inline-block; padding: 0 .15rem; position: relative; z-index: 1; }
+.live-leaderboard__qualifying-lap-time { position: relative; z-index: 1; }
+.live-leaderboard__qualifying-lap-time--finished { background: #111315; padding: 0 .15rem; }
 .live-leaderboard__finish-flag { display: block; height: 1px; overflow: hidden; position: relative; width: 1px; }
 .live-leaderboard__row--terminal { opacity: .52; }
 .live-leaderboard__row--terminal .live-leaderboard__position { background: #838b93 !important; }

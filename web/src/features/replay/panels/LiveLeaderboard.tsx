@@ -1,16 +1,13 @@
 import { memo, useState, type CSSProperties, type ReactNode } from 'react'
-import type { DriverMetadata, LapSectorSidecar, PenaltySidecar } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, PenaltySidecar, QualifyingLapStatusSidecar, QualifyingSummary, SessionMode } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
+import { isQualifyingSessionMode } from '../session-capabilities'
 import { selectDriverPenaltyStatus } from '../selectors/penalty-selectors'
 import { selectSectorColours, type ColouredSector, type SectorColour } from '../selectors/sector-colour-selectors'
-import hardTyreImage from '../../../assets/tyres/hard.png'
-import intermediateTyreImage from '../../../assets/tyres/intermediate.png'
-import mediumTyreImage from '../../../assets/tyres/medium.png'
-import softTyreImage from '../../../assets/tyres/soft.png'
-import wetTyreImage from '../../../assets/tyres/wet.png'
+import { QualifyingClassificationPanel } from './QualifyingClassificationPanel'
+import { formatTyreMetric } from './tyre-metric'
 
 type MetricMode = 'leader' | 'interval' | 'tyres' | 'sectors'
-type TyreCompound = 'SOFT' | 'MEDIUM' | 'HARD' | 'INTERMEDIATE' | 'WET'
 
 export interface LiveLeaderboardProps {
   readonly snapshot: ReplaySnapshot | null
@@ -19,6 +16,10 @@ export interface LiveLeaderboardProps {
   readonly onDriverSelect?: (driverId: string) => void
   readonly lapSectorSidecar?: LapSectorSidecar | null
   readonly penaltySidecar?: PenaltySidecar
+  readonly sessionMode?: SessionMode
+  readonly qualifyingSummary?: QualifyingSummary | null
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar | null
+  readonly replayEndMs?: number | null
 }
 
 interface LeaderboardRow {
@@ -30,12 +31,16 @@ interface LeaderboardRow {
   readonly tyreAge: number | null
   readonly status: string | null
   readonly isInPitLane: boolean | null
+  readonly positionDataUnavailable: boolean
   readonly isFinished: boolean
 }
 
 /** Renders sampled leaderboard data without subscribing to replay state. */
-export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect, lapSectorSidecar, penaltySidecar }: LiveLeaderboardProps) {
+export const LiveLeaderboard = memo(function LiveLeaderboard({ snapshot, drivers, selectedDriverId = null, onDriverSelect, lapSectorSidecar, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, replayEndMs }: LiveLeaderboardProps) {
   const [metricMode, setMetricMode] = useState<MetricMode>('leader')
+  if (isQualifyingSessionMode(sessionMode)) {
+    return <QualifyingClassificationPanel snapshot={snapshot} drivers={drivers} sessionMode={sessionMode} qualifyingSummary={qualifyingSummary} qualifyingLapStatus={qualifyingLapStatus} lapSectorSidecar={lapSectorSidecar} replayEndMs={replayEndMs} selectedDriverId={selectedDriverId} onDriverSelect={onDriverSelect} />
+  }
   const rows = createLeaderboardRows(snapshot, drivers)
   const sectorSelections = metricMode === 'sectors' && lapSectorSidecar && snapshot
     ? createSectorSelections(rows, lapSectorSidecar, snapshot)
@@ -128,6 +133,11 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
     tyreAge: sampled?.tyreAge ?? null,
     status: sampled?.status ?? null,
     isInPitLane: sampled?.isInPitLane ?? null,
+    positionDataUnavailable: sampled !== undefined
+      && sampled.position === null
+      && (sampled.x === null || sampled.y === null)
+      && sampled.isInPitLane !== true
+      && isOnTrackStatus(sampled.status ?? ''),
     isFinished: sampled?.isFinished === true,
   }
 }
@@ -135,6 +145,7 @@ function createRow(id: string, metadata: DriverMetadata | null, snapshot: Replay
 function formatMetric(row: LeaderboardRow, ahead: LeaderboardRow | null, metricMode: MetricMode, sectorColours: readonly ColouredSector[] | undefined): ReactNode {
   if (row.isFinished) return <FinishFlag />
   if (isTerminalRow(row)) return 'OUT'
+  if (row.positionDataUnavailable) return <span aria-label="POSITION DATA UNAVAILABLE">POSITION DATA UNAVAILABLE</span>
   if (metricMode === 'tyres') return formatTyreMetric(row.tyreCompound, row.tyreAge)
   if (metricMode === 'sectors') return formatSectorCells(sectorColours)
   const status = formatMetricStatus(row.status, row.isInPitLane)
@@ -148,34 +159,6 @@ function FinishFlag() {
 
 function PenaltyIndicator() {
   return <span className="live-leaderboard__penalty-indicator" role="img" aria-label="Penalty issued" title="Penalty issued">!</span>
-}
-
-const TYRE_IMAGES: Readonly<Record<TyreCompound, string>> = {
-  SOFT: softTyreImage,
-  MEDIUM: mediumTyreImage,
-  HARD: hardTyreImage,
-  INTERMEDIATE: intermediateTyreImage,
-  WET: wetTyreImage,
-}
-const TYRE_UNAVAILABLE = 'Unavailable'
-
-function formatTyreMetric(tyreCompound: string | null, tyreAge: number | null): ReactNode {
-  const compound = tyreCompound?.trim().toUpperCase() as TyreCompound | undefined
-  const image = compound === undefined ? undefined : TYRE_IMAGES[compound]
-  if (compound === undefined || image === undefined || typeof tyreAge !== 'number' || !Number.isSafeInteger(tyreAge) || tyreAge < 0) {
-    return <span className="live-leaderboard__tyre-unavailable" aria-label="Tyres unavailable">{TYRE_UNAVAILABLE}</span>
-  }
-  const label = `${compound.charAt(0)}${compound.slice(1).toLowerCase()} tyre`
-  return (
-    <span className="live-leaderboard__tyre" aria-label={`${label}, ${formatTyreAge(tyreAge)}`}>
-      <img className="live-leaderboard__tyre-image" src={image} alt={label} />
-      <span className="live-leaderboard__tyre-age">{formatTyreAge(tyreAge)}</span>
-    </span>
-  )
-}
-
-function formatTyreAge(age: number): string {
-  return `${age} lap${age === 1 ? '' : 's'}`
 }
 
 function formatMetricStatus(status: string | null, isInPitLane: boolean | null): string | null {

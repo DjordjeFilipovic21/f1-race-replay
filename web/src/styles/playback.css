@@ -61,6 +61,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .race-timeline__band--red { background: var(--timeline-red); }
 .race-timeline__band--vsc { background: var(--timeline-vsc); }
 .race-timeline__dnf-marker { background: #f4f5f6; box-shadow: 0 0 0 1px #111315; height: .85rem; position: absolute; top: -.175rem; transform: translateX(-50%); width: 2px; }
+.race-timeline__qualifying-incident-marker { background: var(--timeline-red); box-shadow: 0 0 0 1px #111315; height: .95rem; position: absolute; top: -.225rem; transform: translateX(-50%); width: 3px; }
+.race-timeline__phase-marker { background: var(--focus); box-shadow: 0 0 0 1px #111315; height: .9rem; position: absolute; top: -.2rem; transform: translateX(-50%); width: 3px; }
 .speed-options { display: flex; flex-wrap: wrap; gap: .25rem; }
 .speed-options button { background: var(--interactive); border: 1px solid var(--border-strong); color: #c7cdd3; cursor: pointer; flex: 1 1 3rem; font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .68rem; font-weight: 800; padding: .3rem .45rem; }
 .speed-options button:hover:not(:disabled) { background: var(--interactive-hover); border-color: #83909a; color: #f4f5f6; }

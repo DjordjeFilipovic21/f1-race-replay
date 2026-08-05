@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { DriverMetadata, LapSectorSidecar, PenaltySidecar } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, PenaltySidecar, QualifyingLapStatusSidecar, QualifyingSummary, SessionMode } from '../../../data/replay/types'
 import type { ReplayController } from '../../../engine/replay'
 import { LiveLeaderboard } from './LiveLeaderboard'
 import { createThrottledReplayStore } from '../state/throttled-replay-store'
@@ -14,10 +14,14 @@ export interface LiveLeaderboardPanelProps {
   readonly onDriverSelect?: (driverId: string) => void
   readonly lapSectorSidecar?: LapSectorSidecar | null
   readonly penaltySidecar?: PenaltySidecar
+  readonly sessionMode?: SessionMode
+  readonly qualifyingSummary?: QualifyingSummary | null
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar | null
+  readonly replayEndMs?: number | null
 }
 
 /** Keeps the table responsive without reconciling every animation frame. */
-export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ controller, drivers, refreshKey, selectedDriverId = null, onDriverSelect, lapSectorSidecar, penaltySidecar }: LiveLeaderboardPanelProps) {
+export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ controller, drivers, refreshKey, selectedDriverId = null, onDriverSelect, lapSectorSidecar, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, replayEndMs }: LiveLeaderboardPanelProps) {
   const store = useMemo(() => createThrottledReplayStore(controller, LEADERBOARD_REFRESH_INTERVAL_MS), [controller])
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
 
@@ -25,5 +29,5 @@ export const LiveLeaderboardPanel = memo(function LiveLeaderboardPanel({ control
     store.flush()
   }, [refreshKey, store])
 
-  return <LiveLeaderboard snapshot={snapshot.replay} drivers={drivers} selectedDriverId={selectedDriverId} onDriverSelect={onDriverSelect} lapSectorSidecar={lapSectorSidecar} penaltySidecar={penaltySidecar} />
+  return <LiveLeaderboard snapshot={snapshot.replay} drivers={drivers} selectedDriverId={selectedDriverId} onDriverSelect={onDriverSelect} lapSectorSidecar={lapSectorSidecar} penaltySidecar={penaltySidecar} sessionMode={sessionMode} qualifyingSummary={qualifyingSummary} qualifyingLapStatus={qualifyingLapStatus} replayEndMs={replayEndMs} />
 })

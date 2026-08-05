@@ -1,6 +1,7 @@
-import type { LapSectorDriverColumns, LapSectorSidecar } from '../../../data/replay/types'
+import type { LapSectorDriverColumns, LapSectorSidecar, QualifyingLapStatusSidecar } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
-import { selectLapSectorData, type SectorNumber } from './lap-sector-selectors'
+import { isFlyingEvidence, isQualifyingLikeSidecar, selectLapSectorData, type SectorColumnFields, type SectorNumber } from './lap-sector-selectors'
+import { selectQualifyingLapStatus } from './qualifying-lap-status-selectors'
 
 export type SectorColour = 'session-best' | 'personal-best' | 'slower' | 'unavailable'
 
@@ -29,15 +30,17 @@ export function selectSectorColours(
   sidecar: LapSectorSidecar | null | undefined,
   boundary: CausalBoundary,
   driverId: string,
+  qualifyingLapStatus?: QualifyingLapStatusSidecar | null,
 ): SectorColourSelection {
   const sessionTimeMs = getSessionTimeMs(boundary)
   if (sidecar === null || sidecar === undefined) return freeze({ driverId, sessionTimeMs, sectors: [] })
   const columns = sidecar.drivers[driverId]
   if (columns === undefined) return freeze({ driverId, sessionTimeMs, sectors: [] })
 
-  const visible = selectLapSectorData(sidecar, sessionTimeMs, driverId)
-  const sessionBests = findSessionBests(sidecar, sessionTimeMs)
-  const personalBests = findPersonalBests(columns, sessionTimeMs)
+  const qualifyingLike = isQualifyingLikeSidecar(sidecar)
+  const visible = selectLapSectorData(sidecar, sessionTimeMs, driverId, qualifyingLapStatus)
+  const sessionBests = findSessionBests(sidecar, sessionTimeMs, qualifyingLapStatus, qualifyingLike)
+  const personalBests = findPersonalBests(columns, sessionTimeMs, qualifyingLapStatus, driverId, qualifyingLike)
   const completedLapNumbers = new Set(visible.laps.map((lap) => lap.lapNumber))
   const lapNumbers = [...new Set([
     ...visible.laps.map((lap) => lap.lapNumber),
@@ -74,20 +77,20 @@ export function selectSectorColours(
 export const selectSectorColour = selectSectorColours
 export const selectSectorColors = selectSectorColours
 
-function findSessionBests(sidecar: LapSectorSidecar, sessionTimeMs: number): Partial<Record<SectorNumber, number>> {
+function findSessionBests(sidecar: LapSectorSidecar, sessionTimeMs: number, qualifyingLapStatus?: QualifyingLapStatusSidecar | null, qualifyingLike = false): Partial<Record<SectorNumber, number>> {
   const bests: Partial<Record<SectorNumber, number>> = {}
-  Object.values(sidecar.drivers).forEach((columns) => mergeBests(bests, columns, sessionTimeMs))
+  Object.entries(sidecar.drivers).forEach(([driverId, columns]) => mergeBests(bests, columns, sessionTimeMs, qualifyingLapStatus, driverId, qualifyingLike))
   return bests
 }
 
-function findPersonalBests(columns: LapSectorDriverColumns, sessionTimeMs: number): Partial<Record<SectorNumber, number>> {
+function findPersonalBests(columns: LapSectorDriverColumns, sessionTimeMs: number, qualifyingLapStatus?: QualifyingLapStatusSidecar | null, driverId?: string, qualifyingLike = false): Partial<Record<SectorNumber, number>> {
   const bests: Partial<Record<SectorNumber, number>> = {}
-  mergeBests(bests, columns, sessionTimeMs)
+  mergeBests(bests, columns, sessionTimeMs, qualifyingLapStatus, driverId, qualifyingLike)
   return bests
 }
 
-function mergeBests(bests: Partial<Record<SectorNumber, number>>, columns: LapSectorDriverColumns, sessionTimeMs: number): void {
-  const fields: readonly [SectorNumber, keyof LapSectorDriverColumns, keyof LapSectorDriverColumns][] = [
+function mergeBests(bests: Partial<Record<SectorNumber, number>>, columns: LapSectorDriverColumns, sessionTimeMs: number, qualifyingLapStatus?: QualifyingLapStatusSidecar | null, driverId?: string, qualifyingLike = false): void {
+  const fields: readonly SectorColumnFields[] = [
     [1, 'sector1DurationMs', 'sector1SessionTimeMs'],
     [2, 'sector2DurationMs', 'sector2SessionTimeMs'],
     [3, 'sector3DurationMs', 'sector3SessionTimeMs'],
@@ -96,6 +99,10 @@ function mergeBests(bests: Partial<Record<SectorNumber, number>>, columns: LapSe
     columns[timeField].forEach((completionTime, index) => {
       const duration = columns[durationField][index]
       if (completionTime === null || completionTime > sessionTimeMs || duration === null) return
+      // Only explicit flying laps set session/personal bests for qualifying-like
+      // sidecars; outlap/inlap/unknown and deleted laps contribute nothing.
+      if (!isFlyingEvidence(columns, index, qualifyingLike)) return
+      if (qualifyingLapStatus != null && (driverId === undefined || selectQualifyingLapStatus(qualifyingLapStatus, sessionTimeMs, driverId, columns.lapNumber[index]) !== 'valid')) return
       const current = bests[sectorNumber]
       if (current === undefined || duration < current) bests[sectorNumber] = duration
     })

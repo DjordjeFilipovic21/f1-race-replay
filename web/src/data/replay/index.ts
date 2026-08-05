@@ -1,5 +1,21 @@
 export { sha256Hex } from './digest'
-export { parseLapSectorSidecar, parsePenaltySidecar, parsePenaltySidecarReference, parsePitLossModel, parseStintSummary } from './guards'
+export {
+  parseChunk,
+  parseLapSectorSidecar,
+  parseManifest,
+  parsePenaltySidecar,
+  parsePenaltySidecarReference,
+  parsePitLossModel,
+  parsePointer,
+  parseQualifyingSummary,
+  parseQualifyingSummaryReference,
+  parseQualifyingLapStatusReference,
+  parseQualifyingLapStatus,
+  parseQualifyingTimelineReference,
+  parseQualifyingTimeline,
+  parseStintSummary,
+  parseTrackAssets,
+} from './guards'
 export { loadReplayData, loadReplayIndex } from './loader'
 export { assertSafeRelativePath, createFetchSource, resolveRelativePath } from './source'
 export { loadCatalog } from '../catalog/loader'

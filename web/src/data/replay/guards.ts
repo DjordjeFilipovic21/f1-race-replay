@@ -1,21 +1,29 @@
 import type {
   ArtifactReference, BrowserPointer, ChunkReference, DnfMarker, DriverColumns, DriverMetadata,
-  LapSectorDriverColumns, LapSectorSidecar, LapSectorSidecarReference, PitLossModel, PitLossModelReference,
-  PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
+  LapKind, LapSectorDriverColumns, LapSectorSidecar, LapSectorSidecarReference, PitLossModel, PitLossModelReference,
+  PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, QualifyingIncidentMarker, QualifyingTimeline,
+  QualifyingTimelineInterval, QualifyingTimelineIntervalKind, QualifyingTimelineReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
   SeasonMetadata, StintDriverColumns, StintSummary, StintSummaryReference, TelemetryCapabilities, TelemetryCapabilityState,
   TimelineInterval, TimelineIntervalKind, TimelineSummary,
-  TimelineSummaryReference, TrackAssets, TrackPoint,
+  TimelineSummaryReference, TrackAssets, TrackPoint, SessionMode, QualifyingSessionMode,
+  QualifyingDriverColumns, QualifyingLapStatusReference, QualifyingSummary, QualifyingSummaryReference,
+  QualifyingLapStatus, QualifyingLapStatusEvent, QualifyingLapStatusEventStatus, QualifyingLapStatusRecord,
+  QualifyingLapStatusSidecar, QualifyingPhase, QualifyingPhaseBoundary,
 } from './types'
-import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string } from './value-guards'
+import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string, type ObjectValue } from './value-guards'
+import { assertSafeRelativePath } from './source'
 
-export const MANIFEST_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:manifest'
-export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:chunk'
-export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:track-assets'
-export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary'
-export const BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar'
-export const STINT_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:stint-summary'
-export const PIT_LOSS_MODEL_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model'
-export const PENALTY_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
+export const MANIFEST_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:manifest'
+export const CHUNK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:chunk'
+export const TRACK_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:track-assets'
+export const TIMELINE_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:timeline-summary'
+export const BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar'
+export const STINT_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:stint-summary'
+export const PIT_LOSS_MODEL_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model'
+export const PENALTY_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar'
+export const QUALIFYING_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary'
+export const QUALIFYING_LAP_STATUS_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status'
+export const QUALIFYING_TIMELINE_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm', 'tyreAge', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -23,33 +31,53 @@ const DRIVER_ID = /^[A-Z0-9]{2,4}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 const TIMELINE_INTERVAL_KINDS = ['yellow', 'sc', 'red', 'vsc'] as const
+const QUALIFYING_TIMELINE_INTERVAL_KINDS = ['yellow', 'red'] as const
+const LAP_KINDS = ['flying', 'outlap', 'inlap', 'unknown'] as const
 const TELEMETRY_CAPABILITY_STATES = ['available', 'not-published'] as const
+const SESSION_MODES = ['race', 'practice', 'qualifying', 'sprint', 'sprint-qualifying', 'sprint-shootout', 'testing'] as const
+const QUALIFYING_MODES = ['qualifying', 'sprint-qualifying', 'sprint-shootout'] as const
+const QUALIFYING_PHASES = ['Q1', 'Q2', 'Q3'] as const
+type QualifyingLapSectorColumns = LapSectorDriverColumns & {
+  readonly qualifyingPhase: readonly (QualifyingPhase | null)[]
+}
 
-function artifact(value: unknown, label: string, extraFields: readonly string[] = []): ArtifactReference {
+function artifact(value: unknown, label: string, extraFields: readonly string[] = [], digestRequired = false): ArtifactReference {
   const item = object(value, label)
-  exact(item, ['path', 'schemaId'], ['sha256', ...extraFields], label)
+  exact(item, ['path', 'schemaId', ...(digestRequired ? ['sha256'] : [])], [ ...(digestRequired ? [] : ['sha256']), ...extraFields], label)
   const sha256 = item.sha256
   if (sha256 !== undefined && (typeof sha256 !== 'string' || !SHA256.test(sha256))) throw new Error(`${label}.sha256 is invalid`)
-  return freeze({ path: string(item.path, `${label}.path`), schemaId: string(item.schemaId, `${label}.schemaId`), ...(sha256 === undefined ? {} : { sha256 }) })
+  const path = string(item.path, `${label}.path`)
+  try { assertSafeRelativePath(path) } catch (error) { throw new Error(`${label}.path is unsafe`, { cause: error }) }
+  return freeze({ path, schemaId: string(item.schemaId, `${label}.schemaId`), ...(sha256 === undefined ? {} : { sha256 }) })
+}
+
+function requireCanonicalArtifactPath(item: ObjectValue, expected: string, message: string): void {
+  if (item.path !== expected) throw new Error(message)
 }
 
 export function parsePointer(value: unknown): BrowserPointer {
   const item = object(value, 'pointer')
   exact(item, ['formatVersion', 'deliveryVersion', 'manifestPath', 'manifestSha256'], [], 'pointer')
-  if (item.formatVersion !== 'browser-delivery-v1') throw new Error('Unsupported browser pointer format version')
+  if (item.formatVersion !== 'browser-delivery-v2') throw new Error('Unsupported browser pointer format version')
   if (typeof item.manifestSha256 !== 'string' || !SHA256.test(item.manifestSha256)) throw new Error('pointer.manifestSha256 is invalid')
-  return freeze({ formatVersion: item.formatVersion, deliveryVersion: string(item.deliveryVersion, 'pointer.deliveryVersion'), manifestPath: string(item.manifestPath, 'pointer.manifestPath'), manifestSha256: item.manifestSha256 })
+  const deliveryVersion = safeComponent(item.deliveryVersion, 'pointer.deliveryVersion')
+  const manifestPath = string(item.manifestPath, 'pointer.manifestPath')
+  try { assertSafeRelativePath(manifestPath) } catch (error) { throw new Error('pointer.manifestPath is unsafe', { cause: error }) }
+  if (manifestPath !== `generations/${deliveryVersion}/manifest.json`) throw new Error('pointer.manifestPath disagrees with deliveryVersion')
+  return freeze({ formatVersion: 'browser-delivery-v2', deliveryVersion, manifestPath, manifestSha256: item.manifestSha256 })
 }
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'formatVersion', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar'], 'manifest')
-  if (item.contractVersion !== 'v1') throw new Error('manifest must be contract version v1')
+  exact(item, ['contractVersion', 'formatVersion', 'sessionMode', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline'], 'manifest')
+  if (item.contractVersion !== 'v2') throw new Error('manifest must be contract version v2')
+  if (item.formatVersion !== 'browser-delivery-v2') throw new Error('manifest format version is unsupported')
+  if (!SESSION_MODES.includes(item.sessionMode as SessionMode)) throw new Error('manifest.sessionMode is invalid')
   const schemas = object(item.schemas, 'manifest.schemas')
-  exact(schemas, ['manifest', 'chunk', 'trackAssets'], [], 'manifest.schemas')
+  exact(schemas, ['manifest', 'chunk', 'trackAssets'], ['timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline'], 'manifest.schemas')
   if (schemas.manifest !== MANIFEST_SCHEMA || schemas.chunk !== CHUNK_SCHEMA || schemas.trackAssets !== TRACK_SCHEMA) throw new Error('manifest schema identities are unsupported')
   const trackAssets = artifact(item.trackAssets, 'manifest.trackAssets')
-  if (trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity is unsupported')
+  if (trackAssets.path !== 'track-assets.json' || trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity or path is unsupported')
   const seasonMetadata = item.seasonMetadata === undefined ? undefined : parseSeasonMetadata(item.seasonMetadata)
   const telemetryCapabilities = item.telemetryCapabilities === undefined ? undefined : parseTelemetryCapabilities(item.telemetryCapabilities)
   const timelineSummary = item.timelineSummary === undefined ? undefined : parseTimelineSummaryReference(item.timelineSummary)
@@ -57,14 +85,16 @@ export function parseManifest(value: unknown): ReplayManifest {
   const stintSummary = item.stintSummary === undefined ? undefined : parseStintSummaryReference(item.stintSummary)
   const pitLossModel = item.pitLossModel === undefined ? undefined : parsePitLossModelReference(item.pitLossModel)
   const penaltySidecar = item.penaltySidecar === undefined ? undefined : parsePenaltySidecarReference(item.penaltySidecar)
+  const qualifyingSummary = item.qualifyingSummary === undefined ? undefined : parseQualifyingSummaryReference(item.qualifyingSummary)
+  const qualifyingLapStatus = item.qualifyingLapStatus === undefined ? undefined : parseQualifyingLapStatusReference(item.qualifyingLapStatus)
+  const qualifyingTimeline = item.qualifyingTimeline === undefined ? undefined : parseQualifyingTimelineReference(item.qualifyingTimeline)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
   if (!chunks.length || !drivers.length || new Set(drivers.map(({ id }) => id)).size !== drivers.length) throw new Error('manifest requires chunks and unique drivers')
   chunks.forEach((chunk, index) => {
-    if (chunk.schemaId !== CHUNK_SCHEMA || chunk.sequence !== index + 1 || (index > 0 && chunks[index - 1].endMs !== chunk.startMs)) throw new Error('manifest chunk references are invalid')
+    if (chunk.schemaId !== CHUNK_SCHEMA || chunk.sequence !== index + 1 || (index === 0 && chunk.overlapWithPreviousMs !== 0) || (index > 0 && chunks[index - 1].endMs !== chunk.startMs)) throw new Error('manifest chunk references are invalid')
   })
-  if (item.formatVersion !== undefined && item.formatVersion !== 'browser-delivery-v1') throw new Error('Unsupported manifest format version')
   const fixtureId = string(item.fixtureId, 'manifest.fixtureId'); if (!FIXTURE_ID.test(fixtureId)) throw new Error('manifest.fixtureId is invalid')
   if (item.description !== undefined && typeof item.description !== 'string') throw new Error('manifest.description must be a string')
   if (item.deliveryVersion !== undefined) string(item.deliveryVersion, 'manifest.deliveryVersion')
@@ -75,7 +105,57 @@ export function parseManifest(value: unknown): ReplayManifest {
   if (lapStarts && lapStarts.some(({ startMs }) => startMs < chunks[0].startMs || startMs >= chunks[chunks.length - 1].endMs)) throw new Error('manifest.lapStarts must be within replay bounds')
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
-  return freeze({ contractVersion: 'v1', fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ manifest: MANIFEST_SCHEMA, chunk: CHUNK_SCHEMA, trackAssets: TRACK_SCHEMA }), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(item.formatVersion === undefined ? {} : { formatVersion: item.formatVersion }), ...(item.deliveryVersion === undefined ? {} : { deliveryVersion: item.deliveryVersion as string }), ...(item.sourceGenerationId === undefined ? {} : { sourceGenerationId: item.sourceGenerationId as string }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  validateModeGating(item.sessionMode as SessionMode, timelineSummary, pitLossModel, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline)
+  validateSchemaRegistry(schemas, { timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline })
+  const deliveryVersion = item.deliveryVersion === undefined ? undefined : safeComponent(item.deliveryVersion, 'manifest.deliveryVersion')
+  const sourceGenerationId = item.sourceGenerationId === undefined ? undefined : safeComponent(item.sourceGenerationId, 'manifest.sourceGenerationId')
+  return freeze({ contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: item.sessionMode as SessionMode, fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ ...schemas } as ReplayManifest['schemas']), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), ...(qualifyingSummary === undefined ? {} : { qualifyingSummary }), ...(qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus }), ...(qualifyingTimeline === undefined ? {} : { qualifyingTimeline }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(deliveryVersion === undefined ? {} : { deliveryVersion }), ...(sourceGenerationId === undefined ? {} : { sourceGenerationId }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+}
+
+function safeComponent(value: unknown, label: string): string {
+  const component = string(value, label)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(component)) throw new Error(`${label} is invalid`)
+  return component
+}
+
+function validateModeGating(
+  mode: SessionMode,
+  timelineSummary: TimelineSummaryReference | undefined,
+  pitLossModel: PitLossModelReference | undefined,
+  qualifyingSummary: QualifyingSummaryReference | undefined,
+  qualifyingLapStatus: QualifyingLapStatusReference | undefined,
+  qualifyingTimeline: QualifyingTimelineReference | undefined,
+): void {
+  const qualifying = QUALIFYING_MODES.includes(mode as QualifyingSessionMode)
+  const raceOnly = mode === 'practice' || qualifying || mode === 'testing'
+  if (raceOnly && (timelineSummary !== undefined || pitLossModel !== undefined)) {
+    throw new Error('race-only browser sidecars are invalid for this session mode')
+  }
+  if (!qualifying && (qualifyingSummary !== undefined || qualifyingLapStatus !== undefined || qualifyingTimeline !== undefined)) {
+    throw new Error('qualifying artifacts are valid only for qualifying-like modes')
+  }
+}
+
+function validateSchemaRegistry(
+  schemas: ObjectValue,
+  references: Readonly<Record<string, ArtifactReference | undefined>>,
+): void {
+  const expected: Readonly<Record<string, string>> = {
+    timelineSummary: TIMELINE_SUMMARY_SCHEMA,
+    lapSectorSidecar: BROWSER_LAP_SECTOR_SIDECAR_SCHEMA,
+    stintSummary: STINT_SUMMARY_SCHEMA,
+    pitLossModel: PIT_LOSS_MODEL_SCHEMA,
+    penaltySidecar: PENALTY_SIDECAR_SCHEMA,
+    qualifyingSummary: QUALIFYING_SUMMARY_SCHEMA,
+    qualifyingLapStatus: QUALIFYING_LAP_STATUS_SCHEMA,
+    qualifyingTimeline: QUALIFYING_TIMELINE_SCHEMA,
+  }
+  for (const [field, schemaId] of Object.entries(expected)) {
+    const reference = references[field]
+    const registered = schemas[field]
+    if (registered !== undefined && registered !== schemaId) throw new Error(`manifest.schemas.${field} identity is unsupported`)
+    if (reference !== undefined && reference.schemaId !== schemaId) throw new Error(`manifest.${field} schema identity is unsupported`)
+  }
 }
 
 export function parseSeasonMetadata(value: unknown): SeasonMetadata {
@@ -100,8 +180,8 @@ export function parseTelemetryCapabilities(value: unknown): TelemetryCapabilitie
 
 export function parseTimelineSummaryReference(value: unknown): TimelineSummaryReference {
   const item = object(value, 'manifest.timelineSummary')
-  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.timelineSummary')
-  if (item.path !== 'timeline-summary.json') throw new Error('timeline summary path is unsupported')
+  artifact(item, 'manifest.timelineSummary', [], true)
+  requireCanonicalArtifactPath(item, 'timeline-summary.json', 'timeline summary path is unsupported')
   if (item.schemaId !== TIMELINE_SUMMARY_SCHEMA) throw new Error('timeline summary schema identity is unsupported')
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.timelineSummary.sha256 is invalid')
@@ -110,8 +190,8 @@ export function parseTimelineSummaryReference(value: unknown): TimelineSummaryRe
 
 export function parseLapSectorSidecarReference(value: unknown): LapSectorSidecarReference {
   const item = object(value, 'manifest.lapSectorSidecar')
-  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.lapSectorSidecar')
-  if (item.path !== 'lap-sector-sidecar.json') throw new Error('lap sector sidecar path is unsupported')
+  artifact(item, 'manifest.lapSectorSidecar', [], true)
+  requireCanonicalArtifactPath(item, 'lap-sector-sidecar.json', 'lap sector sidecar path is unsupported')
   if (item.schemaId !== BROWSER_LAP_SECTOR_SIDECAR_SCHEMA) throw new Error('lap sector sidecar schema identity is unsupported')
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.lapSectorSidecar.sha256 is invalid')
@@ -120,8 +200,8 @@ export function parseLapSectorSidecarReference(value: unknown): LapSectorSidecar
 
 export function parseStintSummaryReference(value: unknown): StintSummaryReference {
   const item = object(value, 'manifest.stintSummary')
-  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.stintSummary')
-  if (item.path !== 'stint-summary.json') throw new Error('stint summary path is unsupported')
+  artifact(item, 'manifest.stintSummary', [], true)
+  requireCanonicalArtifactPath(item, 'stint-summary.json', 'stint summary path is unsupported')
   if (item.schemaId !== STINT_SUMMARY_SCHEMA) throw new Error('stint summary schema identity is unsupported')
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.stintSummary.sha256 is invalid')
@@ -130,8 +210,8 @@ export function parseStintSummaryReference(value: unknown): StintSummaryReferenc
 
 export function parsePitLossModelReference(value: unknown): PitLossModelReference {
   const item = object(value, 'manifest.pitLossModel')
-  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.pitLossModel')
-  if (item.path !== 'pit-loss-model.json') throw new Error('pit loss model path is unsupported')
+  artifact(item, 'manifest.pitLossModel', [], true)
+  requireCanonicalArtifactPath(item, 'pit-loss-model.json', 'pit loss model path is unsupported')
   if (item.schemaId !== PIT_LOSS_MODEL_SCHEMA) throw new Error('pit loss model schema identity is unsupported')
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.pitLossModel.sha256 is invalid')
@@ -140,36 +220,76 @@ export function parsePitLossModelReference(value: unknown): PitLossModelReferenc
 
 export function parsePenaltySidecarReference(value: unknown): PenaltySidecarReference {
   const item = object(value, 'manifest.penaltySidecar')
-  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.penaltySidecar')
-  if (item.path !== 'penalty-sidecar.json') throw new Error('penalty sidecar path is unsupported')
+  artifact(item, 'manifest.penaltySidecar', [], true)
+  requireCanonicalArtifactPath(item, 'penalty-sidecar.json', 'penalty sidecar path is unsupported')
   if (item.schemaId !== PENALTY_SIDECAR_SCHEMA) throw new Error('penalty sidecar schema identity is unsupported')
   const sha256 = item.sha256
   if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.penaltySidecar.sha256 is invalid')
   return freeze({ path: 'penalty-sidecar.json', schemaId: PENALTY_SIDECAR_SCHEMA, sha256 })
 }
 
+export function parseQualifyingSummaryReference(value: unknown): QualifyingSummaryReference {
+  const item = object(value, 'manifest.qualifyingSummary')
+  artifact(item, 'manifest.qualifyingSummary', [], true)
+  requireCanonicalArtifactPath(item, 'qualifying-summary.json', 'qualifying summary path is unsupported')
+  if (item.schemaId !== QUALIFYING_SUMMARY_SCHEMA) throw new Error('qualifying summary schema identity is unsupported')
+  return freeze({ path: 'qualifying-summary.json', schemaId: QUALIFYING_SUMMARY_SCHEMA, sha256: item.sha256 as string })
+}
+
+export function parseQualifyingLapStatusReference(value: unknown): QualifyingLapStatusReference {
+  const item = object(value, 'manifest.qualifyingLapStatus')
+  artifact(item, 'manifest.qualifyingLapStatus', [], true)
+  requireCanonicalArtifactPath(item, 'qualifying-lap-status.json', 'qualifying lap status path is unsupported')
+  if (item.schemaId !== QUALIFYING_LAP_STATUS_SCHEMA) throw new Error('qualifying lap status schema identity is unsupported')
+  return freeze({ path: 'qualifying-lap-status.json', schemaId: QUALIFYING_LAP_STATUS_SCHEMA, sha256: item.sha256 as string })
+}
+
+export function parseQualifyingTimelineReference(value: unknown): QualifyingTimelineReference {
+  const item = object(value, 'manifest.qualifyingTimeline')
+  artifact(item, 'manifest.qualifyingTimeline', [], true)
+  requireCanonicalArtifactPath(item, 'qualifying-timeline.json', 'qualifying timeline path is unsupported')
+  if (item.schemaId !== QUALIFYING_TIMELINE_SCHEMA) throw new Error('qualifying timeline schema identity is unsupported')
+  return freeze({ path: 'qualifying-timeline.json', schemaId: QUALIFYING_TIMELINE_SCHEMA, sha256: item.sha256 as string })
+}
+
 export function parseLapSectorSidecar(value: unknown): LapSectorSidecar {
   const item = object(value, 'lap sector sidecar')
-  exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'lap sector sidecar')
-  if (item.contractVersion !== 'v1') throw new Error('lap sector sidecar must be contract version v1')
+  if (item.contractVersion === 'v1') {
+    exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'lap sector sidecar')
+    const fixtureId = parseFixtureId(item.fixtureId, 'lap sector sidecar fixture id')
+    const drivers = parseDrivers(item.drivers, 'lap sector sidecar drivers', (columns, label) => parseLapSectorColumns(columns, label, false))
+    return freeze({ contractVersion: 'v1', fixtureId, drivers })
+  }
+  exact(item, ['contractVersion', 'fixtureId', 'phaseBoundaries', 'drivers'], [], 'lap sector sidecar')
+  if (item.contractVersion !== 'v2') throw new Error('lap sector sidecar must be contract version v1 or v2')
   const fixtureId = parseFixtureId(item.fixtureId, 'lap sector sidecar fixture id')
-  const drivers = parseDrivers(item.drivers, 'lap sector sidecar drivers', parseLapSectorColumns)
-  return freeze({ contractVersion: 'v1', fixtureId, drivers })
+  const phaseBoundaries = array(item.phaseBoundaries, 'lap sector sidecar phaseBoundaries').map(parseQualifyingPhaseBoundary)
+  const drivers = parseDrivers<QualifyingLapSectorColumns>(item.drivers, 'lap sector sidecar drivers', (columns, label) => parseLapSectorColumns(columns, label, true) as QualifyingLapSectorColumns)
+  validateQualifyingPhaseBoundaries(phaseBoundaries, drivers)
+  return freeze({ contractVersion: 'v2', fixtureId, phaseBoundaries: freeze(phaseBoundaries), drivers })
+}
+
+/** Enforces source-derived phase evidence only when a bundle is qualifying-like. */
+export function validateQualifyingLikeLapSectorSidecar(sidecar: LapSectorSidecar): void {
+  if (sidecar.contractVersion !== 'v2') throw new Error('qualifying-like lap sector sidecar must use contract version v2')
+  if (sidecar.phaseBoundaries.length === 0) throw new Error('qualifying-like lap sector sidecar requires at least one phase boundary')
+  const hasAssignedPhaseLap = Object.values(sidecar.drivers).some((driver) => driver.qualifyingPhase.some((phase) => phase !== null))
+  if (!hasAssignedPhaseLap) throw new Error('qualifying-like lap sector sidecar requires at least one assigned phase lap')
 }
 
 export function parseStintSummary(value: unknown): StintSummary {
   const item = object(value, 'stint summary')
   exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'stint summary')
-  if (item.contractVersion !== 'v1') throw new Error('stint summary must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('stint summary must be contract version v2')
   const fixtureId = parseFixtureId(item.fixtureId, 'stint summary fixture id')
   const drivers = parseDrivers(item.drivers, 'stint summary drivers', parseStintColumns)
-  return freeze({ contractVersion: 'v1', fixtureId, drivers })
+  return freeze({ contractVersion: 'v2', fixtureId, drivers })
 }
 
 export function parsePitLossModel(value: unknown): PitLossModel {
   const item = object(value, 'pit loss model')
   exact(item, ['contractVersion', 'fixtureId', 'method', 'baselineMs', 'priorWeight', 'timeMs', 'estimatedLossMs', 'observedSampleCount'], [], 'pit loss model')
-  if (item.contractVersion !== 'v1') throw new Error('pit loss model must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('pit loss model must be contract version v2')
   const fixtureId = parseFixtureId(item.fixtureId, 'pit loss model fixture id')
   if (item.method !== 'global-prior-weighted-mean-v1') throw new Error('pit loss model method is invalid')
   const baselineMs = integer(item.baselineMs, 'pit loss model baseline', 1)
@@ -183,16 +303,133 @@ export function parsePitLossModel(value: unknown): PitLossModel {
   if (estimatedLossMs[0] !== baselineMs) throw new Error('pit loss model first estimatedLossMs must equal baselineMs')
   if (observedSampleCount[0] !== 0) throw new Error('pit loss model first observedSampleCount must be zero')
   assertStrictlyIncreasing(observedSampleCount, 'pit loss model observedSampleCount must strictly increase')
-  return freeze({ contractVersion: 'v1', fixtureId, method: 'global-prior-weighted-mean-v1', baselineMs, priorWeight, timeMs, estimatedLossMs, observedSampleCount })
+  return freeze({ contractVersion: 'v2', fixtureId, method: 'global-prior-weighted-mean-v1', baselineMs, priorWeight, timeMs, estimatedLossMs, observedSampleCount })
 }
 
 export function parsePenaltySidecar(value: unknown): PenaltySidecar {
   const item = object(value, 'penalty sidecar')
   exact(item, ['contractVersion', 'fixtureId', 'penaltyIssuances'], [], 'penalty sidecar')
-  if (item.contractVersion !== 'v1') throw new Error('penalty sidecar must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('penalty sidecar must be contract version v2')
   const fixtureId = parseFixtureId(item.fixtureId, 'penalty sidecar fixture id')
   const penaltyIssuances = array(item.penaltyIssuances, 'penalty sidecar penaltyIssuances').map(parsePenaltyIssuance)
-  return freeze({ contractVersion: 'v1', fixtureId, penaltyIssuances: freeze(penaltyIssuances) })
+  return freeze({ contractVersion: 'v2', fixtureId, penaltyIssuances: freeze(penaltyIssuances) })
+}
+
+export function parseQualifyingSummary(value: unknown): QualifyingSummary {
+  const item = object(value, 'qualifying summary')
+  exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'qualifying summary')
+  if (item.contractVersion !== 'v2') throw new Error('qualifying summary must be contract version v2')
+  const fixtureId = parseFixtureId(item.fixtureId, 'qualifying summary fixture id')
+  const drivers = parseDrivers(item.drivers, 'qualifying summary drivers', parseQualifyingColumns)
+  return freeze({ contractVersion: 'v2', fixtureId, drivers })
+}
+
+export function parseQualifyingLapStatus(value: unknown): QualifyingLapStatusSidecar {
+  const item = object(value, 'qualifying lap status')
+  exact(item, ['contractVersion', 'fixtureId', 'drivers', 'events'], [], 'qualifying lap status')
+  if (item.contractVersion !== 'v2') throw new Error('qualifying lap status must be contract version v2')
+  const fixtureId = parseFixtureId(item.fixtureId, 'qualifying lap status fixture id')
+  const drivers = parseDrivers(item.drivers, 'qualifying lap status drivers', parseQualifyingLapStatusRecord)
+  const events = array(item.events, 'qualifying lap status events').map(parseQualifyingLapStatusEvent)
+  const orderedEvents = sortQualifyingLapStatusEvents(events)
+  validateQualifyingLapStatusEvents(drivers, orderedEvents)
+  return freeze({ contractVersion: 'v2', fixtureId, drivers, events: freeze(orderedEvents) })
+}
+
+function parseQualifyingLapStatusRecord(value: unknown, label: string): QualifyingLapStatusRecord {
+  const item = object(value, label)
+  const fields = ['lapNumber', 'lapStartMs', 'lapEndMs', 'status', 'deletedReason'] as const
+  exact(item, fields, [], label)
+  const lapNumber = parseStandaloneColumn(item.lapNumber, `${label}.lapNumber`, (entry) => integer(entry, `${label}.lapNumber`, 1))
+  const lapStartMs = parseColumn(item.lapStartMs, lapNumber.length, `${label}.lapStartMs`, (entry) => integer(entry, `${label}.lapStartMs`))
+  const lapEndMs = parseColumn(item.lapEndMs, lapNumber.length, `${label}.lapEndMs`, (entry) => integer(entry, `${label}.lapEndMs`))
+  const status = parseColumn(item.status, lapNumber.length, `${label}.status`, (entry) => parseQualifyingLapStatusValue(entry, `${label}.status`))
+  const deletedReason = parseColumn(item.deletedReason, lapNumber.length, `${label}.deletedReason`, (entry) => nullable(entry, (inner) => parseNullableReason(inner, `${label}.deletedReason`)))
+  assertStrictlyIncreasing(lapNumber, `${label}.lapNumber must be strictly increasing`)
+  if (lapEndMs.some((endMs, index) => endMs <= lapStartMs[index])) throw new Error(`${label} lap end times must follow lap start times`)
+  if (status.some((value, index) => value === 'valid' && deletedReason[index] !== null)) throw new Error(`${label} valid laps must not contain a deleted reason`)
+  return freeze({ lapNumber, lapStartMs, lapEndMs, status, deletedReason })
+}
+
+function parseQualifyingLapStatusEvent(value: unknown, index: number): QualifyingLapStatusEvent {
+  const label = `qualifying lap status events[${index}]`
+  const item = object(value, label)
+  exact(item, ['driverId', 'lapNumber', 'eventTimeMs', 'status', 'reason', 'rawMessage'], [], label)
+  const status = item.status
+  if (status !== 'deleted' && status !== 'reinstated') throw new Error(`${label}.status is invalid`)
+  const rawMessage = string(item.rawMessage, `${label}.rawMessage`)
+  if (!rawMessage.trim()) throw new Error(`${label}.rawMessage must be non-blank`)
+  return freeze({
+    driverId: parseDriverId(item.driverId, `${label}.driverId`),
+    lapNumber: integer(item.lapNumber, `${label}.lapNumber`, 1),
+    eventTimeMs: integer(item.eventTimeMs, `${label}.eventTimeMs`),
+    status,
+    reason: nullable(item.reason, (inner) => parseNullableReason(inner, `${label}.reason`)),
+    rawMessage,
+  })
+}
+
+function parseQualifyingLapStatusValue(value: unknown, label: string): QualifyingLapStatus {
+  if (value !== 'valid' && value !== 'deleted') throw new Error(`${label} is invalid`)
+  return value
+}
+
+function parseNullableReason(value: unknown, label: string): string {
+  const reason = string(value, label)
+  if (!reason.trim()) throw new Error(`${label} must be non-blank`)
+  return reason
+}
+
+function sortQualifyingLapStatusEvents(events: readonly QualifyingLapStatusEvent[]): readonly QualifyingLapStatusEvent[] {
+  return [...events].sort((left, right) => left.eventTimeMs - right.eventTimeMs
+    || left.driverId.localeCompare(right.driverId)
+    || left.lapNumber - right.lapNumber
+    || left.status.localeCompare(right.status)
+    || (left.reason ?? '').localeCompare(right.reason ?? '')
+    || left.rawMessage.localeCompare(right.rawMessage))
+}
+
+function validateQualifyingLapStatusEvents(
+  drivers: Readonly<Record<string, QualifyingLapStatusRecord>>,
+  events: readonly QualifyingLapStatusEvent[],
+): void {
+  const semanticKeys = new Set<string>()
+  const sameTimeStatuses = new Map<string, QualifyingLapStatusEventStatus>()
+  const state = new Map<string, boolean>()
+  for (const [driverId, record] of Object.entries(drivers)) {
+    record.lapNumber.forEach((lapNumber, index) => state.set(`${driverId}/${lapNumber}`, record.status[index] === 'deleted'))
+  }
+  const eventState = new Map<string, boolean>()
+  for (const event of events) {
+    const key = `${event.driverId}/${event.lapNumber}`
+    const semanticKey = `${key}/${event.eventTimeMs}/${event.status}/${event.reason ?? ''}`
+    if (semanticKeys.has(semanticKey)) throw new Error('qualifying lap status events contain duplicate semantic records')
+    semanticKeys.add(semanticKey)
+    const record = drivers[event.driverId]
+    if (record === undefined || !record.lapNumber.includes(event.lapNumber)) throw new Error('qualifying lap status event references an unknown lap')
+    const sameTimeKey = `${key}/${event.eventTimeMs}`
+    const previousStatus = sameTimeStatuses.get(sameTimeKey)
+    if (previousStatus !== undefined && previousStatus !== event.status) throw new Error('qualifying lap status events contain contradictory same-time statuses')
+    sameTimeStatuses.set(sameTimeKey, event.status)
+    eventState.set(key, event.status === 'deleted')
+  }
+  for (const [key, finalDeleted] of state) {
+    if ((eventState.get(key) ?? false) !== finalDeleted) throw new Error('qualifying lap status events disagree with final statuses')
+  }
+}
+
+function parseQualifyingColumns(value: unknown, label: string): QualifyingDriverColumns {
+  const item = object(value, label)
+  const fields = ['qualifyingPosition', 'q1TimeMs', 'q2TimeMs', 'q3TimeMs', 'bestLapNumber', 'bestLapTimeMs'] as const
+  exact(item, fields, [], label)
+  const qualifyingPosition = parseStandaloneColumn(item.qualifyingPosition, `${label}.qualifyingPosition`, (entry) => nullable(entry, (inner) => integer(inner, `${label}.qualifyingPosition`, 1)))
+  const length = qualifyingPosition.length
+  const q1TimeMs = parseNullableNonNegativeColumn(item.q1TimeMs, `${label}.q1TimeMs`, length)
+  const q2TimeMs = parseNullableNonNegativeColumn(item.q2TimeMs, `${label}.q2TimeMs`, length)
+  const q3TimeMs = parseNullableNonNegativeColumn(item.q3TimeMs, `${label}.q3TimeMs`, length)
+  const bestLapNumber = parseNullablePositiveColumn(item.bestLapNumber, `${label}.bestLapNumber`, length)
+  const bestLapTimeMs = parseNullableNonNegativeColumn(item.bestLapTimeMs, `${label}.bestLapTimeMs`, length)
+  return freeze({ qualifyingPosition, q1TimeMs, q2TimeMs, q3TimeMs, bestLapNumber, bestLapTimeMs })
 }
 
 function parsePenaltyIssuance(value: unknown, index: number): PenaltyIssuance {
@@ -230,10 +467,10 @@ function parseDrivers<T>(value: unknown, label: string, parse: (value: unknown, 
   return freeze(Object.fromEntries(entries.map(([driverId, columns]) => [driverId, parse(columns, `${label}.${driverId}`)]))) as Readonly<Record<string, T>>
 }
 
-function parseLapSectorColumns(value: unknown, label: string): LapSectorDriverColumns {
+function parseLapSectorColumns(value: unknown, label: string, includeQualifyingPhase: boolean): LapSectorDriverColumns {
   const item = object(value, label)
-  const fields = ['lapNumber', 'lapStartMs', 'lapEndMs', 'lapDurationMs', 'sector1DurationMs', 'sector2DurationMs', 'sector3DurationMs', 'sector1SessionTimeMs', 'sector2SessionTimeMs', 'sector3SessionTimeMs'] as const
-  exact(item, fields, [], label)
+  const fields = ['lapNumber', 'lapStartMs', 'lapEndMs', 'lapDurationMs', 'sector1DurationMs', 'sector2DurationMs', 'sector3DurationMs', 'sector1SessionTimeMs', 'sector2SessionTimeMs', 'sector3SessionTimeMs', ...(includeQualifyingPhase ? ['qualifyingPhase'] : [])] as const
+  exact(item, fields, ['lapKind'], label)
   const lapNumber = parseStandaloneColumn(item.lapNumber, `${label}.lapNumber`, (entry) => integer(entry, `${label}.lapNumber`, 1))
   const lapStartMs = parseColumn(item.lapStartMs, lapNumber.length, `${label}.lapStartMs`, (entry) => integer(entry, `${label}.lapStartMs`))
   const lapEndMs = parseColumn(item.lapEndMs, lapNumber.length, `${label}.lapEndMs`, (entry) => integer(entry, `${label}.lapEndMs`))
@@ -244,11 +481,69 @@ function parseLapSectorColumns(value: unknown, label: string): LapSectorDriverCo
   const sector1SessionTimeMs = parseNullableNonNegativeColumn(item.sector1SessionTimeMs, `${label}.sector1SessionTimeMs`, lapNumber.length)
   const sector2SessionTimeMs = parseNullableNonNegativeColumn(item.sector2SessionTimeMs, `${label}.sector2SessionTimeMs`, lapNumber.length)
   const sector3SessionTimeMs = parseNullableNonNegativeColumn(item.sector3SessionTimeMs, `${label}.sector3SessionTimeMs`, lapNumber.length)
+  const qualifyingPhase = includeQualifyingPhase
+    ? parseColumn(item.qualifyingPhase, lapNumber.length, `${label}.qualifyingPhase`, (entry) => nullable(entry, (value) => parseQualifyingPhase(value, `${label}.qualifyingPhase`)))
+    : undefined
+  // Optional aligned lap-kind classification. Absence means the capability is
+  // unavailable (fail closed); when present every element must be one of the
+  // four enum values — null or out-of-enum entries are rejected.
+  const lapKind = item.lapKind === undefined
+    ? undefined
+    : parseColumn(item.lapKind, lapNumber.length, `${label}.lapKind`, (entry) => parseLapKind(entry, `${label}.lapKind`))
   assertStrictlyIncreasing(lapNumber, `${label}.lapNumber must be strictly increasing`)
   assertNonDecreasing(lapStartMs, `${label}.lapStartMs must be ordered`)
   assertNonDecreasing(lapEndMs, `${label}.lapEndMs must be ordered`)
   if (lapEndMs.some((endMs, index) => endMs < lapStartMs[index])) throw new Error(`${label} lap end must not precede lap start`)
-  return freeze({ lapNumber, lapStartMs, lapEndMs, lapDurationMs, sector1DurationMs, sector2DurationMs, sector3DurationMs, sector1SessionTimeMs, sector2SessionTimeMs, sector3SessionTimeMs })
+  return freeze({ lapNumber, lapStartMs, lapEndMs, lapDurationMs, sector1DurationMs, sector2DurationMs, sector3DurationMs, sector1SessionTimeMs, sector2SessionTimeMs, sector3SessionTimeMs, ...(qualifyingPhase === undefined ? {} : { qualifyingPhase }), ...(lapKind === undefined ? {} : { lapKind }) })
+}
+
+function parseLapKind(value: unknown, label: string): LapKind {
+  if (!LAP_KINDS.includes(value as LapKind)) throw new Error(`${label} must be flying, outlap, inlap, or unknown`)
+  return value as LapKind
+}
+
+function parseQualifyingPhase(value: unknown, label: string): QualifyingPhase {
+  if (!QUALIFYING_PHASES.includes(value as QualifyingPhase)) throw new Error(`${label} must be Q1, Q2, or Q3`)
+  return value as QualifyingPhase
+}
+
+function parseQualifyingPhaseBoundary(value: unknown, index: number): QualifyingPhaseBoundary {
+  const label = `lap sector sidecar phaseBoundaries[${index}]`
+  const item = object(value, label)
+  exact(item, ['phase', 'startMs'], [], label)
+  return freeze({
+    phase: parseQualifyingPhase(item.phase, `${label}.phase`),
+    startMs: integer(item.startMs, `${label}.startMs`),
+  })
+}
+
+function validateQualifyingPhaseBoundaries(
+  boundaries: readonly QualifyingPhaseBoundary[],
+  drivers: Readonly<Record<string, LapSectorDriverColumns>>,
+): void {
+  const phases = boundaries.map(({ phase }) => phase)
+  const orderedPhases = [...new Set(phases)].sort((left, right) => QUALIFYING_PHASES.indexOf(left) - QUALIFYING_PHASES.indexOf(right))
+  if (phases.length !== orderedPhases.length || phases.some((phase, index) => phase !== orderedPhases[index])) {
+    throw new Error('lap sector sidecar phase boundaries must be ordered by phase')
+  }
+  if (boundaries.some((boundary, index) => index > 0 && boundary.startMs <= boundaries[index - 1].startMs)) {
+    throw new Error('lap sector sidecar phase boundaries must have strictly increasing starts')
+  }
+
+  const expectedStarts = new Map<QualifyingPhase, number>()
+  for (const driver of Object.values(drivers)) {
+    const phasesForDriver = driver.qualifyingPhase ?? []
+    for (let index = 0; index < phasesForDriver.length; index += 1) {
+      const phase = phasesForDriver[index]
+      if (phase === null) continue
+      const lapStartMs = driver.lapStartMs[index]
+      expectedStarts.set(phase, Math.min(expectedStarts.get(phase) ?? lapStartMs, lapStartMs))
+    }
+  }
+  const actualStarts = new Map(boundaries.map(({ phase, startMs }) => [phase, startMs]))
+  if (actualStarts.size !== expectedStarts.size || [...expectedStarts].some(([phase, startMs]) => actualStarts.get(phase) !== startMs)) {
+    throw new Error('lap sector sidecar phase boundaries disagree with lap phases')
+  }
 }
 
 function parseStintColumns(value: unknown, label: string): StintDriverColumns {
@@ -300,7 +595,7 @@ function assertNonDecreasing(values: readonly number[], message: string): void {
 export function parseTimelineSummary(value: unknown): TimelineSummary {
   const item = object(value, 'timeline summary')
   exact(item, ['contractVersion', 'fixtureId', 'startMs', 'endMs', 'intervals', 'dnfMarkers'], [], 'timeline summary')
-  if (item.contractVersion !== 'v1') throw new Error('timeline summary must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('timeline summary must be contract version v2')
   const fixtureId = string(item.fixtureId, 'timeline summary fixture id')
   if (!FIXTURE_ID.test(fixtureId)) throw new Error('timeline summary fixture ID is invalid')
   const startMs = integer(item.startMs, 'timeline summary start')
@@ -311,7 +606,7 @@ export function parseTimelineSummary(value: unknown): TimelineSummary {
   if (intervals.some((interval, index) => index > 0 && compareTimelineIntervals(intervals[index - 1], interval) > 0)) throw new Error('timeline summary intervals must be deterministically ordered')
   if (dnfMarkers.some((marker, index) => index > 0 && compareDnfMarkers(dnfMarkers[index - 1], marker) > 0)) throw new Error('timeline summary DNF markers must be deterministically ordered')
   if (new Set(dnfMarkers.map(({ driverId }) => driverId)).size !== dnfMarkers.length) throw new Error('timeline summary DNF markers must have unique drivers')
-  return freeze({ contractVersion: 'v1', fixtureId, startMs, endMs, intervals: freeze(intervals), dnfMarkers: freeze(dnfMarkers) })
+  return freeze({ contractVersion: 'v2', fixtureId, startMs, endMs, intervals: freeze(intervals), dnfMarkers: freeze(dnfMarkers) })
 }
 
 function compareTimelineIntervals(left: TimelineInterval, right: TimelineInterval): number {
@@ -344,6 +639,55 @@ function parseDnfMarker(value: unknown, index: number, summaryStartMs: number, s
   return freeze({ driverId, timeMs })
 }
 
+export function parseQualifyingTimeline(value: unknown): QualifyingTimeline {
+  const item = object(value, 'qualifying timeline')
+  exact(item, ['contractVersion', 'fixtureId', 'startMs', 'endMs', 'intervals', 'incidentMarkers'], [], 'qualifying timeline')
+  if (item.contractVersion !== 'v2') throw new Error('qualifying timeline must be contract version v2')
+  const fixtureId = string(item.fixtureId, 'qualifying timeline fixture id')
+  if (!FIXTURE_ID.test(fixtureId)) throw new Error('qualifying timeline fixture ID is invalid')
+  const startMs = integer(item.startMs, 'qualifying timeline start')
+  const endMs = integer(item.endMs, 'qualifying timeline end')
+  if (endMs <= startMs) throw new Error('qualifying timeline bounds are invalid')
+  const intervals = array(item.intervals, 'qualifying timeline intervals').map((entry, index) => parseQualifyingTimelineInterval(entry, index, startMs, endMs))
+  const incidentMarkers = array(item.incidentMarkers, 'qualifying timeline incident markers').map((entry, index) => parseQualifyingIncidentMarker(entry, index, startMs, endMs))
+  if (intervals.some((interval, index) => index > 0 && compareQualifyingTimelineIntervals(intervals[index - 1], interval) > 0)) throw new Error('qualifying timeline intervals must be deterministically ordered')
+  if (incidentMarkers.some((marker, index) => index > 0 && compareQualifyingIncidentMarkers(incidentMarkers[index - 1], marker) > 0)) throw new Error('qualifying timeline incident markers must be deterministically ordered')
+  return freeze({ contractVersion: 'v2', fixtureId, startMs, endMs, intervals: freeze(intervals), incidentMarkers: freeze(incidentMarkers) })
+}
+
+function compareQualifyingTimelineIntervals(left: QualifyingTimelineInterval, right: QualifyingTimelineInterval): number {
+  return left.startMs - right.startMs || left.endMs - right.endMs || left.kind.localeCompare(right.kind)
+}
+
+function compareQualifyingIncidentMarkers(left: QualifyingIncidentMarker, right: QualifyingIncidentMarker): number {
+  return left.timeMs - right.timeMs || left.driverId.localeCompare(right.driverId) || left.rawMessage.localeCompare(right.rawMessage)
+}
+
+function parseQualifyingTimelineInterval(value: unknown, index: number, timelineStartMs: number, timelineEndMs: number): QualifyingTimelineInterval {
+  const label = `qualifying timeline intervals[${index}]`
+  const item = object(value, label)
+  exact(item, ['kind', 'startMs', 'endMs'], [], label)
+  if (!QUALIFYING_TIMELINE_INTERVAL_KINDS.includes(item.kind as QualifyingTimelineIntervalKind)) throw new Error(`${label}.kind is invalid`)
+  const startMs = integer(item.startMs, `${label}.startMs`)
+  const endMs = integer(item.endMs, `${label}.endMs`)
+  if (startMs < timelineStartMs || endMs > timelineEndMs || endMs <= startMs) throw new Error(`${label} is outside timeline bounds`)
+  return freeze({ kind: item.kind as QualifyingTimelineIntervalKind, startMs, endMs })
+}
+
+function parseQualifyingIncidentMarker(value: unknown, index: number, timelineStartMs: number, timelineEndMs: number): QualifyingIncidentMarker {
+  const label = `qualifying timeline incidentMarkers[${index}]`
+  const item = object(value, label)
+  exact(item, ['driverId', 'timeMs', 'source', 'rawMessage'], ['lapNumber'], label)
+  if (item.source !== 'race-control-car-event') throw new Error(`${label}.source is unsupported`)
+  const driverId = parseDriverId(item.driverId, `${label}.driverId`)
+  const timeMs = integer(item.timeMs, `${label}.timeMs`)
+  if (timeMs < timelineStartMs || timeMs >= timelineEndMs) throw new Error(`${label} is outside timeline bounds`)
+  const rawMessage = string(item.rawMessage, `${label}.rawMessage`)
+  if (!rawMessage.trim()) throw new Error(`${label}.rawMessage must be non-blank`)
+  const lapNumber = item.lapNumber === undefined ? undefined : integer(item.lapNumber, `${label}.lapNumber`, 1)
+  return freeze({ driverId, timeMs, source: 'race-control-car-event', rawMessage, ...(lapNumber === undefined ? {} : { lapNumber }) })
+}
+
 function parseLapStart(value: unknown, index: number) {
   const item = object(value, `manifest.lapStarts[${index}]`)
   exact(item, ['lap', 'startMs'], [], `manifest.lapStarts[${index}]`)
@@ -358,8 +702,9 @@ function parseChunkReference(raw: unknown, index: number): ChunkReference {
   const ref = artifact(raw, `manifest.chunks[${index}]`, ['sequence', 'startMs', 'endMs', 'overlapWithPreviousMs'])
   exact(item, ['sequence', 'path', 'schemaId', 'startMs', 'endMs', 'overlapWithPreviousMs'], ['sha256'], `manifest.chunks[${index}]`)
   const startMs = integer(item.startMs, 'chunk startMs'); const endMs = integer(item.endMs, 'chunk endMs')
-  if (endMs <= startMs) throw new Error('chunk reference interval is invalid')
-  return freeze({ ...ref, sequence: integer(item.sequence, 'chunk sequence', 1), startMs, endMs, overlapWithPreviousMs: integer(item.overlapWithPreviousMs, 'chunk overlap') })
+  const sequence = integer(item.sequence, 'chunk sequence', 1)
+  if (endMs <= startMs || item.path !== `chunks/chunk-${sequence.toString().padStart(3, '0')}.json` || item.schemaId !== CHUNK_SCHEMA) throw new Error('chunk reference interval or identity is invalid')
+  return freeze({ ...ref, sequence, startMs, endMs, overlapWithPreviousMs: integer(item.overlapWithPreviousMs, 'chunk overlap') })
 }
 
 function parseDriver(raw: unknown, index: number): DriverMetadata {
@@ -373,7 +718,7 @@ function parseDriver(raw: unknown, index: number): DriverMetadata {
 export function parseTrackAssets(value: unknown): TrackAssets {
   const item = object(value, 'track assets')
   exact(item, ['contractVersion', 'fixtureId', 'trackId', 'trackName', 'coordinateSpace', 'circuitLengthMeters', 'rotationDegrees', 'startFinish', 'centerLine', 'innerBoundary', 'outerBoundary'], ['distanceMarkersMeters', 'drsZones'], 'track assets')
-  if (item.contractVersion !== 'v1') throw new Error('track assets must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('track assets must be contract version v2')
   const space = object(item.coordinateSpace, 'track coordinate space'); exact(space, ['units', 'origin'], [], 'track coordinate space')
   if (space.units !== 'meters') throw new Error('track coordinate units must be meters')
   const finish = object(item.startFinish, 'track start finish'); exact(finish, ['center', 'inner', 'outer'], [], 'track start finish')
@@ -384,7 +729,7 @@ export function parseTrackAssets(value: unknown): TrackAssets {
   const zones = item.drsZones === undefined ? undefined : array(item.drsZones, 'DRS zones').map((raw, index) => { const zone = object(raw, `DRS zone ${index}`); exact(zone, ['startMeters', 'endMeters'], [], `DRS zone ${index}`); const startMeters = finite(zone.startMeters, 'DRS start'); const endMeters = finite(zone.endMeters, 'DRS end'); if (startMeters < 0 || endMeters <= startMeters || endMeters > length) throw new Error('DRS zone is invalid'); return freeze({ startMeters, endMeters }) })
   const fixtureId = string(item.fixtureId, 'track fixture id'); const trackId = string(item.trackId, 'track id')
   if (!FIXTURE_ID.test(fixtureId) || !FIXTURE_ID.test(trackId)) throw new Error('track fixture or track ID is invalid')
-  return freeze({ contractVersion: 'v1', fixtureId, trackId, trackName: string(item.trackName, 'track name'), coordinateSpace: freeze({ units: 'meters' as const, origin: string(space.origin, 'track origin') }), circuitLengthMeters: length, rotationDegrees: finite(item.rotationDegrees, 'track rotation'), startFinish: freeze({ center: parsePoint(finish.center, 'start finish center'), inner: parsePoint(finish.inner, 'start finish inner'), outer: parsePoint(finish.outer, 'start finish outer') }), centerLine: line(item.centerLine, 'center line'), innerBoundary: line(item.innerBoundary, 'inner boundary'), outerBoundary: line(item.outerBoundary, 'outer boundary'), ...(markers ? { distanceMarkersMeters: freeze(markers) } : {}), ...(zones ? { drsZones: freeze(zones) } : {}) })
+  return freeze({ contractVersion: 'v2', fixtureId, trackId, trackName: string(item.trackName, 'track name'), coordinateSpace: freeze({ units: 'meters' as const, origin: string(space.origin, 'track origin') }), circuitLengthMeters: length, rotationDegrees: finite(item.rotationDegrees, 'track rotation'), startFinish: freeze({ center: parsePoint(finish.center, 'start finish center'), inner: parsePoint(finish.inner, 'start finish inner'), outer: parsePoint(finish.outer, 'start finish outer') }), centerLine: line(item.centerLine, 'center line'), innerBoundary: line(item.innerBoundary, 'inner boundary'), outerBoundary: line(item.outerBoundary, 'outer boundary'), ...(markers ? { distanceMarkersMeters: freeze(markers) } : {}), ...(zones ? { drsZones: freeze(zones) } : {}) })
 }
 
 function parsePoint(raw: unknown, label: string): TrackPoint { const item = object(raw, label); exact(item, ['x', 'y'], [], label); return freeze({ x: finite(item.x, `${label}.x`), y: finite(item.y, `${label}.y`) }) }
@@ -392,17 +737,24 @@ function parsePoint(raw: unknown, label: string): TrackPoint { const item = obje
 export function parseChunk(value: unknown): ReplayChunk {
   const item = object(value, 'chunk')
   exact(item, ['contractVersion', 'fixtureId', 'chunkId', 'sequence', 'startMs', 'endMs', 'overlap', 'timeMs', 'authoritativeStartIndex', 'drivers', 'leaderboardOrder', 'trackStatusCode', 'weatherState', 'events'], [], 'chunk')
-  if (item.contractVersion !== 'v1') throw new Error('chunk must be contract version v1')
+  if (item.contractVersion !== 'v2') throw new Error('chunk must be contract version v2')
   const timeMs = array(item.timeMs, 'chunk.timeMs').map((time, index) => integer(time, `timeMs[${index}]`))
   if (!timeMs.length || timeMs.some((time, index) => index > 0 && time <= timeMs[index - 1])) throw new Error('chunk timeline must be non-empty, sorted, and unique')
-  const rawDrivers = object(item.drivers, 'chunk.drivers'); const drivers = freeze(Object.fromEntries(Object.entries(rawDrivers).map(([id, columns]) => [id, parseColumns(columns, timeMs.length, id)])))
+  const rawDrivers = object(item.drivers, 'chunk.drivers')
+  const driverEntries = Object.entries(rawDrivers)
+  if (!driverEntries.length || driverEntries.some(([id]) => !DRIVER_ID.test(id))) throw new Error('chunk driver IDs are invalid')
+  const drivers = freeze(Object.fromEntries(driverEntries.map(([id, columns]) => [id, parseColumns(columns, timeMs.length, id)])))
   const leaderboardOrder = freeze(array(item.leaderboardOrder, 'leaderboard').map((row, index) => nullable(row, (entry) => { const values = array(entry, `leaderboard[${index}]`).map((id) => string(id, 'leaderboard driver')); if (!values.length || new Set(values).size !== values.length) throw new Error('leaderboard row is invalid'); return freeze(values) })))
   const trackStatusCode = freeze(array(item.trackStatusCode, 'track status').map((entry) => nullable(entry, (value) => integer(value, 'track status'))))
   const weatherState = freeze(array(item.weatherState, 'weather').map((entry) => nullable(entry, (value) => string(value, 'weather state'))))
   if ([leaderboardOrder, trackStatusCode, weatherState].some((column) => column.length !== timeMs.length)) throw new Error('chunk global columns are not aligned')
   const fixtureId = string(item.fixtureId, 'chunk fixture id'); if (!FIXTURE_ID.test(fixtureId)) throw new Error('chunk fixture ID is invalid')
+  const chunkId = string(item.chunkId, 'chunk id')
+  if (!/^chunk-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$/.test(chunkId)) throw new Error('chunk id is invalid')
+  const startMs = integer(item.startMs, 'chunk start'); const endMs = integer(item.endMs, 'chunk end')
+  if (endMs <= startMs || integer(item.authoritativeStartIndex, 'chunk authoritative index') >= timeMs.length) throw new Error('chunk interval or authority is invalid')
   validateDerivedFields(drivers, leaderboardOrder)
-  return freeze({ contractVersion: 'v1', fixtureId, chunkId: string(item.chunkId, 'chunk id'), sequence: integer(item.sequence, 'chunk sequence', 1), startMs: integer(item.startMs, 'chunk start'), endMs: integer(item.endMs, 'chunk end'), overlap: parseOverlap(item.overlap), timeMs, authoritativeStartIndex: integer(item.authoritativeStartIndex, 'chunk authoritative index'), drivers, leaderboardOrder, trackStatusCode, weatherState, events: freeze(array(item.events, 'events').map(parseEvent)) })
+  return freeze({ contractVersion: 'v2', fixtureId, chunkId, sequence: integer(item.sequence, 'chunk sequence', 1), startMs, endMs, overlap: parseOverlap(item.overlap), timeMs, authoritativeStartIndex: integer(item.authoritativeStartIndex, 'chunk authoritative index'), drivers, leaderboardOrder, trackStatusCode, weatherState, events: freeze(array(item.events, 'events').map(parseEvent)) })
 }
 
 function parseOverlap(raw: unknown): ReplayOverlap {
@@ -415,7 +767,7 @@ function parseOverlap(raw: unknown): ReplayOverlap {
 
 function parseEvent(raw: unknown): ReplayEvent {
   const item = object(raw, 'event'); exact(item, ['sessionTimeMs', 'eventType', 'description'], ['driverId', 'payload'], 'event')
-  const driverId = item.driverId === undefined ? undefined : nullable(item.driverId, (value) => string(value, 'event driver'))
+  const driverId = item.driverId === undefined ? undefined : nullable(item.driverId, (value) => parseDriverId(value, 'event driver'))
   return freeze({ sessionTimeMs: integer(item.sessionTimeMs, 'event time'), eventType: string(item.eventType, 'event type'), description: string(item.description, 'event description'), ...(driverId === undefined ? {} : { driverId }), ...(item.payload === undefined ? {} : { payload: jsonObject(item.payload, 'event payload') }) })
 }
 
@@ -433,7 +785,7 @@ function parseColumns(value: unknown, length: number, label: string): DriverColu
   const isFinished = columns.isFinished === undefined
     ? Array<null>(length).fill(null)
     : parseColumn(columns.isFinished, length, `${label}.isFinished`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('finished state must be boolean'); return value }))
-  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), rpm, throttle: numberColumn('throttle'), brake: numberColumn('brake'), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), tyreAge, status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })), isFinished })
+  return freeze({ x: numberColumn('x'), y: numberColumn('y'), trackDistanceMeters: nonNegativeNumberColumn('trackDistanceMeters'), speed: numberColumn('speed'), rpm, throttle: numberColumn('throttle'), brake: integerColumn('brake', Number.MIN_SAFE_INTEGER), gapToLeaderMs: nonNegativeNumberColumn('gapToLeaderMs'), lap: integerColumn('lap', 1), position: integerColumn('position', 1), gear: integerColumn('gear', 0, 8), drs: integerColumn('drs', 0), tyreCompound: stringColumn('tyreCompound'), tyreAge, status: stringColumn('status'), isInPitLane: parseColumn(columns.isInPitLane, length, `${label}.isInPitLane`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('pit state must be boolean'); return value })), isFinished })
 }
 
 function validateDerivedFields(drivers: ReplayChunk['drivers'], order: ReplayChunk['leaderboardOrder']): void {

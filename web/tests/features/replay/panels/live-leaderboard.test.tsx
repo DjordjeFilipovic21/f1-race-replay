@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, expect, test, vi } from 'vitest'
 import { LiveLeaderboard } from '../../../../src/features/replay/panels/LiveLeaderboard'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
-import type { LapSectorSidecar, PenaltySidecar } from '../../../../src/data/replay/types'
+import type { LapSectorSidecar, PenaltySidecar, QualifyingLapStatusSidecar, QualifyingSummary } from '../../../../src/data/replay/types'
 
 const drivers = Object.freeze([
   Object.freeze({ id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' }),
@@ -104,6 +104,22 @@ test('announces unavailable loading state and exposes labelled semantic table wh
   expect(screen.getByRole('region', { name: 'Leaderboard' })).toBeTruthy()
   expect(screen.getByRole('table', { name: 'Live race leaderboard' })).toBeTruthy()
   expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Position', 'Team colour', 'Driver', 'Leader gap'])
+})
+
+test('exposes unavailable position data for an active driver without authoritative PIT state', () => {
+  const current = snapshot({
+    drivers: {
+      ...snapshot().drivers,
+      VER: { ...snapshot().drivers.VER, position: null, x: null, y: null, status: 'OnTrack', isInPitLane: false },
+    },
+  })
+  const { rerender } = render(<LiveLeaderboard snapshot={current} drivers={drivers} />)
+
+  expect(screen.getByLabelText('POSITION DATA UNAVAILABLE')).toBeTruthy()
+
+  rerender(<LiveLeaderboard snapshot={{ ...current, drivers: { ...current.drivers, VER: { ...current.drivers.VER, isInPitLane: true } } }} drivers={drivers} />)
+
+  expect(screen.queryByLabelText('POSITION DATA UNAVAILABLE')).toBeNull()
 })
 
 test('does not create a leaderboard row for an active safety-car track status', () => {
@@ -477,9 +493,162 @@ test('positions the penalty indicator at the right edge of the driver cell befor
   expect(driverCell.nextElementSibling!.className).toContain('live-leaderboard__gap')
 })
 
+// ---------------------------------------------------------------------------
+// Qualifying classification mode — sampled live state and causal lap status
+// ---------------------------------------------------------------------------
+
+const qualifyingSummary: QualifyingSummary = {
+  contractVersion: 'v2',
+  fixtureId: 'test',
+  drivers: {
+    VER: {
+      qualifyingPosition: [1],
+      q1TimeMs: [55_200],
+      q2TimeMs: [54_800],
+      q3TimeMs: [54_100],
+      bestLapNumber: [3],
+      bestLapTimeMs: [54_100],
+    },
+    NOR: {
+      qualifyingPosition: [2],
+      q1TimeMs: [55_500],
+      q2TimeMs: [55_000],
+      q3TimeMs: [54_400],
+      bestLapNumber: [2],
+      bestLapTimeMs: [54_400],
+    },
+    HAM: {
+      qualifyingPosition: [3],
+      q1TimeMs: [55_800],
+      q2TimeMs: [null],
+      q3TimeMs: [null],
+      bestLapNumber: [2],
+      bestLapTimeMs: [54_900],
+    },
+  },
+}
+
+test('renders qualifying classification with only live-state metric controls', () => {
+  const current = sectorSnapshot()
+  const sampled: ReplaySnapshot = {
+    ...current,
+    drivers: {
+      ...current.drivers,
+      VER: { ...current.drivers.VER, lap: 3, tyreCompound: 'SOFT', tyreAge: 4 },
+      NOR: { ...current.drivers.NOR, lap: 2, tyreCompound: 'MEDIUM', tyreAge: 7 },
+    },
+  }
+  render(<LiveLeaderboard snapshot={sampled} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} />)
+
+  expect(screen.getByRole('table', { name: 'Qualifying classification' })).toBeTruthy()
+  const controls = within(screen.getByRole('group', { name: 'Qualifying metric' }))
+  expect(controls.getAllByRole('button').map((button) => button.textContent)).toEqual(['Leader', 'Lap time', 'Tyres', 'Sectors'])
+  expect(screen.queryByRole('button', { name: 'Q1' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Q2' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Q3' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Best lap' })).toBeNull()
+  expect(screen.queryByRole('table', { name: 'Live race leaderboard' })).toBeNull()
+
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Leader')
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[2].textContent).toBe('No Time')
+  expect(within(rowForDriver('NOR')).getAllByRole('cell')[2].textContent).toBe('—')
+  expect(screen.queryByText('54.100')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Lap time' }))
+  expect(screen.getAllByRole('columnheader').at(-1)?.textContent).toBe('Lap time')
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[2].textContent).toBe('No Time')
+  expect(within(rowForDriver('NOR')).getAllByRole('cell')[2].textContent).toBe('No Time')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tyres' }))
+  expect(screen.getByLabelText('Soft tyre, 4 laps')).toBeTruthy()
+  expect(screen.getByLabelText('Medium tyre, 7 laps')).toBeTruthy()
+})
+
+test('uses the sprint-qualifying session label for classification', () => {
+  render(<LiveLeaderboard snapshot={sectorSnapshot()} drivers={drivers} sessionMode="sprint-qualifying" qualifyingSummary={qualifyingSummary} />)
+
+  expect(screen.getByRole('table', { name: 'Sprint qualifying classification' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Leader' })).toBeTruthy()
+})
+
+test('keeps classification on sampled lap state instead of historical best-lap values', () => {
+  const lapStatus: QualifyingLapStatusSidecar = {
+    contractVersion: 'v2',
+    fixtureId: 'test',
+    drivers: {
+      VER: { lapNumber: [3], lapStartMs: [140_000], lapEndMs: [210_000], status: ['valid'], deletedReason: [null] },
+      NOR: { lapNumber: [2], lapStartMs: [70_000], lapEndMs: [140_000], status: ['valid'], deletedReason: [null] },
+    },
+    events: [
+      { driverId: 'VER', lapNumber: 3, eventTimeMs: 200_000, status: 'deleted', reason: 'track limits at turn 4', rawMessage: 'LAP 3 DELETED' },
+      { driverId: 'VER', lapNumber: 3, eventTimeMs: 220_000, status: 'reinstated', reason: null, rawMessage: 'LAP 3 REINSTATED' },
+    ],
+  }
+  const current = sectorSnapshot(150_000)
+  const sampled: ReplaySnapshot = {
+    ...current,
+    drivers: { ...current.drivers, VER: { ...current.drivers.VER, lap: 3 } },
+  }
+  const { rerender } = render(
+    <LiveLeaderboard snapshot={sampled} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} />,
+  )
+
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[2].textContent).toBe('No Time')
+
+  rerender(
+    <LiveLeaderboard snapshot={{ ...sampled, sessionTimeMs: 210_000 }} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} />,
+  )
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[2].textContent).toBe('No Time')
+
+  rerender(
+    <LiveLeaderboard snapshot={{ ...sampled, sessionTimeMs: 230_000 }} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} />,
+  )
+  expect(within(rowForDriver('VER')).getAllByRole('cell')[2].textContent).toBe('No Time')
+})
+
+test('removes sector times for a deleted qualifying lap and restores them on reinstatement', () => {
+  const lapStatus: QualifyingLapStatusSidecar = {
+    contractVersion: 'v2',
+    fixtureId: 'test',
+    drivers: {
+      VER: { lapNumber: [3], lapStartMs: [140_000], lapEndMs: [210_000], status: ['valid'], deletedReason: [null] },
+      NOR: { lapNumber: [1, 2], lapStartMs: [0, 88_000], lapEndMs: [88_000, 250_000], status: ['valid', 'valid'], deletedReason: [null, null] },
+    },
+    events: [
+      { driverId: 'VER', lapNumber: 3, eventTimeMs: 200_000, status: 'deleted', reason: 'track limits at turn 4', rawMessage: 'LAP 3 DELETED' },
+      { driverId: 'VER', lapNumber: 3, eventTimeMs: 220_000, status: 'reinstated', reason: null, rawMessage: 'LAP 3 REINSTATED' },
+    ],
+  }
+  const { rerender } = render(
+    <LiveLeaderboard snapshot={sectorSnapshot(199_000)} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} lapSectorSidecar={buildSectorSidecar(true)} />,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sectors' }))
+
+  // While the lap is valid its sector times are visible.
+  const validSectors = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(validSectors[0].getAttribute('aria-label')).toBe('S1 26.500')
+  expect(validSectors[1].getAttribute('aria-label')).toBe('S2 32.000')
+
+  // After deletion the sectors become unavailable.
+  rerender(
+    <LiveLeaderboard snapshot={sectorSnapshot(210_000)} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} lapSectorSidecar={buildSectorSidecar(true)} />,
+  )
+  const deletedSectors = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(deletedSectors[0].getAttribute('aria-label')).toBe('S1 unavailable')
+  expect(deletedSectors[1].getAttribute('aria-label')).toBe('S2 unavailable')
+
+  // Reinstatement restores the sector times.
+  rerender(
+    <LiveLeaderboard snapshot={sectorSnapshot(230_000)} drivers={drivers} sessionMode="qualifying" qualifyingSummary={qualifyingSummary} qualifyingLapStatus={lapStatus} lapSectorSidecar={buildSectorSidecar(true)} />,
+  )
+  const reinstatedSectors = rowForDriver('VER').querySelectorAll('.live-leaderboard__sector')
+  expect(reinstatedSectors[0].getAttribute('aria-label')).toBe('S1 26.500')
+})
+
 function buildPenaltySidecar(driverId: string, sessionTimeMs: number): PenaltySidecar {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'test',
     penaltyIssuances: [
       { driverId, sessionTimeMs, penaltyType: 'time', reason: 'Causing a collision', rawMessage: 'FIA STEWARDS: 10 SECOND TIME PENALTY' },
@@ -502,10 +671,11 @@ function sectorSnapshot(sessionTimeMs = 200_000): ReplaySnapshot {
   }
 }
 
-function buildSectorSidecar(): LapSectorSidecar {
+function buildSectorSidecar(includeCompletedLapThreeSectorTwo = false): LapSectorSidecar {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'test',
+    phaseBoundaries: [],
     drivers: {
       VER: {
         lapNumber: [1, 2, 3],
@@ -513,11 +683,13 @@ function buildSectorSidecar(): LapSectorSidecar {
         lapEndMs: [85_000, 168_000, 255_000],
         lapDurationMs: [85_000, 83_000, null],
         sector1DurationMs: [28_000, 27_000, 26_500],
-        sector2DurationMs: [32_000, 31_000, null],
+        sector2DurationMs: [32_000, 31_000, includeCompletedLapThreeSectorTwo ? 32_000 : null],
         sector3DurationMs: [25_000, 24_000, null],
         sector1SessionTimeMs: [28_000, 112_000, 195_000],
-        sector2SessionTimeMs: [60_000, 143_000, null],
+        sector2SessionTimeMs: [60_000, 143_000, includeCompletedLapThreeSectorTwo ? 198_000 : null],
         sector3SessionTimeMs: [85_000, 168_000, null],
+        qualifyingPhase: [null, null, null],
+        lapKind: ['flying', 'flying', 'flying'],
       },
       NOR: {
         lapNumber: [1, 2],
@@ -530,6 +702,8 @@ function buildSectorSidecar(): LapSectorSidecar {
         sector1SessionTimeMs: [27_500, 116_000],
         sector2SessionTimeMs: [62_000, 147_500],
         sector3SessionTimeMs: [88_000, null],
+        qualifyingPhase: [null, null],
+        lapKind: ['flying', 'flying'],
       },
     },
   }
