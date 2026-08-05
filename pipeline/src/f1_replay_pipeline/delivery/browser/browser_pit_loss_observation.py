@@ -16,6 +16,8 @@ from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import (
     PitLossObservation,
     PitStopCandidate,
     StopIntervalStatus,
+    PitLossStatus,
+    classify_stop_interval_status,
     is_eligible_observation,
 )
 
@@ -39,7 +41,6 @@ def extract_eligible_pit_loss_observations(
     if not quality_gate_passed:
         return ()
 
-    filled_status = _previous_fill_track_status(track_status_code)
     observations = tuple(
         observation
         for driver_id, pit_in_time_ms, pit_out_time_ms in _pit_transitions(stint_summary)
@@ -51,7 +52,7 @@ def extract_eligible_pit_loss_observations(
                 drivers=drivers,
                 time_ms=time_ms,
                 leaderboard_order=leaderboard_order,
-                track_status_code=filled_status,
+                track_status_code=track_status_code,
                 quality_gate_passed=quality_gate_passed,
             ),
         )
@@ -120,6 +121,8 @@ def _pit_transitions(
     for driver_id, summary in stint_summary.drivers.items():
         if not isinstance(summary, BrowserDriverStintSummary):
             raise ValueError("stint summary values must be BrowserDriverStintSummary")
+        pit_in_times: list[int] = []
+        pit_out_times: list[int] = []
         for pit_in_time_ms, pit_out_time_ms in zip(
             summary.pit_in_time_ms, summary.pit_out_time_ms, strict=True,
         ):
@@ -133,9 +136,33 @@ def _pit_transitions(
                 if key in seen_pit_out:
                     raise ValueError("duplicate pit-out transition input")
                 seen_pit_out.add(key)
-            if pit_in_time_ms is not None and pit_out_time_ms is not None:
-                transitions.append((driver_id, pit_in_time_ms, pit_out_time_ms))
+                pit_out_times.append(pit_out_time_ms)
+            if pit_in_time_ms is not None:
+                pit_in_times.append(pit_in_time_ms)
+        transitions.extend(
+            (driver_id, pit_in_time_ms, pit_out_time_ms)
+            for pit_in_time_ms, pit_out_time_ms in _pair_pit_times(
+                tuple(sorted(pit_in_times)), tuple(sorted(pit_out_times)),
+            )
+        )
     return tuple(transitions)
+
+
+def _pair_pit_times(
+    pit_in_times: tuple[int, ...], pit_out_times: tuple[int, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Pair each pit-in with the next unused pit-out across adjacent stints."""
+    remaining = list(pit_out_times)
+    pairs: list[tuple[int, int]] = []
+    for pit_in_time_ms in pit_in_times:
+        match_index = next(
+            (index for index, pit_out_time_ms in enumerate(remaining) if pit_out_time_ms > pit_in_time_ms),
+            None,
+        )
+        if match_index is None:
+            continue
+        pairs.append((pit_in_time_ms, remaining.pop(match_index)))
+    return tuple(pairs)
 
 
 def _build_observation(
@@ -248,18 +275,6 @@ def _leader_at(
     return None if order is None or not order else order[0]
 
 
-def _previous_fill_track_status(
-    track_status_code: tuple[int | None, ...],
-) -> tuple[int | None, ...]:
-    previous: int | None = None
-    filled: list[int | None] = []
-    for code in track_status_code:
-        if code is not None:
-            previous = code
-        filled.append(previous)
-    return tuple(filled)
-
-
 def _is_active_status(status: str | None) -> bool:
     if not isinstance(status, str):
         return False
@@ -276,4 +291,8 @@ def _observation_sort_key(observation: PitLossObservation) -> tuple[int, str, in
     return candidate.pit_out_time_ms, candidate.driver_id, candidate.pit_in_time_ms
 
 
-__all__ = ["extract_eligible_pit_loss_observations"]
+__all__ = [
+    "PitLossStatus",
+    "classify_stop_interval_status",
+    "extract_eligible_pit_loss_observations",
+]

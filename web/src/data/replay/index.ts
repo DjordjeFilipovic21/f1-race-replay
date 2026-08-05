@@ -5,6 +5,8 @@ export {
   parseManifest,
   parsePenaltySidecar,
   parsePenaltySidecarReference,
+  parsePitLossEstimateSidecar,
+  parsePitLossEstimateSidecarReference,
   parsePitLossModel,
   parsePointer,
   parseQualifyingSummary,

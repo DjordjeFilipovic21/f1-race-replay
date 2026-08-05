@@ -45,6 +45,16 @@ PENALTY_SIDECAR_SCHEMA_ID = V2_PENALTY_SIDECAR_SCHEMA_ID
 BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
 STINT_SUMMARY_SCHEMA_ID = V2_STINT_SUMMARY_SCHEMA_ID
 PIT_LOSS_MODEL_SCHEMA_ID = V2_PIT_LOSS_MODEL_SCHEMA_ID
+V2_PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}pit-loss-estimate-sidecar"
+PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID = V2_PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID
+PIT_LOSS_ESTIMATE_SIDECAR_FILENAME = "pit-loss-estimate-sidecar.json"
+# Method identifiers, not contract versions: the v2 sidecar keeps the
+# track-status-median-v1 causal method and the curated-track-baseline-v1
+# catalog method so existing artifacts and the web selector stay readable.
+LEGACY_PIT_LOSS_ESTIMATE_METHOD = "track-status-median-v1"
+CURATED_BASELINE_METHOD = "curated-track-baseline-v1"
+# Preserve the established name for callers constructing sidecars.
+PIT_LOSS_ESTIMATE_METHOD = LEGACY_PIT_LOSS_ESTIMATE_METHOD
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 QualifyingLapStatusEventKind = Literal["deleted", "reinstated"]
 QualifyingLapStatus = Literal["valid", "deleted"]
@@ -1164,6 +1174,25 @@ class BrowserQualifyingTimelineReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserPitLossEstimateSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for either supported pit-loss sidecar method.
+
+    The reference carries only the digest binding (path, schema ID, SHA-256).
+    Catalog-only metadata such as ``sourceStatus`` is never part of a manifest
+    reference: the mapping coercion below rejects any unknown key, and the
+    referenced artifact itself is validated against the public sidecar schema
+    which forbids it via ``additionalProperties: false``.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != PIT_LOSS_ESTIMATE_SIDECAR_FILENAME:
+            raise ValueError("pit loss estimate sidecar path is invalid")
+        if self.schema_id != PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID:
+            raise ValueError("pit loss estimate sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserQualifyingDriverSummary:
     """Aligned qualifying result columns for one driver.
 
@@ -1352,6 +1381,7 @@ class BrowserManifest:
     qualifying_lap_status: BrowserArtifactReference | Mapping[str, object] | None = None
     qualifying_timeline: BrowserArtifactReference | Mapping[str, object] | None = None
     weather_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
+    pit_loss_estimate_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -1454,6 +1484,31 @@ class BrowserManifest:
             )
         elif pit_loss_model is not None:
             raise TypeError("pit_loss_model must be a BrowserArtifactReference or mapping")
+        pit_loss_estimate_sidecar = self.pit_loss_estimate_sidecar
+        if isinstance(pit_loss_estimate_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            # The reference is a digest-only binding: the exact-key check
+            # rejects catalog-only metadata (for example ``sourceStatus``) that
+            # must never reach the manifest or the frontend.
+            if set(pit_loss_estimate_sidecar) != required:
+                raise ValueError(
+                    "pit_loss_estimate_sidecar must contain path, schemaId, and sha256",
+                )
+            pit_loss_estimate_sidecar = BrowserPitLossEstimateSidecarReference(
+                cast(str, pit_loss_estimate_sidecar["path"]),
+                cast(str, pit_loss_estimate_sidecar["schemaId"]),
+                cast(str, pit_loss_estimate_sidecar["sha256"]),
+            )
+        elif isinstance(pit_loss_estimate_sidecar, BrowserArtifactReference):
+            pit_loss_estimate_sidecar = BrowserPitLossEstimateSidecarReference(
+                pit_loss_estimate_sidecar.path,
+                pit_loss_estimate_sidecar.schema_id,
+                pit_loss_estimate_sidecar.sha256,
+            )
+        elif pit_loss_estimate_sidecar is not None:
+            raise TypeError(
+                "pit_loss_estimate_sidecar must be a BrowserArtifactReference or mapping",
+            )
         penalty_sidecar = self.penalty_sidecar
         if isinstance(penalty_sidecar, Mapping):
             required = {"path", "schemaId", "sha256"}
@@ -1541,13 +1596,16 @@ class BrowserManifest:
         references = (
             timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model,
             penalty_sidecar, qualifying_summary, qualifying_lap_status,
-            qualifying_timeline, weather_sidecar,
+            qualifying_timeline, weather_sidecar, pit_loss_estimate_sidecar,
         )
         if any(reference is not None and not reference.schema_id.startswith(V2_SCHEMA_PREFIX) for reference in references):
             raise ValueError("v2 manifests must reference v2 artifacts")
         if self.session_mode in {
             "practice", "qualifying", "sprint-qualifying", "sprint-shootout", "testing",
-        } and any(reference is not None for reference in (timeline_summary, pit_loss_model)):
+        } and any(
+            reference is not None
+            for reference in (timeline_summary, pit_loss_model, pit_loss_estimate_sidecar)
+        ):
             raise ValueError("race-only browser sidecars are invalid for this session mode")
         if self.session_mode not in {"qualifying", "sprint-qualifying", "sprint-shootout"} and qualifying_summary is not None:
             raise ValueError("qualifying_summary is valid only for qualifying-like modes")
@@ -1561,6 +1619,7 @@ class BrowserManifest:
         object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
         object.__setattr__(self, "stint_summary", stint_summary)
         object.__setattr__(self, "pit_loss_model", pit_loss_model)
+        object.__setattr__(self, "pit_loss_estimate_sidecar", pit_loss_estimate_sidecar)
         object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
         object.__setattr__(self, "qualifying_summary", qualifying_summary)
         object.__setattr__(self, "season_metadata", season_metadata)
@@ -1603,6 +1662,10 @@ class BrowserManifest:
             value["pitLossModel"] = cast(
                 BrowserArtifactReference, self.pit_loss_model,
             ).as_dict()
+        if self.pit_loss_estimate_sidecar is not None:
+            value["pitLossEstimateSidecar"] = cast(
+                BrowserArtifactReference, self.pit_loss_estimate_sidecar,
+            ).as_dict()
         if self.penalty_sidecar is not None:
             value["penaltySidecar"] = cast(
                 BrowserArtifactReference, self.penalty_sidecar,
@@ -1620,6 +1683,7 @@ class BrowserManifest:
             "qualifyingLapStatus": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
             "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
             "weatherSidecar": WEATHER_SIDECAR_SCHEMA_ID,
+            "pitLossEstimateSidecar": PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
         }
         for field_name, schema_id in optional_schemas.items():
             if getattr(self, _camel_to_snake(field_name)) is not None:
@@ -1705,6 +1769,7 @@ __all__ = [
     "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserWeatherSidecar", "BrowserWeatherSidecarReference",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
+    "BrowserPitLossEstimateSidecarReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
@@ -1719,6 +1784,9 @@ __all__ = [
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
     "STINT_SUMMARY_SCHEMA_ID", "BROWSER_WEATHER_SIDECAR_SCHEMA_ID",
     "WEATHER_SIDECAR_SCHEMA_ID",
+    "CURATED_BASELINE_METHOD", "LEGACY_PIT_LOSS_ESTIMATE_METHOD", "PIT_LOSS_ESTIMATE_METHOD",
+    "PIT_LOSS_ESTIMATE_SIDECAR_FILENAME",
+    "PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID", "V2_PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",
     "QualifyingLapStatus", "QualifyingLapStatusEventKind",
     "TimelineSummaryKind", "LapKind", "QualifyingTimelineIntervalKind",

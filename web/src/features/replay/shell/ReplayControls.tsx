@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayEvent, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossEstimateSidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayEvent, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { createSessionCapabilities, isQualifyingSessionMode, isRaceSessionMode } from '../session-capabilities'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
@@ -33,6 +33,7 @@ export interface ReplayControlsProps {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar
   readonly penaltySidecar?: PenaltySidecar
   readonly sessionMode?: SessionMode
   readonly qualifyingSummary?: QualifyingSummary
@@ -42,7 +43,7 @@ export interface ReplayControlsProps {
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, pitLossEstimateSidecar, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -58,8 +59,8 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
   const currentLap = currentLapNumber(snapshot.replay)
   const selectedDriverId = selectDriverId(explicitSelectedDriverId, snapshot.replay, drivers, sessionMode, qualifyingSummary)
   const sessionCapabilities = useMemo(
-    () => createSessionCapabilities(sessionMode, { lapSectorSidecar, timelineSummary, stintSummary, pitLossModel, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline }),
-    [lapSectorSidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, sessionMode, stintSummary, timelineSummary],
+    () => createSessionCapabilities(sessionMode, { lapSectorSidecar, timelineSummary, stintSummary, pitLossModel, pitLossEstimateSidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline }),
+    [lapSectorSidecar, pitLossEstimateSidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, sessionMode, stintSummary, timelineSummary],
   )
   const qualifyingStatusForSelectors = sessionCapabilities.isQualifyingLike ? qualifyingLapStatus : undefined
   const lapSectorSelection = useMemo(
@@ -180,7 +181,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
         }] : []),
         ...(sessionCapabilities.canShowPitLoss ? [{
           id: 'pit-loss-position' as const, label: 'Pit loss position', columns: 1 as const,
-          element: <LivePitLossPositionPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} pitLossModel={pitLossModel} />,
+          element: <LivePitLossPositionPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} pitLossModel={pitLossModel} pitLossEstimateSidecar={pitLossEstimateSidecar} />,
         }] : []),
       ]
       : [...commonPanels]
@@ -204,7 +205,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
           element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} lapSectorSidecar={lapSectorSidecar} sessionMode={sessionMode} replayEndMs={endMs} qualifyingSummary={qualifyingSummary} qualifyingLapStatus={qualifyingLapStatus} />,
       },
     ]
-  }, [activeRaceControlMessage, commitSeek, controller, currentLap, displayedTimeMs, drivers, durationMs, elapsedMs, handleSeekPreview, isReady, isRaceControlMessageExiting, lapSectorSelection, lapSectorSidecar, lapStarts, leaderboardRefreshKey, penaltySidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, seasonMetadata, sectorColourSelection, sessionCapabilities, sessionMode, snapshot, startMs, seek, stintSummary, telemetryCapabilities, timelineSummary, totalLaps, trackAssets, weatherSidecar])
+  }, [activeRaceControlMessage, commitSeek, controller, currentLap, displayedTimeMs, drivers, durationMs, elapsedMs, handleSeekPreview, isReady, isRaceControlMessageExiting, lapSectorSelection, lapSectorSidecar, lapStarts, leaderboardRefreshKey, penaltySidecar, pitLossEstimateSidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, seasonMetadata, sectorColourSelection, sessionCapabilities, sessionMode, snapshot, startMs, seek, stintSummary, telemetryCapabilities, timelineSummary, totalLaps, trackAssets, weatherSidecar])
 
   return (
     <section className="replay-panel" aria-labelledby="replay-panel-title">

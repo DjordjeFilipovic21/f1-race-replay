@@ -34,6 +34,8 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserTimelineSummary,
     BrowserWeatherSidecar,
     CanonicalGenerationSnapshot,
+    PIT_LOSS_ESTIMATE_METHOD,
+    PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
     QUALIFYING_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
     V2_QUALIFYING_TIMELINE_SCHEMA_ID,
@@ -50,6 +52,11 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_sidecar import (
+    BrowserPitLossEstimateSidecar,
+    BrowserPitLossEstimateTimeline,
+    BrowserPitLossEstimateUnavailable,
+)
 
 
 SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v2" / "schemas"
@@ -80,10 +87,21 @@ def _chunk() -> BrowserChunk:
     )
 
 
+def _chunk_with_status_codes(codes: tuple[int | None, ...]) -> BrowserChunk:
+    """Return the focused test chunk with a caller-selected track status timeline."""
+    chunk = _chunk()
+    return BrowserChunk(
+        chunk.chunk_id, chunk.sequence, chunk.start_ms, chunk.end_ms, chunk.overlap,
+        chunk.time_ms, chunk.authoritative_start_index, chunk.drivers,
+        chunk.leaderboard_order, codes, chunk.weather_state, chunk.events,
+    )
+
+
 def _delivery(
     track_assets: dict[str, object] | None = None,
     timeline_summary: BrowserTimelineSummary | None = None,
     weather_sidecar: BrowserWeatherSidecar | None = None,
+    pit_loss_estimate_sidecar: BrowserPitLossEstimateSidecar | None = None,
 ) -> BrowserDeliveryBuild:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
@@ -104,6 +122,7 @@ def _delivery(
         _snapshot(),
         manifest, assets, (_chunk(),), timeline_summary=timeline_summary,
         weather_sidecar=weather_sidecar,
+        pit_loss_estimate_sidecar=pit_loss_estimate_sidecar,
     )
 
 
@@ -129,6 +148,13 @@ def _timeline_summary() -> BrowserTimelineSummary:
         2_000,
         (BrowserTimelineInterval("yellow", 100, 200),),
         (BrowserDnfMarker("HAM", 1_500),),
+    )
+
+
+def _pit_loss_estimate_sidecar() -> BrowserPitLossEstimateSidecar:
+    return BrowserPitLossEstimateSidecar(
+        "race-one", "track-one", "track-status-median-v1",
+        BrowserPitLossEstimateTimeline((0, 1_000), (22_000, 21_000), (0, 1)),
     )
 
 
@@ -1209,6 +1235,241 @@ def test_publication_writes_and_references_timeline_summary(tmp_path: Path) -> N
     assert result.artifact_digests["timeline-summary.json"] == manifest["timelineSummary"]["sha256"]
 
 
+def test_publication_writes_and_references_pit_loss_estimate_sidecar(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-one",
+        delivery=_delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar()),
+        schema_root=SCHEMA_ROOT,
+    )
+    sidecar_path = result.generation_path / "pit-loss-estimate-sidecar.json"
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    assert result.pit_loss_estimate_sidecar_path == sidecar_path
+    assert json.loads(sidecar_path.read_bytes()) == _pit_loss_estimate_sidecar().as_dict()
+    assert manifest["pitLossEstimateSidecar"] == {
+        "path": "pit-loss-estimate-sidecar.json",
+        "schemaId": PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+        "sha256": hashlib.sha256(sidecar_path.read_bytes()).hexdigest(),
+    }
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_complete_validator_rejects_mutated_pit_loss_estimate_sidecar(tmp_path: Path) -> None:
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-one",
+        delivery=_delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar()),
+        schema_root=SCHEMA_ROOT,
+    )
+    sidecar_path = result.generation_path / "pit-loss-estimate-sidecar.json"
+    sidecar_path.write_bytes(sidecar_path.read_bytes().replace(b"21000", b"21001"))
+
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed"):
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_publication_writes_sidecar_payload_bound_to_fixture_and_track_identity(tmp_path: Path) -> None:
+    # Arrange: a delivery whose additive sidecar is bound to the manifest and track assets.
+    delivery = _delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar())
+
+    # Act: publish the delivery and read back the sidecar artifact and manifest reference.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    sidecar_path = result.generation_path / "pit-loss-estimate-sidecar.json"
+    manifest = json.loads(result.manifest_path.read_bytes())
+    payload = json.loads(sidecar_path.read_bytes())
+
+    # Assert: the payload, digest, and manifest reference agree on every identity field.
+    assert result.pit_loss_estimate_sidecar_path == sidecar_path
+    assert payload == _pit_loss_estimate_sidecar().as_dict()
+    assert payload["fixtureId"] == manifest["fixtureId"] == "race-one"
+    assert payload["trackId"] == "track-one"
+    assert manifest["pitLossEstimateSidecar"] == {
+        "path": "pit-loss-estimate-sidecar.json",
+        "schemaId": PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+        "sha256": hashlib.sha256(sidecar_path.read_bytes()).hexdigest(),
+    }
+    assert result.artifact_digests["pit-loss-estimate-sidecar.json"] == manifest["pitLossEstimateSidecar"]["sha256"]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_delivery_build_rejects_sidecar_not_bound_to_fixture_or_track() -> None:
+    # Arrange: the sidecar's identity fields must match the delivery manifest and track assets.
+    manifest = BrowserManifest("race-one", "Race One", ({
+        "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
+        "colorHex": "#000000", "carNumber": "44",
+    },), session_mode="race")
+    assets = _delivery().track_assets
+    sidecar = _pit_loss_estimate_sidecar()
+
+    # Act / Assert: a mismatched fixture or track binding fails closed at build time.
+    with pytest.raises(ValueError, match="fixture_id disagrees"):
+        BrowserDeliveryBuild(
+            _snapshot(), manifest, assets, (_chunk(),),
+            pit_loss_estimate_sidecar=replace(sidecar, fixture_id="race-two"),
+        )
+    with pytest.raises(ValueError, match="track_id disagrees"):
+        BrowserDeliveryBuild(
+            _snapshot(), manifest, assets, (_chunk(),),
+            pit_loss_estimate_sidecar=replace(sidecar, track_id="track-two"),
+        )
+    with pytest.raises(TypeError, match="BrowserPitLossEstimateSidecar"):
+        BrowserDeliveryBuild(
+            _snapshot(), manifest, assets, (_chunk(),),
+            pit_loss_estimate_sidecar=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_publication_rejects_sidecar_declaring_status_that_never_occurs(tmp_path: Path) -> None:
+    # Arrange: the chunks contain only normal track status codes, yet the sidecar
+    # claims a Safety Car estimate.
+    sidecar = BrowserPitLossEstimateSidecar(
+        "race-one", "track-one", PIT_LOSS_ESTIMATE_METHOD,
+        BrowserPitLossEstimateTimeline((0, 500), (22_000, 23_000), (0, 1)),
+        safety_car=BrowserPitLossEstimateTimeline((0, 500), (22_000, 23_000), (0, 1)),
+    )
+
+    # Act / Assert: publication fails closed before staging any output.
+    with pytest.raises(BrowserDeliveryPublicationError, match="safetyCar availability disagrees"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=_delivery(pit_loss_estimate_sidecar=sidecar), schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_publication_rejects_sidecar_omitting_status_that_occurs(tmp_path: Path) -> None:
+    # Arrange: Safety Car occurs in the delivery chunks but is absent from the sidecar.
+    base = _delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar())
+    delivery = BrowserDeliveryBuild(
+        base.source, base.manifest, base.track_assets, (_chunk_with_status_codes((4, 4)),),
+        pit_loss_estimate_sidecar=base.pit_loss_estimate_sidecar,
+    )
+
+    # Act / Assert: publication fails closed on the missing status estimate.
+    with pytest.raises(BrowserDeliveryPublicationError, match="safetyCar availability disagrees"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=delivery, schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_publication_accepts_status_present_sidecar_with_both_estimates(tmp_path: Path) -> None:
+    # Arrange: chunks contain Safety Car and Virtual Safety Car status codes, and the
+    # sidecar declares a Safety Car timeline plus an unavailable VSC estimate.
+    base = _delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar())
+    sidecar = BrowserPitLossEstimateSidecar(
+        "race-one", "track-one", PIT_LOSS_ESTIMATE_METHOD,
+        BrowserPitLossEstimateTimeline((0, 1_000), (22_000, 21_000), (0, 1)),
+        safety_car=BrowserPitLossEstimateTimeline((0, 500), (22_000, 23_000), (0, 1)),
+        virtual_safety_car=BrowserPitLossEstimateUnavailable(),
+    )
+    delivery = BrowserDeliveryBuild(
+        base.source, base.manifest, base.track_assets,
+        (_chunk_with_status_codes((4, 6)),),
+        pit_loss_estimate_sidecar=sidecar,
+    )
+
+    # Act: publish the status-complete sidecar.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    # Assert: the sidecar is referenced and the complete delivery validates.
+    assert manifest["pitLossEstimateSidecar"]["schemaId"] == PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_complete_validator_rejects_redigested_sidecar_with_unavailable_status_payload(tmp_path: Path) -> None:
+    # Arrange: publish a valid race-only sidecar, then re-digest a copy that claims
+    # a Safety Car estimate for a delivery that never contained one.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar()),
+        schema_root=SCHEMA_ROOT,
+    )
+    sidecar_path = result.generation_path / "pit-loss-estimate-sidecar.json"
+    sidecar = json.loads(sidecar_path.read_bytes())
+    sidecar["safetyCar"] = {"status": "unavailable"}
+    sidecar_bytes = json.dumps(sidecar, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    sidecar_path.write_bytes(sidecar_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["pitLossEstimateSidecar"]["sha256"] = hashlib.sha256(sidecar_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    # Act / Assert: the complete validator rejects the status availability lie.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+    assert error.value.__cause__ is not None
+    assert "availability disagrees with track status" in str(error.value.__cause__)
+
+
+def test_publication_without_sidecar_keeps_legacy_manifest_and_passes_validation(tmp_path: Path) -> None:
+    # Arrange / Act: publish a delivery without the additive sidecar.
+    result = _publish(tmp_path / "browser")
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    # Assert: the legacy manifest omits the sidecar and remains fully valid.
+    assert "pitLossEstimateSidecar" not in manifest
+    assert result.pit_loss_estimate_sidecar_path is None
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_sidecar_publication_is_byte_identical(tmp_path: Path) -> None:
+    # Arrange: the same delivery build published to two independent targets.
+    delivery = _delivery(pit_loss_estimate_sidecar=_pit_loss_estimate_sidecar())
+    first = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-one", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    second = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-two", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+
+    # Act / Assert: every artifact, including the sidecar, is byte identical.
+    first_paths = (
+        first.manifest_path,
+        first.track_assets_path,
+        first.generation_path / "pit-loss-estimate-sidecar.json",
+        *first.chunk_paths,
+    )
+    second_paths = (
+        second.manifest_path,
+        second.track_assets_path,
+        second.generation_path / "pit-loss-estimate-sidecar.json",
+        *second.chunk_paths,
+    )
+    assert [path.read_bytes() for path in first_paths] == [path.read_bytes() for path in second_paths]
+
+
 def test_publication_rejects_timeline_summary_with_mismatched_replay_bounds(tmp_path: Path) -> None:
     summary = BrowserTimelineSummary(
         "race-one", 1, 2_000, (BrowserTimelineInterval("yellow", 100, 200),), (),
@@ -1669,7 +1930,7 @@ def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_pat
 
     _publish(tmp_path / "browser")
 
-    assert calls == 12
+    assert calls == 13
 
 
 def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:

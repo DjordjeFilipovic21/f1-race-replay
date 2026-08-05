@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { DriverMetadata, PitLossModel } from '../../../data/replay/types'
+import type { DriverMetadata, PitLossEstimateSidecar, PitLossModel } from '../../../data/replay/types'
 import type { ReplayController } from '../../../engine/replay'
 import { createThrottledReplayStore } from '../state/throttled-replay-store'
 import { PitLossPositionPanel } from './PitLossPositionPanel'
@@ -12,6 +12,7 @@ export interface LivePitLossPositionPanelProps {
   readonly refreshKey: number
   readonly selectedDriverId: string | null
   readonly pitLossModel?: PitLossModel | null
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar | null
 }
 
 /**
@@ -27,6 +28,7 @@ export const LivePitLossPositionPanel = memo(function LivePitLossPositionPanel({
   refreshKey,
   selectedDriverId,
   pitLossModel = null,
+  pitLossEstimateSidecar = null,
 }: LivePitLossPositionPanelProps) {
   const store = useMemo(
     () => createThrottledReplayStore(controller, PIT_LOSS_POSITION_REFRESH_INTERVAL_MS),
@@ -44,6 +46,7 @@ export const LivePitLossPositionPanel = memo(function LivePitLossPositionPanel({
       selectedDriverId={selectedDriverId}
       snapshot={snapshot.replay}
       pitLossModel={pitLossModel}
+      pitLossEstimateSidecar={pitLossEstimateSidecar}
     />
   )
 })

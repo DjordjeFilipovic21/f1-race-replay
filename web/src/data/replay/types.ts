@@ -10,6 +10,7 @@ type TimelineSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:timeli
 type LapSectorSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar'
 type StintSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:stint-summary'
 type PitLossSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model'
+type PitLossEstimateSidecarSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-estimate-sidecar'
 type PenaltySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar'
 type QualifyingSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary'
 type QualifyingLapStatusSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status'
@@ -73,6 +74,12 @@ export interface StintSummaryReference extends ArtifactReference {
 export interface PitLossModelReference extends ArtifactReference {
   readonly path: 'pit-loss-model.json'
   readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model'
+  readonly sha256: string
+}
+
+export interface PitLossEstimateSidecarReference extends ArtifactReference {
+  readonly path: 'pit-loss-estimate-sidecar.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-estimate-sidecar'
   readonly sha256: string
 }
 
@@ -143,6 +150,51 @@ export interface PitLossModel {
   readonly estimatedLossMs: readonly number[]
   readonly observedSampleCount: readonly number[]
 }
+
+export type PitLossEstimateMethod = 'track-status-median-v1' | 'curated-track-baseline-v1'
+
+export interface PitLossEstimateTimeline {
+  readonly timeMs: readonly number[]
+  readonly estimatedLossMs: readonly number[]
+  /** Omitted by curated replay-start values; present on legacy causal timelines. */
+  readonly observedSampleCount?: readonly number[]
+}
+
+export interface LegacyPitLossEstimateTimeline extends PitLossEstimateTimeline {
+  readonly observedSampleCount: readonly number[]
+}
+
+export interface PitLossEstimateUnavailable {
+  readonly status: 'unavailable'
+}
+
+export type PitLossEstimateStatus = PitLossEstimateTimeline | PitLossEstimateUnavailable
+export type PitLossStatusEstimate = PitLossEstimateStatus
+
+export interface LegacyPitLossEstimateSidecar {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly trackId: string
+  readonly method: 'track-status-median-v1'
+  readonly race: PitLossEstimateTimeline
+  /** Both status fields are omitted when the status never occurs; unavailable means it occurred without a sample. */
+  readonly safetyCar?: PitLossEstimateStatus
+  readonly virtualSafetyCar?: PitLossEstimateStatus
+}
+
+export interface CuratedPitLossEstimateSidecar {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly trackId: string
+  readonly method: 'curated-track-baseline-v1'
+  readonly race: PitLossEstimateTimeline
+  /** Curated status values are always available replay-start timelines; the
+   * unavailable status is a legacy-only shape. */
+  readonly safetyCar: PitLossEstimateTimeline
+  readonly virtualSafetyCar: PitLossEstimateTimeline
+}
+
+export type PitLossEstimateSidecar = LegacyPitLossEstimateSidecar | CuratedPitLossEstimateSidecar
 
 export interface PenaltyIssuance {
   readonly driverId: string
@@ -327,6 +379,7 @@ export interface ReplayManifest {
     readonly lapSectorSidecar?: LapSectorSchemaId
     readonly stintSummary?: StintSummarySchemaId
     readonly pitLossModel?: PitLossSchemaId
+    readonly pitLossEstimateSidecar?: PitLossEstimateSidecarSchemaId
     readonly penaltySidecar?: PenaltySchemaId
     readonly qualifyingSummary?: QualifyingSummarySchemaId
     readonly qualifyingLapStatus?: QualifyingLapStatusSchemaId
@@ -340,6 +393,7 @@ export interface ReplayManifest {
   readonly lapSectorSidecar?: LapSectorSidecarReference
   readonly stintSummary?: StintSummaryReference
   readonly pitLossModel?: PitLossModelReference
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecarReference
   readonly penaltySidecar?: PenaltySidecarReference
   readonly qualifyingSummary?: QualifyingSummaryReference
   readonly qualifyingLapStatus?: QualifyingLapStatusReference
@@ -460,6 +514,7 @@ export interface ReplayData {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar
   readonly penaltySidecar?: PenaltySidecar
   readonly qualifyingSummary?: QualifyingSummary
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
@@ -478,6 +533,7 @@ export interface ReplayIndex {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar
   readonly penaltySidecar?: PenaltySidecar
   readonly qualifyingSummary?: QualifyingSummary
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar

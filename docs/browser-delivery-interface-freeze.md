@@ -9,7 +9,7 @@ mutating, resampling, or republishing canonical rows. The v2 interface below
 is the active contract, and the web reader is v2-only. The v1 interface is a
 frozen historical baseline that is excluded from the active catalog and never
 loaded by the web application; see [V1 baseline and catalog
-cutover](#14-v1-baseline-and-catalog-cutover).
+cutover](#16-v1-baseline-and-catalog-cutover).
 
 ## 1. Timeline and provenance
 
@@ -133,7 +133,10 @@ Calibration is currently provisional from one Bahrain race and awaits a
 multi-circuit corpus, including varied pit layouts and close/grade-separated
 geometry. Gap quality depends on available leader history. Terminal timing is
 inferred only after the final position sample; it is not a direct canonical
-retirement timestamp.
+retirement timestamp. The curated pit-loss catalog covers the full 2024-2026
+physical-circuit union (26 circuits); low-evidence circuits carry explicit
+derived/proxy estimates with provenance and low or medium confidence, and
+generation is fully offline.
 
 ## 7. Optional lap/sector sidecar
 
@@ -264,7 +267,88 @@ See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#o
 for the full contract including placeholder semantics, refinement rules,
 eligibility criteria, and causal availability.
 
-## 11. Optional issued-penalty sidecar
+## 11. Optional status-aware pit-loss estimate sidecar
+
+The browser delivery may publish an additive `pit-loss-estimate-sidecar.json`
+artifact for the selected fixture and track:
+
+- The manifest reference is `pitLossEstimateSidecar` with the fixed path
+  `pit-loss-estimate-sidecar.json`, the schema ID
+  `urn:f1-cache-replay:schema:replay-data:v2:pit-loss-estimate-sidecar`, and a
+  SHA-256 digest.
+- The artifact binds `fixtureId` to the manifest and `trackId` to
+  `track-assets.json`; cross-race circuit aggregation is outside this
+  delivery boundary. The public sidecar carries exactly `contractVersion`
+  (`v2`), `fixtureId`, `trackId`, `method`, and replay-start
+  `race`/`safetyCar`/`virtualSafetyCar` timelines.
+- **Mode gating.** The reference is race-like-only (`race`, `sprint`); the
+  schema and browser guard reject it for `practice`, `testing`, and
+  qualifying-like modes. It is additive to the existing v2 `pitLossModel` and
+  does not change canonical Parquet or browser chunk shape.
+- **Catalog-backed values.** Production values come from the versioned,
+  repository-local pit-loss baseline catalog
+  (`pit-loss-baseline-catalog.schema.json`, schema ID
+  `urn:f1-cache-replay:schema:replay-data:v2:pit-loss-baseline-catalog`), so
+  generation is deterministic and performs no live network access. The curated
+  method is `curated-track-baseline-v1`; each public sidecar carries only its
+  identity, method, and replay-start timelines. Catalog audit metadata
+  (`catalogVersion`, `sourceStatus`, provenance, evidence count, confidence,
+  and derivation details) remains repository-internal, and the catalog's
+  `catalogVersion` value is catalog metadata, not a contract version.
+  Current-race gap-difference estimates are diagnostic-only and never alter
+  these values.
+- **2024-2026 physical-circuit union.** The catalog ships one fixture-less
+  entry per physical circuit used in the 2024, 2025, and 2026 calendars (26
+  circuits), reusing one stable `trackId` per circuit across seasons. Distinct
+  venues are separate entries: `bahrain` (Sakhir) and `sepang`, and
+  `barcelona-catalunya` and `madring` (Madrid). A deterministic
+  repository-local identity registry (`browser_pit_loss_track_identity.py`,
+  schema ID `urn:f1-cache-replay:schema:replay-data:v2:pit-loss-track-identity`)
+  maps fixture and track-asset names onto circuits; bare names shared by two
+  circuits resolve only with a season qualifier. Australia is bound to its 2026
+  season opener; all other entries are fixture-less.
+- **Per-status source status.** Every Green/VSC/SC value is `direct`,
+  `derived`, or `proxy` and carries its own metric definition, provenance,
+  evidence count, and confidence; derived/proxy values include an explicit
+  derivation record. `sourceStatus` is catalog-only: it is never serialized
+  into the sidecar payload or exposed to the frontend, and the sidecar
+  schema's `additionalProperties: false` rejects it.
+- **Non-universal discounts.** The fixed `Green − 7 s` / `Green − 10 s` rule
+  is not mandatory. Australia keeps those legacy defaults, but other circuits
+  use direct track-specific status values (Canada, Monaco, Monza, Baku) or the
+  bounded proportional policy (VSC ≈ 0.55–0.70 × Green, SC ≈ 0.45–0.55 ×
+  Green), and discounts may exceed the legacy 5–10 s window with provenance.
+  The invariant `SC <= VSC <= Green` is validated and malformed entries are
+  rejected.
+- **Australia entry.** Green 19300 ms, VSC 12300 ms, SC 9300 ms.
+- **Replay-start availability.** The curated sidecar always resolves Green,
+  Safety Car, and Virtual Safety Car values from the catalog — one point at
+  replay start per timeline — even when Safety Car or Virtual Safety Car never
+  occurred in the current race. Status code `1` selects Green, code `4` Safety
+  Car, and codes `6`/`7` Virtual Safety Car.
+- **Fail-closed unknown tracks.** Unknown tracks have no catalog entry: no
+  curated sidecar is emitted and no 22 s fallback is silently applied. A track
+  without a curated entry is delivered without `pitLossEstimateSidecar`;
+  pit-loss data is then unavailable unless the manifest carries the existing v2
+  `pitLossModel`.
+- Publication validates the direct sidecar contract, catalog binding,
+  fixture/track identity, deterministic serialization, and digest before the
+  immutable browser pointer is replaced.
+- **Core chunks are unchanged**: no new chunk fields, no canonical Parquet
+  rewrite, and no format-version bump. Delivery never touches `templates/`, and
+  R2 publication behavior is unchanged.
+- **Method suffixes and optionality.** `curated-track-baseline-v1` and
+  `track-status-median-v1` are method identifiers — the `-v1` suffix is not a
+  contract version and does not imply v1 compatibility. There is no v1
+  pit-loss compatibility or read path: the v2-only reader rejects v1 pit-loss
+  sidecars, catalogs, and identity registries. Manifests without this sidecar,
+  including `pitLossModel`-only deliveries, remain valid and replayable.
+
+See [Replay Data Contract — Optional status-aware pit-loss estimate sidecar](replay-data-contract.md#optional-status-aware-pit-loss-estimate-sidecar)
+for the full schema, catalog provenance, availability, fallback, and
+generation-time rules.
+
+## 12. Optional issued-penalty sidecar
 
 The manifest may carry a `penaltySidecar` reference (`path`, `schemaId`, and
 `sha256`) pointing to `penalty-sidecar.json`. The sidecar contains definitive
@@ -291,7 +375,7 @@ manifests remain valid without them. See [Replay Data Contract — Optional
 issued-penalty sidecar](replay-data-contract.md#optional-issued-penalty-sidecar)
 for the schema and publication guarantees.
 
-## 11. Optional v2 qualifying lap-status sidecar
+## 13. Optional v2 qualifying lap-status sidecar
 
 V2 qualifying-like deliveries (`sessionMode` `qualifying`,
 `sprint-qualifying`, or `sprint-shootout`) may carry a `qualifyingLapStatus`
@@ -344,7 +428,7 @@ See [Replay Data Contract — Optional v2 qualifying lap-status
 sidecar](replay-data-contract.md#optional-v2-qualifying-lap-status-sidecar)
 for the full contract including parsing, matching, and fail-closed rules.
 
-## 12. Optional qualifying summary
+## 14. Optional qualifying summary
 
 V2 qualifying-like deliveries (`sessionMode` `qualifying`,
 `sprint-qualifying`, or `sprint-shootout`) may carry a `qualifyingSummary`
@@ -370,7 +454,7 @@ See [Replay Data Contract — Optional qualifying
 summary](replay-data-contract.md#optional-qualifying-summary) for the full
 contract including field semantics and null rules.
 
-## 13. Optional qualifying timeline and incident markers
+## 15. Optional qualifying timeline and incident markers
 
 V2 qualifying-like deliveries (`sessionMode` `qualifying`,
 `sprint-qualifying`, or `sprint-shootout`) may carry a `qualifyingTimeline`
@@ -402,7 +486,7 @@ markers](replay-data-contract.md#optional-qualifying-timeline-and-incident-marke
 for the full contract including interval bounds, marker fields, ordering, and
 causal semantics.
 
-## 14. V1 baseline and catalog cutover
+## 16. V1 baseline and catalog cutover
 
 The v1 (`browser-delivery-v1`) interface is frozen and historical. Its
 committed fixtures remain in the repository as reference fixtures, are never

@@ -22,6 +22,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BrowserManifest,
     CanonicalGenerationSnapshot,
+    PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
     WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
@@ -70,6 +71,9 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     assert delivery.timeline_summary.as_dict()["intervals"] == [
         {"kind": "sc", "startMs": 5_000, "endMs": 20_001},
     ]
+    # The synthetic fixture track is intentionally absent from the repository
+    # catalog, so the curated sidecar is omitted rather than fabricated.
+    assert delivery.pit_loss_estimate_sidecar is None
 
     # Act: build the identical delivery twice at independent publication targets.
     first = publish_browser_delivery(
@@ -91,6 +95,8 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     assert _artifact_bytes(first) == _artifact_bytes(second)
     assert published_canonical.pointer_path.read_bytes() == canonical_parent.joinpath("current.json").read_bytes()
     _validate_browser_contract(first_manifest, first_chunks, track_assets)
+    assert first.pit_loss_estimate_sidecar_path is None
+    assert "pitLossEstimateSidecar" not in first_manifest
     assert [chunk["sequence"] for chunk in first_manifest["chunks"]] == [1, 2, 3]
     assert [chunk["path"] for chunk in first_manifest["chunks"]] == [
         "chunks/chunk-001.json", "chunks/chunk-002.json", "chunks/chunk-003.json"
@@ -143,6 +149,60 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     assert first_chunks[1]["drivers"]["HAM"]["trackDistanceMeters"] == [None] * 4
     assert CONTINUOUS_FIELD_SEMANTICS["speed"] == "linear"
     assert PREVIOUS_VALUE_FIELD_SEMANTICS["gear"] == "previous"
+
+
+def test_generator_fixture_binding_publishes_curated_australia_sidecar(
+    tmp_path: Path,
+) -> None:
+    # Arrange: a canonical snapshot bound to the actual generator fixture
+    # ``2026-01-race`` whose track assets carry the generator track id and the
+    # ``Australian Grand Prix`` display name.
+    canonical_parent = tmp_path / "canonical"
+    frames = {
+        name: frame.with_columns(pl.lit("2026-01-race").alias("session_id"))
+        for name, frame in _canonical_frames().items()
+    }
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    snapshot = read_validated_canonical_generation(canonical_parent)
+    track_assets = _track_assets()
+    track_assets.update({
+        "fixtureId": "2026-01-race",
+        "trackId": "2026-01-race-telemetry-layout-v1",
+        "trackName": "Australian Grand Prix",
+    })
+
+    # Act: build and publish the browser delivery for the generator binding.
+    delivery = build_browser_delivery(snapshot, track_assets)
+    assert delivery.pit_loss_estimate_sidecar is not None
+    assert delivery.pit_loss_model is not None
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-v1",
+        delivery=delivery,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+    sidecar = _load_json(
+        published.generation_path / PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+    )
+
+    # Assert: the curated Australia sidecar publishes under the generator
+    # fixture/asset binding and the complete delivery validates.
+    assert sidecar["fixtureId"] == "2026-01-race"
+    assert sidecar["trackId"] == "2026-01-race-telemetry-layout-v1"
+    assert sidecar["race"]["estimatedLossMs"] == [19_300]
+    assert sidecar["safetyCar"]["estimatedLossMs"] == [9_300]
+    assert sidecar["virtualSafetyCar"]["estimatedLossMs"] == [12_300]
+    manifest = _load_json(published.manifest_path)
+    assert manifest["pitLossEstimateSidecar"]["path"] == PIT_LOSS_ESTIMATE_SIDECAR_FILENAME
+    assert published.pit_loss_model_path is not None
+    validate_complete_browser_delivery(
+        tmp_path / "browser",
+        expected_generation_id="canonical-v1",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
 
 
 def test_penalty_sidecar_is_published_only_when_issuances_exist_and_validates(
@@ -323,6 +383,72 @@ def test_weather_sidecar_publication_does_not_mutate_core_chunk_bytes(tmp_path: 
     )
     assert with_sidecar.weather_sidecar_path is not None
     assert without_sidecar.weather_sidecar_path is None
+
+
+def test_browser_delivery_omits_curated_sidecar_for_an_unknown_track(tmp_path: Path) -> None:
+    # Arrange: the synthetic fixture track is absent from the repository catalog
+    # even though its track status never leaves the normal code.
+    frames = _canonical_frames()
+    frames["track_status_intervals"] = pl.DataFrame([
+        _row("track_status_intervals", start_time_ms=0, end_time_ms=None, status="1"),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True)
+    canonical_parent = tmp_path / "canonical-normal"
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    # Act: derive and publish the delivery from the validated snapshot.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-normal", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+    # Assert: the curated sidecar is omitted entirely for an unknown track rather
+    # than emitted with a fabricated catalog baseline, while the existing
+    # observation-derived pit-loss model remains additive.
+    assert delivery.pit_loss_estimate_sidecar is None
+    assert delivery.pit_loss_model is not None
+    assert published.pit_loss_estimate_sidecar_path is None
+    assert published.pit_loss_model_path is not None
+    manifest = _load_json(published.manifest_path)
+    assert "pitLossEstimateSidecar" not in manifest
+    assert "pitLossModel" in manifest
+
+
+def test_browser_delivery_omits_curated_sidecar_for_an_unknown_track_despite_vsc_occurring(tmp_path: Path) -> None:
+    # Arrange: Virtual Safety Car occurs in the canonical timeline, but the
+    # synthetic fixture track is absent from the repository catalog.
+    frames = _canonical_frames()
+    frames["track_status_intervals"] = pl.DataFrame([
+        _row("track_status_intervals", start_time_ms=0, end_time_ms=None, status="6"),
+    ], schema=dict(CANONICAL_TABLE_SCHEMAS["track_status_intervals"]), strict=True)
+    canonical_parent = tmp_path / "canonical-vsc"
+    publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+
+    # Act: derive and publish the delivery from the validated snapshot.
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    published = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-vsc", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+    # Assert: an occurring VSC never fabricates an unavailable marker for an
+    # unknown track; the curated sidecar is omitted while the existing
+    # observation-derived model remains available.
+    assert delivery.pit_loss_estimate_sidecar is None
+    assert delivery.pit_loss_model is not None
+    assert published.pit_loss_estimate_sidecar_path is None
+    assert published.pit_loss_model_path is not None
+    manifest = _load_json(published.manifest_path)
+    assert "pitLossEstimateSidecar" not in manifest
+    assert "pitLossModel" in manifest
 
 
 def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tmp_path: Path) -> None:
@@ -2010,6 +2136,8 @@ def _artifact_bytes(result: object) -> tuple[bytes, ...]:
         paths = (*paths, result.timeline_summary_path)
     if result.weather_sidecar_path is not None:
         paths = (*paths, result.weather_sidecar_path)
+    if result.pit_loss_estimate_sidecar_path is not None:
+        paths = (*paths, result.pit_loss_estimate_sidecar_path)
     return tuple(path.read_bytes() for path in paths)
 
 
@@ -2024,6 +2152,7 @@ def _registry() -> tuple[dict[str, object], Registry]:
             "manifest", "chunk", "track-assets", "timeline-summary",
             "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
             "weather-sidecar",
+            "pit-loss-estimate-sidecar",
         )
     }
     registry = Registry()

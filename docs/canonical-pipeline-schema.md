@@ -384,3 +384,38 @@ derived, column-oriented delivery artifacts with a shared `timeMs` array,
 half-open chunk ownership, overlap handoffs, and browser interpolation rules.
 Generating those chunks is out of scope for this foundation; their rules must
 not be applied backward to canonical source rows.
+
+## Curated pit-loss baseline catalog (browser delivery)
+
+The curated pit-loss baseline catalog is a browser-delivery artifact, not a
+canonical table. It is a data-only, repository-local model
+(`browser_pit_loss_baseline_catalog.py`); canonical Parquet is never rewritten
+for it. Generation resolves Green/VSC/SC values from the catalog fully
+offline — no circuit statistic is fetched at runtime, and race observations
+are not part of the model (`evidenceCount` is curated source evidence, not
+current-race observations).
+
+- **Identity.** One stable `trackId` per physical circuit in the 2024-2026
+  calendar union (26 circuits). `browser_pit_loss_track_identity.py` maps
+  fixture, track-asset, and alias names onto physical circuits; `bahrain`
+  (Sakhir) and `sepang`, and `barcelona-catalunya` and `madring` (Madrid),
+  are distinct circuits, and bare names shared by two circuits (for example
+  `spanish-grand-prix`) resolve only with a season qualifier. Unknown or
+  ambiguous bindings raise instead of guessing.
+- **Per-status metadata.** Every Green/VSC/SC value carries `sourceStatus`
+  (`direct`/`derived`/`proxy`), a `metricDefinition`
+  (`f1-com-lane-plus-stationary`, `measured-total-cost`, or
+  `fia-stop-duration`), per-status `provenance`, `evidenceCount`,
+  `confidence`, and — for derived/proxy values — an explicit `derivation`
+  record. `sourceStatus` is catalog-only and is never serialized into the
+  sidecar payload or the frontend.
+- **Validation.** The immutable catalog boundary enforces the monotonic
+  `SC <= VSC <= Green` invariant, unique `(trackId, fixtureId)` identities,
+  non-negative Int64 values, lowercase kebab-case identifiers, HTTPS
+  provenance URLs, and the rule that derived/proxy statuses require a
+  derivation while direct statuses forbid one. Discounts are not bounded by
+  the legacy 5-10 s window; provenance justifies every value outside it.
+- **Compatibility.** Canonical tables, browser chunks, legacy `pitLossModel`,
+  and legacy `track-status-median-v1` sidecars remain unchanged and readable.
+  Current-race gap-difference estimates are diagnostic-only and never become
+  production values.

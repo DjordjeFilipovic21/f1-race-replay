@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v2:pit-loss-baseline-catalog",
+  "title": "Curated pit-loss baseline catalog",
+  "description": "Repository-local, versioned per-track Green/VSC/SC pit-loss baselines. Every available status carries catalog-only source status (direct/derived/proxy), metric definition, per-status provenance, evidence/calibration count, confidence, and an optional derivation record. Internal sourceStatus is never serialized into sidecar-facing delivery data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalogVersion", "entries"],
+  "$comment": "Integer ordering (SC <= VSC <= Green), non-negative values, and discount ordering are also enforced by the immutable Python catalog boundary. Draft 2020-12 has no portable sibling-number comparison or subtraction keyword. The shipped catalog covers the full 2024-2026 physical-circuit union (26 circuits): source-backed entries use official Formula1.com Green values or supported direct status values, and low-evidence circuits (Bahrain, Jeddah, Imola, Madrid/Madring, Sepang, Zandvoort, Marina Bay) carry explicit derived/proxy estimates with provenance. Entries are fixture-less so one stable physical circuit resolves for every calendar season; Australia remains bound to the 2026 season opener. trackId uniqueness is enforced by the Python catalog boundary and the track identity registry.",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "unsignedMilliseconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "statusKey": {
+      "enum": ["green", "vsc", "sc"]
+    },
+    "sourceStatus": {
+      "enum": ["direct", "derived", "proxy"]
+    },
+    "metricDefinition": {
+      "enum": [
+        "f1-com-lane-plus-stationary",
+        "measured-total-cost",
+        "fia-stop-duration"
+      ]
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low"]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUrl", "capturedDate", "evidence", "method"],
+      "properties": {
+        "sourceUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "capturedDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "derivation": {
+      "description": "Optional record explaining a derived or proxy value. discountMs is intentionally not bounded by the legacy 5000-10000 ms window; provenance justifies the value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "baseStatus"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseStatus": {
+          "$ref": "#/$defs/statusKey"
+        },
+        "discountMs": {
+          "$ref": "#/$defs/unsignedMilliseconds"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "discounts": {
+      "description": "Optional status discounts applied to a track's Green baseline. Discounts are non-negative and may lie outside the legacy 5-10 second window; the Python boundary requires safetyCarMs >= vscMs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vscMs", "safetyCarMs"],
+      "properties": {
+        "vscMs": {
+          "$ref": "#/$defs/unsignedMilliseconds"
+        },
+        "safetyCarMs": {
+          "$ref": "#/$defs/unsignedMilliseconds"
+        }
+      }
+    },
+    "statusBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valueMs",
+        "sourceStatus",
+        "metricDefinition",
+        "provenance",
+        "evidenceCount",
+        "confidence"
+      ],
+      "properties": {
+        "valueMs": {
+          "$ref": "#/$defs/unsignedMilliseconds"
+        },
+        "sourceStatus": {
+          "$ref": "#/$defs/sourceStatus"
+        },
+        "metricDefinition": {
+          "$ref": "#/$defs/metricDefinition"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "evidenceCount": {
+          "$ref": "#/$defs/unsignedMilliseconds"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "derivation": {
+          "$ref": "#/$defs/derivation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sourceStatus": {
+                "enum": ["derived", "proxy"]
+              }
+            }
+          },
+          "then": {
+            "required": ["derivation"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sourceStatus": {
+                "const": "direct"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["derivation"]
+            }
+          }
+        }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "trackName", "statuses"],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "trackName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixtureId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "trackAssetId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "season": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "statuses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["green", "vsc", "sc"],
+          "properties": {
+            "green": {
+              "$ref": "#/$defs/statusBaseline"
+            },
+            "vsc": {
+              "$ref": "#/$defs/statusBaseline"
+            },
+            "sc": {
+              "$ref": "#/$defs/statusBaseline"
+            }
+          }
+        },
+        "discounts": {
+          "$ref": "#/$defs/discounts"
+        }
+      }
+    }
+  },
+  "properties": {
+    "catalogVersion": {
+      "const": "v1"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "entries": {
+            "contains": {
+              "properties": {
+                "trackId": {
+                  "const": "australia"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "entries": {
+            "items": {
+              "if": {
+                "properties": {
+                  "trackId": {
+                    "const": "australia"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "statuses": {
+                    "properties": {
+                      "green": {
+                        "properties": {
+                          "valueMs": {
+                            "const": 19300
+                          }
+                        }
+                      },
+                      "vsc": {
+                        "properties": {
+                          "valueMs": {
+                            "const": 12300
+                          }
+                        }
+                      },
+                      "sc": {
+                        "properties": {
+                          "valueMs": {
+                            "const": 9300
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

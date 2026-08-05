@@ -1,8 +1,8 @@
 import { verifyDigest } from './digest'
-import { parseChunk, parseLapSectorSidecar, parseManifest, parsePenaltySidecar, parsePitLossModel, parsePointer, parseQualifyingLapStatus, parseQualifyingSummary, parseQualifyingTimeline, parseStintSummary, parseTimelineSummary, parseTrackAssets, validateQualifyingLikeLapSectorSidecar } from './guards'
+import { parseChunk, parseLapSectorSidecar, parseManifest, parsePenaltySidecar, parsePitLossEstimateSidecar, parsePitLossModel, parsePointer, parseQualifyingLapStatus, parseQualifyingSummary, parseQualifyingTimeline, parseStintSummary, parseTimelineSummary, parseTrackAssets, validateQualifyingLikeLapSectorSidecar } from './guards'
 import { assertSafeRelativePath, readJson, resolveRelativePath } from './source'
 import { parseWeatherSidecar, parseWeatherSidecarReference } from './guards'
-import type { ChunkReference, QualifyingTimeline, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary, WeatherSidecar } from './types'
+import type { ChunkReference, PitLossEstimateSidecar, QualifyingTimeline, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary, TrackAssets, WeatherSidecar } from './types'
 
 export interface LoadReplayDataOptions {
   readonly source: ReplaySource
@@ -23,7 +23,7 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
   if (manifest.trackAssets.sha256) await verifyDigest(trackBytes, manifest.trackAssets.sha256)
   const trackAssets = parseTrackAssets(decodeJson(trackBytes, trackPath))
   if (trackAssets.fixtureId !== manifest.fixtureId) throw new Error('Track assets and manifest fixture identities disagree')
-  const [timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar] = await Promise.all([
+  const [timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, pitLossEstimateSidecar, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar] = await Promise.all([
     manifest.timelineSummary === undefined
       ? Promise.resolve(undefined)
       : loadTimelineSummary(options.source, manifestPath, manifest),
@@ -40,6 +40,9 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
     }),
     loadOptionalSidecar(options.source, manifestPath, manifest.pitLossModel, parsePitLossModel, (model) => {
       validateSidecarIdentity(manifest, model, 'Pit loss model')
+    }),
+    loadOptionalSidecar(options.source, manifestPath, manifest.pitLossEstimateSidecar, parsePitLossEstimateSidecar, (sidecar) => {
+      validatePitLossEstimateSidecar(manifest, trackAssets, sidecar)
     }),
     loadOptionalSidecar(options.source, manifestPath, manifest.penaltySidecar, parsePenaltySidecar, (sidecar) => {
       validateSidecarIdentity(manifest, sidecar, 'Penalty sidecar')
@@ -87,6 +90,7 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
     ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }),
     ...(stintSummary === undefined ? {} : { stintSummary }),
     ...(pitLossModel === undefined ? {} : { pitLossModel }),
+    ...(pitLossEstimateSidecar === undefined ? {} : { pitLossEstimateSidecar }),
     ...(penaltySidecar === undefined ? {} : { penaltySidecar }),
     ...(qualifyingSummary === undefined ? {} : { qualifyingSummary }),
     ...(qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus }),
@@ -110,6 +114,7 @@ export async function loadReplayData(options: LoadReplayDataOptions): Promise<Re
     ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }),
     ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }),
     ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }),
+    ...(index.pitLossEstimateSidecar === undefined ? {} : { pitLossEstimateSidecar: index.pitLossEstimateSidecar }),
     ...(index.penaltySidecar === undefined ? {} : { penaltySidecar: index.penaltySidecar }),
     ...(index.qualifyingSummary === undefined ? {} : { qualifyingSummary: index.qualifyingSummary }),
     ...(index.qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus: index.qualifyingLapStatus }),
@@ -192,6 +197,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validateSidecarIdentity<T extends { readonly fixtureId: string }>(manifest: ReplayManifest, sidecar: T, label: string): void {
   if (sidecar.fixtureId !== manifest.fixtureId) throw new Error(`${label} and manifest fixture identities disagree`)
+}
+
+function validatePitLossEstimateSidecar(manifest: ReplayManifest, trackAssets: TrackAssets, sidecar: PitLossEstimateSidecar): void {
+  validateSidecarIdentity(manifest, sidecar, 'Pit loss estimate sidecar')
+  if (sidecar.trackId !== trackAssets.trackId) throw new Error('Pit loss estimate sidecar and track asset track identities disagree')
 }
 
 function validateSidecarDrivers<T extends { readonly drivers: Readonly<Record<string, unknown>> }>(manifest: ReplayManifest, sidecar: T, label: string): void {

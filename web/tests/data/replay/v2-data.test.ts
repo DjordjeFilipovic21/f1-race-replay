@@ -9,6 +9,7 @@ const ids = {
   chunk: 'urn:f1-cache-replay:schema:replay-data:v2:chunk',
   track: 'urn:f1-cache-replay:schema:replay-data:v2:track-assets',
   qualifying: 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary',
+  pitLossEstimate: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-estimate-sidecar',
 }
 
 function track(fixtureId: string): Record<string, unknown> {
@@ -74,6 +75,20 @@ describe('browser delivery v2 guards', () => {
     practice.pitLossModel = { path: 'pit-loss-model.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model', sha256: 'a'.repeat(64) }
     expect(() => parseManifest(practice)).toThrow('session mode')
   })
+
+  test.each(['practice', 'qualifying', 'sprint-qualifying', 'sprint-shootout', 'testing'] as const)(
+    'rejects a pit-loss estimate sidecar for %s sessions',
+    (sessionMode) => {
+      const value = manifest(sessionMode)
+      value.schemas = { ...(value.schemas as Record<string, string>), pitLossEstimateSidecar: ids.pitLossEstimate }
+      value.pitLossEstimateSidecar = {
+        path: 'pit-loss-estimate-sidecar.json',
+        schemaId: ids.pitLossEstimate,
+        sha256: 'a'.repeat(64),
+      }
+      expect(() => parseManifest(value)).toThrow('session mode')
+    },
+  )
 })
 
 describe('browser delivery v2 loader', () => {

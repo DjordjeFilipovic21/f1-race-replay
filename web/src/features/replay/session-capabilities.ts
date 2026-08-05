@@ -1,5 +1,6 @@
 import type {
   LapSectorSidecar,
+  PitLossEstimateSidecar,
   PitLossModel,
   QualifyingLapStatusSidecar,
   QualifyingSummary,
@@ -14,6 +15,7 @@ export interface SessionArtifacts {
   readonly timelineSummary?: TimelineSummary | null
   readonly stintSummary?: StintSummary | null
   readonly pitLossModel?: PitLossModel | null
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar | null
   readonly qualifyingSummary?: QualifyingSummary | null
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar | null
   readonly qualifyingTimeline?: QualifyingTimeline | null
@@ -67,7 +69,7 @@ export function createSessionCapabilities(mode: SessionMode, artifacts: SessionA
     canShowRaceOrder: isRaceLike,
     canShowRaceTimeline: isRaceLike && artifacts.timelineSummary != null,
     canShowTyreStrategy: isRaceLike && artifacts.stintSummary != null,
-    canShowPitLoss: isRaceLike && artifacts.pitLossModel != null,
+    canShowPitLoss: isRaceLike && (artifacts.pitLossModel != null || artifacts.pitLossEstimateSidecar != null),
     canShowQualifyingClassification: isQualifyingLike && artifacts.qualifyingSummary != null,
     canFilterQualifyingLapStatus: isQualifyingLike && artifacts.qualifyingLapStatus != null,
     canShowQualifyingTimeline: isQualifyingLike && artifacts.qualifyingTimeline != null,

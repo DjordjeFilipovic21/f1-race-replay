@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+import re
 from statistics import median
 from types import MappingProxyType
 from typing import cast
@@ -43,7 +44,18 @@ from f1_replay_pipeline.delivery.browser.browser_lap_status import (
     has_qualifying_lap_status_messages,
 )
 from f1_replay_pipeline.delivery.browser.browser_penalty_sidecar import build_penalty_sidecar
-from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import build_pit_loss_timeline
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import (
+    CuratedPitLossBaselineUnavailableError,
+    build_curated_pit_loss_estimate_sidecar,
+    build_pit_loss_timeline,
+)
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_sidecar import (
+    BrowserPitLossEstimateSidecar,
+)
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_track_identity import (
+    TrackIdentityLookupError,
+    resolve_binding_identity,
+)
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
     extract_eligible_pit_loss_observations,
 )
@@ -82,6 +94,7 @@ _RACE_SESSION_MODES = frozenset({"race", "sprint"})
 _QUALIFYING_SESSION_MODES = frozenset({
     "qualifying", "sprint-qualifying", "sprint-shootout",
 })
+_TRACK_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 @dataclass(frozen=True)
@@ -126,6 +139,7 @@ class BrowserDeliveryBuild:
     qualifying_lap_status_sidecar: BrowserQualifyingLapStatusSidecar | None = None
     qualifying_timeline: BrowserQualifyingTimeline | None = None
     weather_sidecar: BrowserWeatherSidecar | None = None
+    pit_loss_estimate_sidecar: BrowserPitLossEstimateSidecar | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track_assets", deep_freeze_json(self.track_assets))
@@ -157,6 +171,17 @@ class BrowserDeliveryBuild:
             )
         if self.weather_sidecar is not None and not isinstance(self.weather_sidecar, BrowserWeatherSidecar):
             raise TypeError("weather_sidecar must be a BrowserWeatherSidecar or None")
+        if self.pit_loss_estimate_sidecar is not None and not isinstance(
+            self.pit_loss_estimate_sidecar, BrowserPitLossEstimateSidecar,
+        ):
+            raise TypeError(
+                "pit_loss_estimate_sidecar must be a BrowserPitLossEstimateSidecar or None",
+            )
+        if self.pit_loss_estimate_sidecar is not None:
+            if self.pit_loss_estimate_sidecar.fixture_id != self.manifest.fixture_id:
+                raise ValueError("pit loss estimate sidecar fixture_id disagrees with manifest")
+            if self.pit_loss_estimate_sidecar.track_id != self.track_assets.get("trackId"):
+                raise ValueError("pit loss estimate sidecar track_id disagrees with track assets")
 
 
 class BrowserDeliveryBuildError(ValueError):
@@ -174,6 +199,7 @@ def build_browser_delivery(
     """Derive all contract fields without rereading or mutating canonical data."""
     pit_loss_model: BrowserPitLossModel | None = None
     assessment: ProjectionQualityAssessment | None = None
+    pit_loss_estimate_sidecar: BrowserPitLossEstimateSidecar | None = None
     try:
         session = snapshot.frames["session_metadata"].row(0, named=True)
         fixture_id = cast(str, session["session_id"])
@@ -184,7 +210,7 @@ def build_browser_delivery(
             )
         race_semantics = session_mode in _RACE_SESSION_MODES
         season_metadata, telemetry_capabilities = _telemetry_metadata(session)
-        _validate_track_assets(track_assets, fixture_id)
+        track_id, track_name = _validate_track_assets(track_assets, fixture_id)
         try:
             geometry = _projection_geometry(track_assets)
         except ProjectionGeometryError:
@@ -290,6 +316,38 @@ def build_browser_delivery(
             pit_loss_model = build_pit_loss_timeline(
                 replay_start_ms, observations, fixture_id=fixture_id,
             )
+            try:
+                # Resolve the physical circuit from the fixture, the track asset,
+                # and the track asset's display name through the deterministic
+                # identity map, so repeated 2024/2025/2026 fixtures of the same
+                # circuit reuse one baseline entry instead of guessing from either
+                # binding alone.  The generator's actual binding (``2026-01-race``
+                # with a ``-telemetry-layout-v1`` asset) resolves through the track
+                # name when the fixture/asset ids are not themselves registered.
+                identity = resolve_binding_identity(
+                    fixture_id=fixture_id, track_id=track_id, track_name=track_name,
+                )
+            except TrackIdentityLookupError:
+                # Unknown or malformed identities remain publishable through the
+                # existing delivery path, but do not receive a fabricated curated
+                # sidecar.  Keep the observation-derived pit-loss model additive;
+                # it is independent of curated track identity resolution.
+                pit_loss_estimate_sidecar = None
+            else:
+                try:
+                    pit_loss_estimate_sidecar = build_curated_pit_loss_estimate_sidecar(
+                        replay_start_ms,
+                        fixture_id=fixture_id,
+                        track_id=track_id,
+                        track_name=track_name,
+                        catalog_track_id=identity.track_id,
+                    )
+                except CuratedPitLossBaselineUnavailableError:
+                    # Unknown catalog entries remain publishable through the
+                    # existing delivery path, but do not receive a fabricated
+                    # curated sidecar.  Keep the observation-derived pit-loss
+                    # model additive when the curated catalog is unavailable.
+                    pit_loss_estimate_sidecar = None
         manifest = BrowserManifest(
             fixture_id,
             f"{session['event_name']} {session['session_name']}",
@@ -310,6 +368,7 @@ def build_browser_delivery(
         stint_summary, pit_loss_model, penalty_sidecar, qualifying_lap_status_sidecar,
         qualifying_timeline,
         weather_sidecar,
+        pit_loss_estimate_sidecar=pit_loss_estimate_sidecar,
     )
 
 
@@ -536,7 +595,7 @@ def _result_rank(rows, driver_id: str) -> int:
 def _track_status(rows, time_ms: int) -> int | None:
     row = next((item for item in rows if _contains_interval(item, time_ms)), None)
     value = None if row is None else row["status"]
-    return int(value) if isinstance(value, str) and value.isdigit() else None
+    return _parse_track_status_code(value)
 
 
 def _weather_state(rows, time_ms: int) -> str | None:
@@ -583,11 +642,53 @@ def _contains_interval(row, time_ms: int) -> bool:
     return row["start_time_ms"] <= time_ms and (end is None or time_ms < end)
 
 
-def _validate_track_assets(track_assets: Mapping[str, object], fixture_id: str) -> None:
+def _validate_track_assets(
+    track_assets: Mapping[str, object], fixture_id: str,
+) -> tuple[str, str | None]:
+    """Validate the track asset binding and return ``(track_id, track_name)``.
+
+    ``trackName`` is an optional display binding: when present it must be a
+    non-empty string (a malformed name fails closed); when missing it is passed
+    through as ``None`` so identity resolution keeps its strict behavior.
+    """
     if not isinstance(track_assets, Mapping):
         raise TypeError("track_assets must be a mapping")
     if track_assets.get("contractVersion") != "v2" or track_assets.get("fixtureId") != fixture_id:
         raise ValueError("track assets must be v2 and match the canonical session_id")
+    track_id = track_assets.get("trackId")
+    if not isinstance(track_id, str) or _TRACK_ID.fullmatch(track_id) is None:
+        raise ValueError("track assets trackId must be a lowercase kebab-case identifier")
+    track_name = track_assets.get("trackName")
+    if track_name is not None and (not isinstance(track_name, str) or not track_name.strip()):
+        raise ValueError("track assets trackName must be a non-empty string or missing")
+    return track_id, track_name
+
+
+def _canonical_track_status_codes(
+    snapshot: CanonicalGenerationSnapshot, replay_start_ms: int, replay_end_ms: int,
+) -> tuple[int | None, ...]:
+    """Return status codes from canonical intervals overlapping the replay window."""
+    statuses = snapshot.frames["track_status_intervals"].to_dicts()
+    overlapping = (
+        row for row in statuses
+        if row["start_time_ms"] < replay_end_ms
+        and (row["end_time_ms"] is None or row["end_time_ms"] > replay_start_ms)
+    )
+    return tuple(
+        _parse_track_status_code(row["status"])
+        for row in sorted(overlapping, key=lambda value: value["start_time_ms"])
+    )
+
+
+def _parse_track_status_code(value: object) -> int | None:
+    if type(value) is int:
+        return value if value >= 0 else None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or not normalized.isascii() or not normalized.isdecimal():
+        return None
+    return int(normalized)
 
 
 def _assess_quality(snapshot, track_assets, assessor: ProjectionQualityAssessor) -> ProjectionQualityAssessment:
