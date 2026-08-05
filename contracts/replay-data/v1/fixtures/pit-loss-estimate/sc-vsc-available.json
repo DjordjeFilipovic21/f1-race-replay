@@ -1,0 +1,21 @@
+{
+  "contractVersion": "v1",
+  "fixtureId": "deterministic-race",
+  "trackId": "deterministic-short-loop",
+  "method": "track-status-median-v1",
+  "race": {
+    "timeMs": [0, 120000, 240000],
+    "estimatedLossMs": [22000, 21800, 21700],
+    "observedSampleCount": [0, 1, 2]
+  },
+  "safetyCar": {
+    "timeMs": [0, 150000],
+    "estimatedLossMs": [22000, 23000],
+    "observedSampleCount": [0, 1]
+  },
+  "virtualSafetyCar": {
+    "timeMs": [0, 300000],
+    "estimatedLossMs": [22000, 22500],
+    "observedSampleCount": [0, 1]
+  }
+}

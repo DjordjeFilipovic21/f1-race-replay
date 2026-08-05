@@ -22,6 +22,12 @@ PENALTY_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:penalty-s
 BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
 STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
 PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
+PIT_LOSS_ESTIMATE_SIDECAR_FILENAME = "pit-loss-estimate-sidecar.json"
+PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-estimate-sidecar"
+LEGACY_PIT_LOSS_ESTIMATE_METHOD = "track-status-median-v1"
+CURATED_BASELINE_METHOD = "curated-track-baseline-v1"
+# Preserve the established name for callers constructing legacy sidecars.
+PIT_LOSS_ESTIMATE_METHOD = LEGACY_PIT_LOSS_ESTIMATE_METHOD
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 
 
@@ -651,6 +657,25 @@ class BrowserPitLossModelReference(BrowserArtifactReference):
 
 
 @dataclass(frozen=True)
+class BrowserPitLossEstimateSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for either supported pit-loss sidecar method.
+
+    The reference carries only the digest binding (path, schema ID, SHA-256).
+    Catalog-only metadata such as ``sourceStatus`` is never part of a manifest
+    reference: the mapping coercion below rejects any unknown key, and the
+    referenced artifact itself is validated against the public sidecar schema
+    which forbids it via ``additionalProperties: false``.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != PIT_LOSS_ESTIMATE_SIDECAR_FILENAME:
+            raise ValueError("pit loss estimate sidecar path is invalid")
+        if self.schema_id != PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID:
+            raise ValueError("pit loss estimate sidecar schema_id is invalid")
+
+
+@dataclass(frozen=True)
 class BrowserManifest:
     """Immutable contract metadata derived from one canonical snapshot."""
 
@@ -665,6 +690,7 @@ class BrowserManifest:
     penalty_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
     season_metadata: Mapping[str, object] | None = None
     telemetry_capabilities: Mapping[str, object] | None = None
+    pit_loss_estimate_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -753,6 +779,31 @@ class BrowserManifest:
             )
         elif pit_loss_model is not None:
             raise TypeError("pit_loss_model must be a BrowserArtifactReference or mapping")
+        pit_loss_estimate_sidecar = self.pit_loss_estimate_sidecar
+        if isinstance(pit_loss_estimate_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            # The reference is a digest-only binding: the exact-key check
+            # rejects catalog-only metadata (for example ``sourceStatus``) that
+            # must never reach the manifest or the frontend.
+            if set(pit_loss_estimate_sidecar) != required:
+                raise ValueError(
+                    "pit_loss_estimate_sidecar must contain path, schemaId, and sha256",
+                )
+            pit_loss_estimate_sidecar = BrowserPitLossEstimateSidecarReference(
+                cast(str, pit_loss_estimate_sidecar["path"]),
+                cast(str, pit_loss_estimate_sidecar["schemaId"]),
+                cast(str, pit_loss_estimate_sidecar["sha256"]),
+            )
+        elif isinstance(pit_loss_estimate_sidecar, BrowserArtifactReference):
+            pit_loss_estimate_sidecar = BrowserPitLossEstimateSidecarReference(
+                pit_loss_estimate_sidecar.path,
+                pit_loss_estimate_sidecar.schema_id,
+                pit_loss_estimate_sidecar.sha256,
+            )
+        elif pit_loss_estimate_sidecar is not None:
+            raise TypeError(
+                "pit_loss_estimate_sidecar must be a BrowserArtifactReference or mapping",
+            )
         penalty_sidecar = self.penalty_sidecar
         if isinstance(penalty_sidecar, Mapping):
             required = {"path", "schemaId", "sha256"}
@@ -775,6 +826,7 @@ class BrowserManifest:
         object.__setattr__(self, "lap_sector_sidecar", lap_sector_sidecar)
         object.__setattr__(self, "stint_summary", stint_summary)
         object.__setattr__(self, "pit_loss_model", pit_loss_model)
+        object.__setattr__(self, "pit_loss_estimate_sidecar", pit_loss_estimate_sidecar)
         object.__setattr__(self, "penalty_sidecar", penalty_sidecar)
         object.__setattr__(self, "season_metadata", season_metadata)
         object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
@@ -812,6 +864,10 @@ class BrowserManifest:
         if self.pit_loss_model is not None:
             value["pitLossModel"] = cast(
                 BrowserArtifactReference, self.pit_loss_model,
+            ).as_dict()
+        if self.pit_loss_estimate_sidecar is not None:
+            value["pitLossEstimateSidecar"] = cast(
+                BrowserArtifactReference, self.pit_loss_estimate_sidecar,
             ).as_dict()
         if self.penalty_sidecar is not None:
             value["penaltySidecar"] = cast(
@@ -853,10 +909,14 @@ __all__ = [
     "BrowserPenaltySidecarReference",
     "BrowserTimelineInterval", "BrowserTimelineSummary",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
+    "BrowserPitLossEstimateSidecarReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
+    "CURATED_BASELINE_METHOD", "LEGACY_PIT_LOSS_ESTIMATE_METHOD", "PIT_LOSS_ESTIMATE_METHOD",
+    "PIT_LOSS_ESTIMATE_SIDECAR_FILENAME",
+    "PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID",
     "STINT_SUMMARY_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",
     "TimelineSummaryKind",

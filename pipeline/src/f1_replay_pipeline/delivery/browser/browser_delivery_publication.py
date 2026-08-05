@@ -20,13 +20,21 @@ from f1_replay_pipeline.delivery.browser.browser_chunk_builder import BrowserChu
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+    CURATED_BASELINE_METHOD,
+    LEGACY_PIT_LOSS_ESTIMATE_METHOD,
     MAX_INT64,
     PENALTY_SIDECAR_SCHEMA_ID,
     PIT_LOSS_MODEL_SCHEMA_ID,
+    PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+    PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_track_identity import (
+    TrackIdentityLookupError,
+    resolve_binding_identity,
+)
 from f1_replay_pipeline.domain.dataset_manifest import ManifestValidationError, serialize_deterministic_json
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 from f1_replay_pipeline.storage.generation_publication import (
@@ -54,6 +62,7 @@ _TIMELINE_SUMMARY_SCHEMA = TIMELINE_SUMMARY_SCHEMA_ID
 _BROWSER_LAP_SECTOR_SIDECAR_SCHEMA = BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
 _STINT_SUMMARY_SCHEMA = STINT_SUMMARY_SCHEMA_ID
 _PIT_LOSS_MODEL_SCHEMA = PIT_LOSS_MODEL_SCHEMA_ID
+_PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA = PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID
 _PENALTY_SIDECAR_SCHEMA = PENALTY_SIDECAR_SCHEMA_ID
 _POINTER_FIELDS = frozenset({"formatVersion", "deliveryVersion", "manifestPath", "manifestSha256"})
 _UNSUPPORTED_DIRECTORY_FSYNC = {errno.EINVAL, errno.ENOTSUP, errno.EBADF}
@@ -138,6 +147,7 @@ class PublishedBrowserDelivery:
     stint_summary_path: Path | None = None
     pit_loss_model_path: Path | None = None
     penalty_sidecar_path: Path | None = None
+    pit_loss_estimate_sidecar_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "chunk_paths", tuple(self.chunk_paths))
@@ -197,6 +207,7 @@ def validate_complete_browser_delivery(
         stint_reference = manifest.get("stintSummary")
         pit_loss_reference = manifest.get("pitLossModel")
         penalty_reference = manifest.get("penaltySidecar")
+        pit_loss_estimate_reference = manifest.get("pitLossEstimateSidecar")
         references = (
             manifest.get("trackAssets"),
             *((timeline_reference,) if timeline_reference is not None else ()),
@@ -204,6 +215,7 @@ def validate_complete_browser_delivery(
             *((stint_reference,) if stint_reference is not None else ()),
             *((pit_loss_reference,) if pit_loss_reference is not None else ()),
             *((penalty_reference,) if penalty_reference is not None else ()),
+            *((pit_loss_estimate_reference,) if pit_loss_estimate_reference is not None else ()),
             *(manifest.get("chunks") or ()),
         )
         payloads = [("manifest.json", manifest_file.data)]
@@ -304,6 +316,16 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         if not isinstance(pit_loss_reference, dict) or pit_loss_reference.get("path") != "pit-loss-model.json":
             raise BrowserDeliveryPublicationError("manifest pit loss model reference is invalid")
         expected_paths.add("pit-loss-model.json")
+    pit_loss_estimate_reference = manifest.get("pitLossEstimateSidecar")
+    if pit_loss_estimate_reference is not None:
+        if (
+            not isinstance(pit_loss_estimate_reference, dict)
+            or pit_loss_estimate_reference.get("path") != PIT_LOSS_ESTIMATE_SIDECAR_FILENAME
+        ):
+            raise BrowserDeliveryPublicationError(
+                "manifest pit loss estimate sidecar reference is invalid",
+            )
+        expected_paths.add(PIT_LOSS_ESTIMATE_SIDECAR_FILENAME)
     penalty_reference = manifest.get("penaltySidecar")
     if penalty_reference is not None:
         if not isinstance(penalty_reference, dict) or penalty_reference.get("path") != "penalty-sidecar.json":
@@ -316,6 +338,7 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         + (1 if stint_reference is not None else 0)
         + (1 if pit_loss_reference is not None else 0)
         + (1 if penalty_reference is not None else 0)
+        + (1 if pit_loss_estimate_reference is not None else 0)
     )
     _emit_validation_progress(emit, 1, total, "manifest schema")
     _validate_lap_starts(manifest.get("lapStarts", []), chunk_refs)
@@ -372,6 +395,33 @@ def _validate_stored_delivery_payloads(payloads, validators, emit: ProgressCallb
         _validate_penalty_sidecar_contract(penalty_sidecar, manifest)
         completed += 1
         _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
+    if pit_loss_estimate_reference is not None:
+        pit_loss_estimate_sidecar = json.loads(encoded[PIT_LOSS_ESTIMATE_SIDECAR_FILENAME])
+        if not isinstance(pit_loss_estimate_sidecar, dict):
+            raise BrowserDeliveryPublicationError(
+                "pit loss estimate sidecar must be a JSON object",
+            )
+        _validate_schema_instance(
+            validators["pit-loss-estimate-sidecar"],
+            pit_loss_estimate_sidecar,
+            "pit loss estimate sidecar",
+        )
+        _validate_pit_loss_estimate_sidecar_contract(
+            pit_loss_estimate_sidecar,
+            manifest,
+            track,
+            tuple(
+                status
+                for reference in chunk_refs
+                for status in json.loads(encoded[reference["path"]]).get(
+                    "trackStatusCode", []
+                )
+            ),
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "pit loss estimate sidecar schema",
+        )
     previous = None
     for sequence, reference in enumerate(chunk_refs, start=1):
         path = reference["path"]
@@ -406,6 +456,7 @@ def _prepared_artifacts(
         + (2 if delivery.stint_summary is not None else 0)
         + (2 if delivery.pit_loss_model is not None else 0)
         + (2 if delivery.penalty_sidecar is not None else 0)
+        + (2 if delivery.pit_loss_estimate_sidecar is not None else 0)
     )
     fixture_id = delivery.manifest.fixture_id
     manifest = delivery.manifest.as_dict()
@@ -485,6 +536,30 @@ def _prepared_artifacts(
         completed += 1
         _emit_validation_progress(emit, completed, total, "penalty sidecar schema")
 
+    pit_loss_estimate_sidecar = delivery.pit_loss_estimate_sidecar
+    pit_loss_estimate_artifact: PreparedArtifact | None = None
+    pit_loss_estimate_contract = None
+    if pit_loss_estimate_sidecar is not None:
+        pit_loss_estimate_contract = _schema_compatible_value(
+            pit_loss_estimate_sidecar.as_dict(),
+        )
+        _validate_schema_instance(
+            validators["pit-loss-estimate-sidecar"],
+            pit_loss_estimate_contract,
+            "pit loss estimate sidecar",
+        )
+        pit_loss_estimate_artifact = _prepare_artifact(
+            PIT_LOSS_ESTIMATE_SIDECAR_FILENAME, pit_loss_estimate_contract,
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "pit loss estimate sidecar",
+        )
+        completed += 1
+        _emit_validation_progress(
+            emit, completed, total, "pit loss estimate sidecar schema",
+        )
+
     previous = None
     chunk_artifacts = []
     references = []
@@ -552,6 +627,16 @@ def _prepared_artifacts(
         raise BrowserDeliveryPublicationError(
             "manifest pit loss model reference has no pit loss model payload"
         )
+    if pit_loss_estimate_artifact is not None:
+        manifest["pitLossEstimateSidecar"] = {
+            "path": pit_loss_estimate_artifact.path,
+            "schemaId": _PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA,
+            "sha256": pit_loss_estimate_artifact.sha256,
+        }
+    elif "pitLossEstimateSidecar" in manifest:
+        raise BrowserDeliveryPublicationError(
+            "manifest pit loss estimate sidecar reference has no sidecar payload",
+        )
     if penalty_artifact is not None:
         manifest["penaltySidecar"] = {
             "path": penalty_artifact.path,
@@ -570,11 +655,18 @@ def _prepared_artifacts(
         _validate_stint_summary_contract(stint_contract, manifest)
     if pit_loss_contract is not None:
         _validate_pit_loss_model_contract(pit_loss_contract, manifest)
+    if pit_loss_estimate_contract is not None:
+        _validate_pit_loss_estimate_sidecar_contract(
+            pit_loss_estimate_contract,
+            manifest,
+            schema_track_assets,
+            tuple(status for chunk in chunks for status in chunk.track_status_code),
+        )
     if penalty_contract is not None:
         _validate_penalty_sidecar_contract(penalty_contract, manifest)
     _validate_manifest_contract(
         manifest, delivery, references, timeline_artifact, sidecar_artifact, stint_artifact,
-        pit_loss_artifact, penalty_artifact,
+        pit_loss_artifact, penalty_artifact, pit_loss_estimate_artifact,
     )
     _emit_validation_progress(emit, total - 1, total, "manifest")
     _validate_schema_instance(validators["manifest"], manifest, "manifest")
@@ -587,6 +679,7 @@ def _prepared_artifacts(
         *((stint_artifact,) if stint_artifact is not None else ()),
         *((pit_loss_artifact,) if pit_loss_artifact is not None else ()),
         *((penalty_artifact,) if penalty_artifact is not None else ()),
+        *((pit_loss_estimate_artifact,) if pit_loss_estimate_artifact is not None else ()),
         *chunk_artifacts,
     )
 
@@ -627,6 +720,8 @@ def _validate_delivery_payloads(artifacts, delivery: BrowserDeliveryBuild, schem
         expected_paths.add("stint-summary.json")
     if delivery.pit_loss_model is not None:
         expected_paths.add("pit-loss-model.json")
+    if delivery.pit_loss_estimate_sidecar is not None:
+        expected_paths.add(PIT_LOSS_ESTIMATE_SIDECAR_FILENAME)
     if delivery.penalty_sidecar is not None:
         expected_paths.add("penalty-sidecar.json")
     if set(encoded) != expected_paths or any(hashlib.sha256(artifact.payload).hexdigest() != artifact.sha256 for artifact in encoded.values()):
@@ -642,6 +737,7 @@ def _validate_manifest_contract(
     stint_artifact: PreparedArtifact | None = None,
     pit_loss_artifact: PreparedArtifact | None = None,
     penalty_artifact: PreparedArtifact | None = None,
+    pit_loss_estimate_artifact: PreparedArtifact | None = None,
 ) -> None:
     if manifest["sourceGenerationId"] != delivery.source.generation_id or manifest["sourceManifestSha256"] != delivery.source.manifest_sha256:
         raise BrowserDeliveryPublicationError("delivery provenance disagrees with its source snapshot")
@@ -697,6 +793,23 @@ def _validate_manifest_contract(
         "sha256": penalty_artifact.sha256,
     }:
         raise BrowserDeliveryPublicationError("penalty sidecar reference disagrees with its payload")
+    pit_loss_estimate_reference = manifest.get("pitLossEstimateSidecar")
+    if pit_loss_estimate_artifact is None:
+        if (
+            pit_loss_estimate_reference is not None
+            or delivery.pit_loss_estimate_sidecar is not None
+        ):
+            raise BrowserDeliveryPublicationError(
+                "manifest pit loss estimate sidecar reference disagrees with its payload",
+            )
+    elif pit_loss_estimate_reference != {
+        "path": pit_loss_estimate_artifact.path,
+        "schemaId": _PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA,
+        "sha256": pit_loss_estimate_artifact.sha256,
+    }:
+        raise BrowserDeliveryPublicationError(
+            "pit loss estimate sidecar reference disagrees with its payload",
+        )
     _validate_lap_starts(manifest.get("lapStarts", []), refs)
     for sequence, (ref, expected_chunk) in enumerate(zip(refs, delivery.chunks, strict=True), start=1):
         path = ref["path"]
@@ -877,6 +990,188 @@ def _validate_pit_loss_model_contract(model, manifest) -> None:
         raise BrowserDeliveryPublicationError("pit loss model sample counts must strictly increase")
 
 
+def _validate_pit_loss_estimate_sidecar_contract(
+    sidecar, manifest, track, status_codes: tuple[object, ...],
+) -> None:
+    """Validate identity and generation-time timeline rules for the sidecar."""
+    if (
+        sidecar.get("contractVersion") != "v1"
+        or sidecar.get("fixtureId") != manifest.get("fixtureId")
+        or sidecar.get("trackId") != track.get("trackId")
+        or sidecar.get("method") not in (
+            LEGACY_PIT_LOSS_ESTIMATE_METHOD,
+            CURATED_BASELINE_METHOD,
+        )
+    ):
+        raise BrowserDeliveryPublicationError(
+            "pit loss estimate sidecar identity disagrees with its delivery",
+        )
+    if sidecar.get("method") == CURATED_BASELINE_METHOD:
+        _validate_curated_pit_loss_estimate_sidecar(sidecar, manifest)
+        _validate_curated_sidecar_identity(sidecar, manifest, track)
+        return
+
+    _validate_status_estimate_availability(sidecar, status_codes)
+    for name in ("race", "safetyCar", "virtualSafetyCar"):
+        value = sidecar.get(name)
+        if value is None:
+            continue
+        if value == {"status": "unavailable"}:
+            continue
+        _validate_pit_loss_estimate_timeline(
+            value, manifest, name, require_observation=name != "race",
+        )
+
+
+def _validate_curated_pit_loss_estimate_sidecar(sidecar, manifest) -> None:
+    """Validate immutable curated values independently of race observations."""
+    for name in ("race", "safetyCar", "virtualSafetyCar"):
+        value = sidecar.get(name)
+        if value is None or value == {"status": "unavailable"}:
+            raise BrowserDeliveryPublicationError(
+                f"curated pit loss {name} value must be available",
+            )
+        _validate_pit_loss_estimate_timeline(
+            value, manifest, name, allow_missing_observed_sample_count=True,
+            require_single_point=True,
+        )
+def _validate_curated_sidecar_identity(sidecar, manifest, track) -> None:
+    """Reject a curated sidecar whose fixture/track binding is malformed.
+
+    The digest-bound sidecar is validated as a whole after schema validation:
+    its fixture and track identity must deterministically resolve to one
+    physical circuit through the identity map.  The track asset's ``trackName``
+    is included so the generator's actual binding (for example ``2026-01-race``
+    with a ``-telemetry-layout-v1`` asset) publishes when the name establishes
+    the circuit.  An unknown or ambiguous binding fails closed instead of being
+    published as if it were catalog-backed.  The check runs only for the
+    curated method so legacy ``track-status-median-v1`` sidecars remain
+    publishable unchanged.
+    """
+    fixture_id = sidecar.get("fixtureId")
+    track_id = sidecar.get("trackId")
+    if not isinstance(fixture_id, str) or not isinstance(track_id, str):
+        raise BrowserDeliveryPublicationError(
+            "curated pit loss sidecar binding is invalid",
+        )
+    track_name = track.get("trackName")
+    if track_name is not None and not isinstance(track_name, str):
+        raise BrowserDeliveryPublicationError(
+            "curated pit loss sidecar binding is invalid",
+        )
+    try:
+        resolve_binding_identity(
+            fixture_id=fixture_id, track_id=track_id, track_name=track_name,
+        )
+    except TrackIdentityLookupError as error:
+        raise BrowserDeliveryPublicationError(
+            "curated pit loss sidecar binding is not identity-consistent",
+        ) from error
+
+
+def _validate_status_estimate_availability(sidecar, status_codes: tuple[object, ...]) -> None:
+    expected = {
+        "safetyCar": any(status == 4 for status in status_codes),
+        "virtualSafetyCar": any(status in {6, 7} for status in status_codes),
+    }
+    for field, occurs in expected.items():
+        if (field in sidecar) != occurs:
+            raise BrowserDeliveryPublicationError(
+                f"pit loss estimate {field} availability disagrees with track status",
+            )
+
+
+def _validate_pit_loss_estimate_timeline(
+    timeline, manifest, label: str, *, require_observation: bool = False,
+    allow_missing_observed_sample_count: bool = False,
+    require_single_point: bool = False,
+) -> None:
+    if not isinstance(timeline, dict):
+        raise BrowserDeliveryPublicationError(f"{label} pit loss estimate is invalid")
+    time_ms = timeline.get("timeMs")
+    estimates = timeline.get("estimatedLossMs")
+    counts = timeline.get("observedSampleCount")
+    arrays = (time_ms, estimates)
+    if any(not isinstance(values, list) for values in arrays) or (
+        counts is not None and not isinstance(counts, list)
+    ):
+        raise BrowserDeliveryPublicationError(f"{label} pit loss estimate arrays are invalid")
+    time_values = cast(list[object], time_ms)
+    estimate_values = cast(list[object], estimates)
+    count_values = None if counts is None else cast(list[object], counts)
+    if count_values is not None and allow_missing_observed_sample_count:
+        # Curated timelines are immutable catalog evidence, never current-race
+        # observations: an observedSampleCount array would mislabel the value
+        # as race-derived even when the catalog entry is fixture-less.  The
+        # explicit rejection keeps the semantic layer fail-closed independent
+        # of the JSON schema's additionalProperties guard.
+        raise BrowserDeliveryPublicationError(
+            f"{label} curated pit loss timeline cannot carry observedSampleCount",
+        )
+    if count_values is None and not allow_missing_observed_sample_count:
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate observed sample counts are required",
+        )
+    if not time_values or len(estimate_values) != len(time_values) or (
+        count_values is not None and len(count_values) != len(time_values)
+    ):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate arrays are not aligned",
+        )
+    if require_single_point and len(time_values) != 1:
+        raise BrowserDeliveryPublicationError(
+            f"{label} curated pit loss estimate must contain one replay-start point",
+        )
+    values_to_validate = (time_values, estimate_values)
+    if count_values is not None:
+        values_to_validate += (count_values,)
+    if any(
+        type(value) is not int or not 0 <= value <= MAX_INT64
+        for values in values_to_validate for value in values
+    ):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate values are invalid",
+        )
+    time_values_int = cast(list[int], time_values)
+    count_values_int = None if count_values is None else cast(list[int], count_values)
+    chunks = manifest.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        raise BrowserDeliveryPublicationError("pit loss estimate replay bounds are invalid")
+    replay_start_ms, replay_end_ms = chunks[0].get("startMs"), chunks[-1].get("endMs")
+    if (
+        type(replay_start_ms) is not int
+        or type(replay_end_ms) is not int
+        or not 0 <= replay_start_ms < replay_end_ms <= MAX_INT64
+    ):
+        raise BrowserDeliveryPublicationError("pit loss estimate replay bounds are invalid")
+    if time_values_int[0] != replay_start_ms or any(
+        not replay_start_ms <= value < replay_end_ms for value in time_values_int
+    ):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate timestamps are outside replay bounds",
+        )
+    if any(
+        following <= current
+        for current, following in zip(time_values_int, time_values_int[1:], strict=False)
+    ):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate timestamps must be strictly increasing",
+        )
+    if count_values_int is not None and len(count_values_int) > 1 and (
+        count_values_int[0] != 0 or any(
+            following <= current
+            for current, following in zip(count_values_int, count_values_int[1:], strict=False)
+        )
+    ):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate sample counts must strictly increase",
+        )
+    if require_observation and (count_values_int is None or count_values_int[-1] == 0):
+        raise BrowserDeliveryPublicationError(
+            f"{label} pit loss estimate without observations must be unavailable",
+        )
+
+
 def _validate_lap_starts(markers, refs) -> None:
     if any(
         following["lap"] <= current["lap"] or following["startMs"] < current["startMs"]
@@ -897,6 +1192,7 @@ def _load_contract_schemas(
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
             "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
+            "pit-loss-estimate-sidecar",
         ):
             guarded = read_regular_file_no_follow(
                 schema_root / f"{name}.schema.json", f"browser {name} schema"
@@ -1144,6 +1440,8 @@ def _delivery_result(
         generation / "stint-summary.json" if "stint-summary.json" in digests else None,
         generation / "pit-loss-model.json" if "pit-loss-model.json" in digests else None,
         generation / "penalty-sidecar.json" if "penalty-sidecar.json" in digests else None,
+        generation / PIT_LOSS_ESTIMATE_SIDECAR_FILENAME
+        if PIT_LOSS_ESTIMATE_SIDECAR_FILENAME in digests else None,
     )
 
 

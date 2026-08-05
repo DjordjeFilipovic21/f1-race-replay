@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-estimate-sidecar",
+  "title": "Browser status-aware pit-loss estimate sidecar",
+  "description": "Optional per-fixture, per-track pit-loss estimates. Legacy race-derived timelines and curated replay-start baselines are both readable.",
+  "$comment": "Legacy sidecars use track-status-median-v1 and causal observedSampleCount arrays. Curated sidecars use curated-track-baseline-v1 and contain only immutable Green/VSC/SC replay-start values. Catalog audit metadata (sourceStatus, provenance, evidence, confidence, and derivation details) remains in the internal catalog and never enters a sidecar payload. Curated sidecars require available replay-start timelines for all three statuses (statusEstimate unavailable is a legacy-only shape). Every object uses additionalProperties: false, so unknown catalog fields fail schema validation. The curated SC <= VSC <= Green monotonic invariant is enforced by the pipeline model and publication because Draft 2020-12 cannot express cross-property numeric ordering portably.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/legacySidecar" },
+    { "$ref": "#/$defs/curatedSidecar" }
+  ],
+  "$defs": {
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "trackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "signedInt64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "estimateTimeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A legacy timeline begins with the estimate available before its first observed sample. Equal array lengths, strict time ordering, nondecreasing sample counts, status occurrence/availability, and causal completion are semantic publication rules because Draft 2020-12 cannot express those relationships portably.",
+      "required": [
+        "timeMs",
+        "estimatedLossMs",
+        "observedSampleCount"
+      ],
+      "properties": {
+        "timeMs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/signedInt64" }
+        },
+        "estimatedLossMs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/signedInt64" }
+        },
+        "observedSampleCount": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/signedInt64" }
+        }
+      }
+    },
+    "curatedEstimateTimeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A curated timeline contains exactly one value at replay start and never carries observedSampleCount: current-race observation counts must not be fabricated for catalog values.",
+      "required": ["timeMs", "estimatedLossMs"],
+      "properties": {
+        "timeMs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/signedInt64" }
+        },
+        "estimatedLossMs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/signedInt64" }
+        }
+      }
+    },
+    "unavailableEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "unavailable" }
+      }
+    },
+    "statusEstimate": {
+      "anyOf": [
+        { "$ref": "#/$defs/estimateTimeline" },
+        { "$ref": "#/$defs/unavailableEstimate" }
+      ]
+    },
+    "curatedStatusEstimate": {
+      "$comment": "Curated sidecars require available replay-start timelines for Green, SC, and VSC; the unavailable status is a legacy-only shape and must not appear here.",
+      "$ref": "#/$defs/curatedEstimateTimeline"
+    },
+    "pitLossEstimateSidecarFileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "schemaId", "sha256"],
+      "properties": {
+        "path": { "const": "pit-loss-estimate-sidecar.json" },
+        "schemaId": { "const": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-estimate-sidecar" },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "legacySidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "fixtureId", "trackId", "method", "race"],
+      "properties": {
+        "contractVersion": { "const": "v1" },
+        "fixtureId": { "$ref": "#/$defs/fixtureId" },
+        "trackId": { "$ref": "#/$defs/trackId" },
+        "method": { "const": "track-status-median-v1" },
+        "race": { "$ref": "#/$defs/estimateTimeline" },
+        "safetyCar": { "$ref": "#/$defs/statusEstimate" },
+        "virtualSafetyCar": { "$ref": "#/$defs/statusEstimate" }
+      }
+    },
+    "curatedSidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "fixtureId",
+        "trackId",
+        "method",
+        "race",
+        "safetyCar",
+        "virtualSafetyCar"
+      ],
+      "properties": {
+        "contractVersion": { "const": "v1" },
+        "fixtureId": { "$ref": "#/$defs/fixtureId" },
+        "trackId": { "$ref": "#/$defs/trackId" },
+        "method": { "const": "curated-track-baseline-v1" },
+        "race": { "$ref": "#/$defs/curatedEstimateTimeline" },
+        "safetyCar": { "$ref": "#/$defs/curatedStatusEstimate" },
+        "virtualSafetyCar": { "$ref": "#/$defs/curatedStatusEstimate" }
+      }
+    }
+  }
+}

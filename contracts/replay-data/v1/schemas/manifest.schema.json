@@ -173,6 +173,10 @@
     "pitLossModel": {
       "$ref": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model#/$defs/pitLossModelFileReference"
     },
+    "pitLossEstimateSidecar": {
+      "$comment": "Optional digest-bound pit-loss sidecar; the referenced artifact may use the legacy track-status-median-v1 method or the curated-track-baseline-v1 method.",
+      "$ref": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-estimate-sidecar#/$defs/pitLossEstimateSidecarFileReference"
+    },
     "chunks": {
       "type": "array",
       "minItems": 1,

@@ -10,10 +10,14 @@ from referencing import Registry, Resource
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     PENALTY_SIDECAR_SCHEMA_ID,
+    PIT_LOSS_ESTIMATE_METHOD,
+    PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+    PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserPenaltySidecarReference,
+    BrowserPitLossEstimateSidecarReference,
     BrowserTimelineSummaryReference,
 )
 
@@ -66,6 +70,7 @@ def load_contract_bundle():
         "penaltySidecar": load_json(SCHEMA_ROOT / "penalty-sidecar.schema.json"),
         "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
         "pitLossModel": load_json(SCHEMA_ROOT / "pit-loss-model.schema.json"),
+        "pitLossEstimateSidecar": load_json(SCHEMA_ROOT / "pit-loss-estimate-sidecar.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -531,6 +536,45 @@ def pit_loss_model_reference() -> dict[str, str]:
     }
 
 
+def pit_loss_estimate_sidecar_payload() -> dict[str, object]:
+    """A race-only status-aware sidecar payload bound to the fixture track."""
+    return {
+        "contractVersion": "v1",
+        "fixtureId": "deterministic-race",
+        "trackId": "deterministic-short-loop",
+        "method": PIT_LOSS_ESTIMATE_METHOD,
+        "race": {
+            "timeMs": [0, 1_523_000],
+            "estimatedLossMs": [22_000, 21_867],
+            "observedSampleCount": [0, 1],
+        },
+    }
+
+
+def pit_loss_estimate_sidecar_sc_vsc_payload() -> dict[str, object]:
+    """A sidecar payload whose Safety Car and Virtual Safety Car both occur."""
+    payload = pit_loss_estimate_sidecar_payload()
+    payload["safetyCar"] = {
+        "timeMs": [0, 1_523_000],
+        "estimatedLossMs": [22_000, 22_250],
+        "observedSampleCount": [0, 1],
+    }
+    payload["virtualSafetyCar"] = {
+        "timeMs": [0, 1_678_000],
+        "estimatedLossMs": [22_000, 21_900],
+        "observedSampleCount": [0, 1],
+    }
+    return payload
+
+
+def pit_loss_estimate_sidecar_reference() -> dict[str, str]:
+    return {
+        "path": PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+        "schemaId": PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
 def assert_timeline_summary_semantics(summary):
     assert summary["startMs"] < summary["endMs"]
     for interval in summary["intervals"]:
@@ -613,6 +657,129 @@ def test_replay_contract_pit_loss_model_rejects_structurally_invalid_payload(
         validate_instance(contract_bundle["schemas"]["pitLossModel"], model, schema_registry)
 
 
+def test_replay_contract_pit_loss_estimate_sidecar_race_only_validates_and_is_optional(
+    contract_bundle, schema_registry
+):
+    # Arrange: a per-track sidecar carrying only the race-wide median.
+    sidecar = pit_loss_estimate_sidecar_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["pitLossEstimateSidecar"] = pit_loss_estimate_sidecar_reference()
+
+    # Act / Assert: the race-only payload and its manifest reference are v1-valid.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_sc_vsc_present_validates(
+    contract_bundle, schema_registry
+):
+    # Arrange: a sidecar whose Safety Car and Virtual Safety Car statuses occur.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+
+    # Act / Assert: both status-specific median timelines satisfy the schema.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_statuses_are_independently_optional(
+    contract_bundle, schema_registry
+):
+    # Arrange: start from a SC+VSC payload and drop one status estimate.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+    del sidecar["virtualSafetyCar"]
+
+    # Act / Assert: an absent status never forces the other status field.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+    assert "safetyCar" in sidecar
+    assert "virtualSafetyCar" not in sidecar
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_unavailable_status_validates(
+    contract_bundle, schema_registry
+):
+    # Arrange: both statuses occur but no eligible sample exists for either.
+    sidecar = pit_loss_estimate_sidecar_payload()
+    sidecar["safetyCar"] = {"status": "unavailable"}
+    sidecar["virtualSafetyCar"] = {"status": "unavailable"}
+
+    # Act / Assert: explicit unavailability is a valid status estimate.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("instance_path", "value"),
+    [
+        (("method",), "other-v1"),
+        (("contractVersion",), "v2"),
+        (("trackId",), "Deterministic_Short_Loop"),
+        (("fixtureId",), "Deterministic-Race"),
+        (("race", "timeMs"), []),
+        (("race", "estimatedLossMs"), [22_000, -1]),
+        (("race", "observedSampleCount"), [0, 1.5]),
+        (("safetyCar",), {"status": "normal"}),
+        (("safetyCar",), {"status": "unavailable", "extra": True}),
+        (("virtualSafetyCar",), {"timeMs": [0], "estimatedLossMs": [22_000]}),
+    ],
+)
+def test_replay_contract_pit_loss_estimate_sidecar_rejects_invalid_payloads(
+    contract_bundle, schema_registry, instance_path, value
+):
+    # Arrange: a structurally or semantically invalid sidecar payload.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+    target = sidecar
+    for key in instance_path[:-1]:
+        target = target[key]
+    target[instance_path[-1]] = value
+
+    # Act / Assert: the sidecar schema fails closed on malformed estimates.
+    with pytest.raises(ValidationError):
+        validate_instance(
+            contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", "pit-loss-model.json"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_replay_contract_pit_loss_estimate_sidecar_reference_rejects_invalid_schema_or_digest(
+    contract_bundle, schema_registry, field, value
+):
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    reference = pit_loss_estimate_sidecar_reference()
+    reference[field] = value
+    manifest["pitLossEstimateSidecar"] = reference
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_accepts_legacy_manifest_without_pit_loss_estimate_sidecar(
+    contract_bundle, schema_registry
+):
+    # Arrange: a manifest that previously carried the additive sidecar reference.
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["pitLossEstimateSidecar"] = pit_loss_estimate_sidecar_reference()
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+    # Act: remove the additive reference as an older delivery would.
+    del manifest["pitLossEstimateSidecar"]
+
+    # Assert: the legacy manifest remains valid without the sidecar.
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
 def test_browser_manifest_serializes_optional_timeline_summary_reference():
     manifest = BrowserManifest(
         "deterministic-race",
@@ -676,6 +843,27 @@ def test_browser_manifest_serializes_optional_penalty_sidecar_reference():
         "schemaId": PENALTY_SIDECAR_SCHEMA_ID,
         "sha256": "a" * 64,
     }
+
+
+def test_browser_manifest_serializes_optional_pit_loss_estimate_sidecar_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        pit_loss_estimate_sidecar=BrowserPitLossEstimateSidecarReference(
+            PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+            PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+            "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["pitLossEstimateSidecar"] == pit_loss_estimate_sidecar_reference()
 
 
 @pytest.mark.parametrize(
