@@ -1,17 +1,26 @@
 # Replay Data Contract
 
-This v1 contract defines the immutable browser replay artifact. Canonical
-Parquet remains unchanged, preserves each native source cadence, and is never
-rewritten as part of delivery. Track distance, cumulative race progress,
-position, dynamic leaderboard order, and gaps are browser-derived rather than
-canonical observations. The v1 surface below stays frozen; the optional v2
-qualifying lap-status sidecar is a separate, Python-only artifact documented in
-its own section and adds no v1 field.
+This is the active **v2** browser replay contract (`contractVersion` `v2`,
+`formatVersion` `browser-delivery-v2`). Canonical Parquet remains unchanged,
+preserves each native source cadence, and is never rewritten as part of
+delivery. Track distance, cumulative race progress, position, dynamic
+leaderboard order, and gaps are browser-derived rather than canonical
+observations.
+
+The web reader is **v2-only**: it loads `browser-delivery-v2` pointers and
+`v2` manifests, validates every artifact against
+`urn:f1-cache-replay:schema:replay-data:v2:*` schemas, and rejects v1
+pointers, manifests, and sidecars. The v1 surface is a frozen historical
+baseline: committed v1 fixtures remain as reference fixtures, are never
+upgraded in place, are excluded from the active catalog, and are not loaded by
+the web application. See [V1 frozen baseline and catalog
+cutover](#v1-frozen-baseline-and-catalog-cutover).
 
 ## Time and chunks
 
 - All serialized timestamps are absolute integer milliseconds.
-- The race window begins at the earliest Lap 1 start; UI time is relative only
+- The delivery window begins at the earliest Lap 1 start (the earliest
+  published lap start for non-race sessions); UI time is relative only
   for display.
 - `timeMs` is a shared exact-union timeline; arrays are aligned by index.
 - Chunk ownership is half-open `[startMs, endMs)`.
@@ -27,14 +36,53 @@ its own section and adds no v1 field.
 }
 ```
 
-## v1 fields and compatibility
+## Session modes and artifact gating
 
-Driver columns retain the nullable v1 shape, including
+The v2 manifest declares one normalized `sessionMode` from seven values:
+`race`, `practice`, `qualifying`, `sprint`, `sprint-qualifying`,
+`sprint-shootout`, and `testing`. FastF1 aliases normalize at the adapter
+boundary (`FP1`/`FP2`/`FP3` → `practice`, `Q` → `qualifying`, `R` → `race`,
+`S` → `sprint`, `SQ` → `sprint-qualifying`, `SS` → `sprint-shootout`); the
+session identity keeps the practice number so practice sessions do not
+collide.
+
+Mode determines which optional artifacts are truthful and therefore which the
+schema and browser guard permit:
+
+- **Race-like** modes (`race`, `sprint`) may carry `timelineSummary` and
+  `pitLossModel`.
+- **Non-race** modes (`practice`, `testing`, and all qualifying-like modes)
+  reject `timelineSummary` and `pitLossModel`: a non-race session must not
+  publish race DNF markers or pit-loss estimates.
+- **Qualifying-like** modes (`qualifying`, `sprint-qualifying`,
+  `sprint-shootout`) may carry `qualifyingSummary`, `qualifyingLapStatus`, and
+  `qualifyingTimeline`; every other mode rejects them.
+- **Mode-agnostic** artifacts (`lapSectorSidecar`, `stintSummary`,
+  `penaltySidecar`) may appear in any mode when the source data exists.
+
+The browser derives UI capabilities from the same rules
+(`createSessionCapabilities`):
+
+| Capability | Enabled when |
+| --- | --- |
+| `canShowRaceOrder` | mode is `race` or `sprint` |
+| `canShowRaceTimeline` | race-like mode and `timelineSummary` present |
+| `canShowTyreStrategy` | race-like mode and `stintSummary` present |
+| `canShowPitLoss` | race-like mode and `pitLossModel` present |
+| `canShowQualifyingClassification` | qualifying-like mode and `qualifyingSummary` present |
+| `canFilterQualifyingLapStatus` | qualifying-like mode and `qualifyingLapStatus` present |
+| `canShowQualifyingTimeline` | qualifying-like mode and `qualifyingTimeline` present |
+
+## Nullable driver columns and compatibility
+
+Driver columns retain the nullable shape established by the frozen v1
+baseline, including
 `trackDistanceMeters`, `gapToLeaderMs`, `position`, and the optional browser-
 derived `isFinished` field. `isFinished` is a nullable boolean array when
 present; `true` marks a conservatively derived genuine completion, while
-`null` means that completion is unavailable. The field may be absent from old
-chunks, which remain valid and replayable. Consumers must not replace `null`
+`null` means that completion is unavailable. The field may be absent from a
+chunk; the guard normalizes absence to `null` and the chunk remains valid and
+replayable. Consumers must not replace `null`
 with zero, a previous value, a categorical guess, or a fabricated retirement.
 
 `lapStarts` is optional manifest navigation metadata. Each `{lap, startMs}`
@@ -82,17 +130,17 @@ loading telemetry chunks:
 ```json
 "timelineSummary": {
   "path": "timeline-summary.json",
-  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:timeline-summary",
   "sha256": "<64 lowercase hexadecimal characters>"
 }
 ```
 
-The referenced `timeline-summary.json` is a `v1` object whose bounds and
+The referenced `timeline-summary.json` is a `v2` object whose bounds and
 entries use absolute integer milliseconds:
 
 ```json
 {
-  "contractVersion": "v1",
+  "contractVersion": "v2",
   "fixtureId": "bahrain-2024",
   "startMs": 1000,
   "endMs": 2000,
@@ -115,6 +163,10 @@ entries use absolute integer milliseconds:
 - The summary contains no lap markers and no telemetry samples. It is optional:
   older deliveries and manifests without `timelineSummary` remain valid and
   loadable.
+- **Mode gating**: the summary is race-like-only (`race`, `sprint`). The
+  schema and browser guard reject it for `practice`, `testing`, and
+  qualifying-like modes, so no DNF marker can be published for a non-race
+  session.
 
 ### Optional lap/sector sidecar
 
@@ -125,30 +177,37 @@ records for every driver:
 ```json
 "lapSectorSidecar": {
   "path": "lap-sector-sidecar.json",
-  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar",
   "sha256": "<64 lowercase hexadecimal characters>"
 }
 ```
 
-The referenced `lap-sector-sidecar.json` is a `v1` object whose drivers map
+The referenced `lap-sector-sidecar.json` is a `v2` object whose drivers map
 to equal-length column arrays sorted by ascending lap number:
 
 ```json
 {
-  "contractVersion": "v1",
-  "fixtureId": "bahrain-2024",
+  "contractVersion": "v2",
+  "fixtureId": "monza-2026",
+  "phaseBoundaries": [
+    {"phase": "Q1", "startMs": 0},
+    {"phase": "Q2", "startMs": 480000},
+    {"phase": "Q3", "startMs": 960000}
+  ],
   "drivers": {
     "HAM": {
-      "lapNumber": [1, 2],
-      "lapStartMs": [1000, 78000],
-      "lapEndMs": [77000, 155000],
-      "lapDurationMs": [76000, 77000],
-      "sector1DurationMs": [25000, 26000],
-      "sector2DurationMs": [27000, 28000],
-      "sector3DurationMs": [24000, 23000],
-      "sector1SessionTimeMs": [1000, 78000],
-      "sector2SessionTimeMs": [26000, 104000],
-      "sector3SessionTimeMs": [53000, 132000]
+      "lapNumber": [1, 2, 3],
+      "lapStartMs": [1000, 78000, 155000],
+      "lapEndMs": [77000, 155000, 232000],
+      "lapDurationMs": [76000, 77000, 77000],
+      "sector1DurationMs": [25000, 26000, 25500],
+      "sector2DurationMs": [27000, 28000, 27500],
+      "sector3DurationMs": [24000, 23000, 24000],
+      "sector1SessionTimeMs": [1000, 78000, 155000],
+      "sector2SessionTimeMs": [26000, 104000, 182500],
+      "sector3SessionTimeMs": [53000, 132000, 209500],
+      "qualifyingPhase": ["Q1", "Q1", "Q2"],
+      "lapKind": ["flying", "unknown", "flying"]
     }
   }
 }
@@ -157,6 +216,12 @@ to equal-length column arrays sorted by ascending lap number:
 - Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`). Lap numbers
   are positive integers; `lapStartMs` and `lapEndMs` are non-nullable
   non-negative integers (absolute session time).
+- V2 sidecars are phase-aware: `phaseBoundaries` is a top-level array of
+  `{phase, startMs}` entries ordered by `startMs` (one entry per Q phase for
+  qualifying-like sessions; empty for non-qualifying sessions), and every
+  driver carries an aligned `qualifyingPhase` column whose values are `Q1`,
+  `Q2`, `Q3`, or `null` (`null` for non-qualifying sessions). Consumers use
+  these fields for phase-local finish and best-lap reasoning.
 - `lapDurationMs`, sector durations (`sector1DurationMs`–`sector3DurationMs`),
   and sector completion timestamps (`sector1SessionTimeMs`–
   `sector3SessionTimeMs`) are nullable. Nulls propagate from missing canonical
@@ -165,13 +230,32 @@ to equal-length column arrays sorted by ascending lap number:
   can reveal only sector records completed by the current replay time (causal
   completion). All timing values are integer milliseconds; no float seconds
   are used.
+- The optional `lapKind` column is aligned with the other per-driver columns
+  (same length, same order) and contains exactly one of `flying`, `outlap`,
+  `inlap`, or `unknown`. It is published for qualifying-like sessions when at
+  least one lap has a known kind. An absent column means the capability is
+  unavailable: for qualifying-like sidecars no lap may be treated as flying
+  (fail-closed), while non-qualifying sidecars keep the legacy all-laps
+  behavior.
+- `lapKind` derivation follows
+  [ADR-003](adr/003-qualifying-flying-lap-evidence-policy.md): the
+  authoritative pit signals (`pit_in_time_ms`/`pit_out_time_ms`) classify
+  outlaps and inlaps; a row with both signals present is `unknown`. Flying
+  candidates additionally require `is_accurate`, not `deleted`, a non-null
+  `lap_duration_ms`, all three sector durations and session timestamps, and
+  consistent duration evidence. The deterministic 107% quick-lap gate
+  (`pick_quicklaps()`, `QUICKLAP_THRESHOLD = 1.07`) is applied per Q phase as a
+  heuristic; ambiguous non-pit cooldown laps that survive the gate resolve to
+  `unknown` rather than being inferred from speed. `unknown` never contributes
+  timing and is distinct from `false` or `OUT`.
 - The sidecar duplicates no values present in telemetry chunks. It is a
   dedicated artifact produced alongside chunks without embedding lap or sector
   data into them.
 - Publication serializes the sidecar deterministically, verifies its SHA-256
   digest against the manifest reference, and validates both the JSON Schema
   (`browser-lap-sector-sidecar.schema.json`) and semantic contract rules
-  (fixture agreement, driver set identity).
+  (fixture agreement, driver set identity, phase-boundary ordering, and
+  `lapKind`/`qualifyingPhase` column alignment).
 - The reference is optional: older deliveries and manifests without
   `lapSectorSidecar` remain valid and loadable. Strict parsers must explicitly
   allow its absence.
@@ -185,17 +269,17 @@ pit-transition data:
 ```json
 "stintSummary": {
   "path": "stint-summary.json",
-  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:stint-summary",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:stint-summary",
   "sha256": "<64 lowercase hexadecimal characters>"
 }
 ```
 
-The referenced `stint-summary.json` is a `v1` object mapping every canonical
+The referenced `stint-summary.json` is a `v2` object mapping every canonical
 driver to equal-length column arrays sorted by ascending stint number:
 
 ```json
 {
-  "contractVersion": "v1",
+  "contractVersion": "v2",
   "fixtureId": "bahrain-2024",
   "drivers": {
     "VER": {
@@ -285,7 +369,7 @@ exactly one stint or the pipeline refuses to publish.
 The stint summary is an independent artifact produced alongside chunks and the
 lap/sector sidecar. Core replay chunks are unchanged. The manifest reference is
 optional: consumers must accept manifests without `stintSummary`. All existing
-v1 chunks, timeline summaries, sidecars, and navigation markers remain valid
+v2 chunks, timeline summaries, sidecars, and navigation markers remain valid
 and replayable.
 
 ### Optional pit-loss model
@@ -296,19 +380,19 @@ sparse causal pit-loss estimate artifact:
 ```json
 "pitLossModel": {
   "path": "pit-loss-model.json",
-  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model",
   "sha256": "<64 lowercase hexadecimal characters>"
 }
 ```
 
-The referenced `pit-loss-model.json` is a `v1` object using
+The referenced `pit-loss-model.json` is a `v2` object using
 `"global-prior-weighted-mean-v1"` — an uncalibrated deterministic global
 heuristic, not a track-calibrated model. It emits three aligned arrays,
 strictly increasing by `timeMs`:
 
 ```json
 {
-  "contractVersion": "v1",
+  "contractVersion": "v2",
   "fixtureId": "2024-sao-paulo-race",
   "method": "global-prior-weighted-mean-v1",
   "baselineMs": 22000,
@@ -365,7 +449,10 @@ panel, payload loader, or runtime snapshot is included.
 
 **Backward compatibility.** The `pitLossModel` manifest reference is
 optional. Existing deliveries, chunks, and manifests without it remain
-valid and loadable.
+valid and loadable. It is also race-like-only (`race`, `sprint`): the schema
+and browser guard reject `pitLossModel` for `practice`, `testing`, and
+qualifying-like modes, so no pit-loss estimate can be published for a
+non-race session.
 
 ### Optional issued-penalty sidecar
 
@@ -375,12 +462,12 @@ definitive race-control penalty issuances:
 ```json
 "penaltySidecar": {
   "path": "penalty-sidecar.json",
-  "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar",
   "sha256": "<64 lowercase hexadecimal characters>"
 }
 ```
 
-The referenced `penalty-sidecar.json` is a `v1` object containing
+The referenced `penalty-sidecar.json` is a `v2` object containing
 `penaltyIssuances`. Each issuance preserves the canonical driver ID, absolute
 `sessionTimeMs`, parsed `penaltyType`, normalized `reason`, raw race-control
 `rawMessage`, and optional `lapNumber`. Canonical rows with a null
@@ -408,8 +495,8 @@ source-lap-excluding. Holdout evidence uses native position samples capped at
 32 endpoint-inclusive points per lap. It fails closed for insufficient,
 malformed, or poor geometry: derived columns remain null and the stable
 classified-results fallback order is used. The quality assessment is currently
-internal `BrowserDeliveryBuild` provenance; it is not serialized in the v1
-manifest in this phase.
+internal `BrowserDeliveryBuild` provenance; it is not serialized in the
+browser manifest in this phase.
 
 Projection rules are metre centerline segment projection, 75 m maximum
 residual, one local branch for adjacent segments, and continuity-required
@@ -417,6 +504,56 @@ resolution for non-adjacent candidates within a 5 m residual difference.
 `geometric-wrap-v1` requires final/initial track ratios of 90%/10% and a
 minimum 80% circuit-length decrease, with at most one wrap per timing lap.
 Timing-lap boundaries and geometric origin may differ.
+
+### Optional qualifying summary
+
+V2 qualifying-like deliveries (`sessionMode` `qualifying`,
+`sprint-qualifying`, or `sprint-shootout`) may include a compact, optional
+`qualifyingSummary` manifest reference:
+
+```json
+"qualifyingSummary": {
+  "path": "qualifying-summary.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `qualifying-summary.json` is a `v2` object mapping every
+canonical driver to aligned column arrays:
+
+```json
+{
+  "contractVersion": "v2",
+  "fixtureId": "monza-2026",
+  "drivers": {
+    "HAM": {
+      "qualifyingPosition": [1],
+      "q1TimeMs": [null],
+      "q2TimeMs": [null],
+      "q3TimeMs": [90000],
+      "bestLapNumber": [3],
+      "bestLapTimeMs": [90000]
+    }
+  }
+}
+```
+
+- Every driver key is a canonical driver code (`^[A-Z0-9]{2,4}$`); column
+  arrays are equal length within a driver entry. Drivers without qualifying
+  rows publish empty aligned arrays.
+- `qualifyingPosition` is a nullable positive integer. `q1TimeMs`, `q2TimeMs`,
+  and `q3TimeMs` come from the canonical qualifying results and are nullable
+  non-negative integer milliseconds; a driver that did not take part in Q2 or
+  Q3 keeps the corresponding column null.
+- `bestLapNumber` and `bestLapTimeMs` are nullable and derived from the valid
+  canonical `laps`: the pipeline picks the minimum-duration lap whose
+  canonical `deleted` flag is not true and never invents a lap or time.
+- The reference is v2-only and qualifying-like-only. V1 manifests and v2
+  non-qualifying session modes reject `qualifyingSummary`. It is optional:
+  when absent, the browser disables the qualifying classification panel
+  (`canShowQualifyingClassification` is false) and older deliveries remain
+  valid and loadable. Strict parsers must explicitly allow its absence.
 
 ### Optional v2 qualifying lap-status sidecar
 
@@ -490,7 +627,10 @@ final reconciled lap state and the causal events that produced it:
 - FastF1 3.8.3 does not populate deletion through the structured
   `RacingNumber`/`Lap` columns, so the pipeline parses the raw race-control
   text (`TIME <m:ss.mmm> DELETED` and `... REINSTATED`). Reinstatement is
-  parsed because FastF1 can unmark laps through a look-ahead pass. The final
+  parsed because FastF1 can unmark laps through a look-ahead pass. FastF1's
+  2026 Chinese GP format also emits non-timed `CAR ... LAP DELETED ... LAP <n>
+  ...` advisories; these have no reported lap duration, create no causal event,
+  and do not override the authoritative final `laps.deleted` value. The final
   canonical `laps.deleted` column is authoritative and is never rewritten:
   without a replay boundary the reconciled event state must exactly equal it,
   and any contradiction fails closed.
@@ -515,14 +655,100 @@ final reconciled lap state and the causal events that produced it:
   state and the final status column.
 - The reference is v2-only and qualifying-like-only. V1 manifests reject
   `qualifyingLapStatus`, and v2 non-qualifying session modes reject it too.
-  The sidecar is published only when the race-control table contains an
-  explicit status marker; otherwise the reference is absent and older
-  deliveries remain valid and loadable. Strict parsers must explicitly allow
-  its absence.
-- **Scope**: Python-only. Canonical Parquet, v1 chunks, and v1 contracts
-  remain frozen and unchanged, and this artifact embeds nothing into chunk
-  payloads. No web implementation is included; the sidecar exists to drive
-  historical lap invalidation in a later web integration.
+  The sidecar is published only when the race-control table contains
+  actionable timed status evidence. Non-timed `LAP DELETED` advisories do not
+  trigger publication; otherwise the reference is absent and older deliveries
+  remain valid and loadable. Strict parsers must explicitly allow its absence.
+- **Scope**: v2-only, qualifying-like-only, and web-consumed. The browser
+  loads the sidecar through `browser-delivery-v2` pointers and applies it
+  causally to lap/sector timing, session and personal bests, and candidate
+  filtering. The artifact embeds nothing into chunk payloads; canonical
+  Parquet and the frozen v1 baseline remain unchanged.
+- **Unknown handling**: `selectQualifyingLapStatus` returns `null` (unknown)
+  for a driver or lap with no published record, which is distinct from
+  `valid`. When the sidecar is present, a lap contributes timing, sectors, and
+  bests only while its causal status is `valid` — deleted laps are hidden
+  until a `reinstated` event restores them, and unknown laps are omitted from
+  candidate filtering. When the sidecar is absent, the browser applies no
+  invalidation filtering: absence means no invalidation is known, not that
+  every lap is valid.
+
+### Optional qualifying timeline and incident markers
+
+V2 qualifying-like deliveries (`sessionMode` `qualifying`,
+`sprint-qualifying`, or `sprint-shootout`) may include a compact, optional
+`qualifyingTimeline` manifest reference to a qualifying-safe track-status and
+incident artifact:
+
+```json
+"qualifyingTimeline": {
+  "path": "qualifying-timeline.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `qualifying-timeline.json` is a `v2` object carrying bounded
+half-open yellow/red track-status intervals plus separate qualifying incident
+markers:
+
+```json
+{
+  "contractVersion": "v2",
+  "fixtureId": "monza-2026",
+  "startMs": 0,
+  "endMs": 1200000,
+  "intervals": [
+    {"kind": "yellow", "startMs": 120000, "endMs": 145000},
+    {"kind": "red", "startMs": 600000, "endMs": 720000}
+  ],
+  "incidentMarkers": [
+    {
+      "driverId": "PER",
+      "timeMs": 612000,
+      "source": "race-control-car-event",
+      "rawMessage": "CAR 11 STOPS",
+      "lapNumber": 4
+    }
+  ]
+}
+```
+
+- `intervals` and `incidentMarkers` are both required keys; each may be an
+  empty array. The artifact is omitted entirely when there is nothing to
+  publish.
+- Intervals are half-open `[startMs, endMs)` and must fit within the artifact
+  bounds. Only `yellow` and `red` kinds are published in this revision;
+  SC/VSC equivalents are intentionally not exposed.
+- Incident markers are visibility-only records: `driverId` is a canonical
+  driver code, `timeMs` is an absolute marker time inside the artifact bounds,
+  `source` is always `race-control-car-event`, `rawMessage` is the original
+  race-control text (for example `CAR 16 CRASH` or `CAR 44 STOPS`), and
+  `lapNumber` is optional.
+- An incident marker records an on-track incident/terminal event for track-map
+  marker hiding. It is **not** a race `OUT`/DNF marker and does **not** change
+  the driver's qualifying classification: the driver remains in the
+  classification table unless the existing qualifying elimination rules hide
+  the row. It is also distinct from `PositionData` `OffTrack`, which FastF1
+  backfills for missing samples and is not a retirement signal.
+- Causal UI interpretation: a marker is effective when `timeMs <= replayTimeMs`
+  and an interval is active while the cursor is inside `[startMs, endMs)`.
+  Playback and arbitrary seeks use the same comparisons.
+- Deterministic ordering: intervals are ordered by `startMs`, `endMs`, then
+  `kind`; markers by `timeMs`, then `driverId`, then `rawMessage`. Publication
+  serializes the artifact deterministically, and the loader verifies its
+  SHA-256 digest against the manifest reference before schema, semantic,
+  ordering, and driver-identity validation (every marker `driverId` must be a
+  manifest driver).
+- Mode gating: the reference is v2-only and qualifying-like-only. The manifest
+  schema and browser guard reject `qualifyingTimeline` for `race`, `practice`,
+  `sprint`, and `testing` sessions. When present, `canShowQualifyingTimeline`
+  is true: the playback timeline renders the intervals, and the track map
+  hides markers for incidented drivers.
+- Absence compatibility: the reference is optional. Older deliveries and
+  manifests without `qualifyingTimeline` remain valid and loadable. Absence
+  means fail-closed — no interval rendering and no incident-marker hiding —
+  never that "no incident occurred".
 
 ## Derived ranking and status semantics
 
@@ -543,6 +769,32 @@ final reconciled lap state and the causal events that produced it:
 Gap is the current leader's equivalent-progress crossing time with linear time
 interpolation through leader history. There is no constant-speed heuristic. The
 leader gap is zero; gaps are null when leader history is insufficient.
+
+## Non-race sessions
+
+Practice, qualifying-like, and testing sessions are not races and must never be
+interpreted as one:
+
+- There is no race start or race-order claim. Delivery starts at the earliest
+  published lap start (the first chunk boundary), and elapsed time is
+  session-relative.
+- The browser disables race-order controls (`canShowRaceOrder` is false) for
+  every non-race mode. Race-only artifacts (`timelineSummary` with its DNF
+  markers, `pitLossModel`) are rejected by the schema and browser guard, so no
+  DNF marker or pit-loss estimate can be published for these modes.
+- Consumers must not read qualifying/practice telemetry, lap times, or sector
+  data as race gaps or finish order. Competition in qualifying-like sessions is
+  expressed by `qualifyingSummary` (classification), `qualifyingLapStatus`
+  (deleted/reinstated lap causality), and `qualifyingTimeline` (yellow/red
+  track-status intervals plus incident markers for map hiding), never by race
+  gaps.
+- `qualifyingTimeline` incident markers are visibility-only: they hide the
+  track-map marker for an incidented driver but never change classification,
+  never imply `OUT`/DNF, and are distinct from `PositionData` `OffTrack`
+  (FastF1 backfills `OffTrack` for missing samples and it is not a retirement
+  signal).
+- `isFinished` and terminal-status inference are race semantics and are never
+  fabricated for non-race sessions.
 
 ## Runtime interpretation
 
@@ -581,10 +833,33 @@ uses `PIT` from `isInPitLane`, raw exact status, and explicit unavailable
 markers. Finished is not `OUT`; stale or later `OffTrack` telemetry must not
 displace a finished driver or lower a finished leader from P1.
 
+## V1 frozen baseline and catalog cutover
+
+V1 (`browser-delivery-v1`) is the frozen Phase 0 baseline. Its committed
+fixtures remain in the repository as historical reference fixtures; they are
+never upgraded in place and are excluded from the active catalog.
+
+The active catalog is v2-only:
+
+- The catalog must be `schemaVersion 2`, every canonical pointer must be
+  `canonical-parquet-v2`, and every browser pointer must be
+  `browser-delivery-v2`. V1 or mixed-version pointers and manifests are
+  rejected.
+- Before the active-catalog cutover, **every** catalog race must be republished
+  as v2 (canonical and browser). The migration refuses to activate a v1
+  catalog: canonical and browser v1 artifacts are deprecated, and the catalog
+  is switched only after all catalog races are republished as v2. Historical
+  v1 artifacts are intentionally not upgraded in place.
+- The web reader enforces the same rule: `parsePointer` and `parseManifest`
+  require `formatVersion` `browser-delivery-v2` and `contractVersion` `v2`,
+  and v2 manifests must reference v2 artifact schemas only (never `:v1:`).
+
 ## Current limitations
 
 The one-race Bahrain calibration is provisional pending a multi-circuit corpus.
 Gap results depend on available leader history. Finish timing is inferred only
 after the final position sample and requires both completion evidence and
 completed-lap data. These limits do not invalidate legacy chunks that omit the
-optional `isFinished` field.
+optional `isFinished` field. The committed deterministic fixture exercises the
+race path; qualifying-like artifacts are validated against the v2 schemas and
+browser guards rather than a committed fixture.
