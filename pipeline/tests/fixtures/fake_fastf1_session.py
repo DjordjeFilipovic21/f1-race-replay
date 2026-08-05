@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,22 @@ _DRIVERS = {
         "TeamColor": "3671C6",
     },
 }
+
+WeatherSessionScenario = Literal[
+    "normal_sparse",
+    "no_weather",
+    "partial_null",
+    "zero_sentinel",
+    "old_delivery_no_sidecar",
+]
+
+WEATHER_SESSION_SCENARIOS: tuple[WeatherSessionScenario, ...] = (
+    "normal_sparse",
+    "no_weather",
+    "partial_null",
+    "zero_sentinel",
+    "old_delivery_no_sidecar",
+)
 
 
 @dataclass
@@ -167,6 +183,41 @@ def build_2026_session_with_default_drs() -> FakeFastF1Session:
     }
     _set_tables(session, tables)
     return session
+
+
+def build_weather_session(scenario: WeatherSessionScenario = "normal_sparse") -> FakeFastF1Session:
+    """Build a complete FastF1-shaped session with a named weather scenario.
+
+    These scenarios change only ``weather_data``; the existing complete session
+    remains the default fixture so unrelated adapter tests keep their history.
+    """
+    if scenario not in WEATHER_SESSION_SCENARIOS:
+        raise ValueError(f"unknown weather session scenario: {scenario}")
+    session = _new_session()
+    tables = _complete_tables()
+    tables["weather_data"] = _weather_table(scenario)
+    _set_tables(session, tables)
+    return session
+
+
+def build_normal_sparse_weather_session() -> FakeFastF1Session:
+    """Build complete weather observations at deterministic one-minute steps."""
+    return build_weather_session("normal_sparse")
+
+
+def build_no_weather_session() -> FakeFastF1Session:
+    """Build a typed empty weather table for a session without weather data."""
+    return build_weather_session("no_weather")
+
+
+def build_partial_weather_session() -> FakeFastF1Session:
+    """Build weather rows whose nullable channels are independently incomplete."""
+    return build_weather_session("partial_null")
+
+
+def build_zero_sentinel_weather_session() -> FakeFastF1Session:
+    """Build uncorroborated and corroborated FastF1 zero-sentinel rows."""
+    return build_weather_session("zero_sentinel")
 
 
 def build_empty_session() -> FakeFastF1Session:
@@ -455,6 +506,77 @@ def _complete_tables() -> dict[str, Any]:
             }
         ),
     }
+
+
+def _weather_table(scenario: WeatherSessionScenario) -> pd.DataFrame:
+    if scenario in {"no_weather", "old_delivery_no_sidecar"}:
+        return pd.DataFrame({
+            "Time": pd.Series(dtype="timedelta64[ns]"),
+            "AirTemp": pd.Series(dtype="float64"),
+            "Humidity": pd.Series(dtype="float64"),
+            "Pressure": pd.Series(dtype="float64"),
+            "Rainfall": pd.Series(dtype="boolean"),
+            "TrackTemp": pd.Series(dtype="float64"),
+            "WindDirection": pd.Series(dtype="int64"),
+            "WindSpeed": pd.Series(dtype="float64"),
+        })
+    if scenario == "partial_null":
+        rows = [
+            _fastf1_weather_row(
+                0, AirTemp=21.0, Rainfall=False,
+            ),
+            _fastf1_weather_row(
+                60_000, Humidity=55.0, WindSpeed=2.5,
+            ),
+            _fastf1_weather_row(
+                120_000, Pressure=1012.0, TrackTemp=34.0,
+            ),
+        ]
+    elif scenario == "zero_sentinel":
+        rows = [
+            _fastf1_weather_row(
+                0, AirTemp=0.0, Humidity=0.0, Pressure=0.0, Rainfall=False,
+                TrackTemp=0.0, WindDirection=0, WindSpeed=0.0,
+            ),
+            _fastf1_weather_row(
+                60_000, AirTemp=22.0, Humidity=0.0, Pressure=1012.0, Rainfall=False,
+                TrackTemp=34.0, WindDirection=0, WindSpeed=0.0,
+            ),
+        ]
+    else:
+        rows = [
+            _fastf1_weather_row(
+                0, AirTemp=21.0, Humidity=50.0, Pressure=1013.0, Rainfall=False,
+                TrackTemp=35.0, WindDirection=90, WindSpeed=2.5,
+            ),
+            _fastf1_weather_row(
+                60_000, AirTemp=22.0, Humidity=51.0, Pressure=1012.0, Rainfall=True,
+                TrackTemp=36.0, WindDirection=270, WindSpeed=3.0,
+            ),
+            _fastf1_weather_row(
+                120_000, AirTemp=22.5, Humidity=52.0, Pressure=1012.0, Rainfall=False,
+                TrackTemp=37.0, WindDirection=280, WindSpeed=3.2,
+            ),
+        ]
+    return pd.DataFrame(rows, columns=[
+        "Time", "AirTemp", "Humidity", "Pressure", "Rainfall", "TrackTemp",
+        "WindDirection", "WindSpeed",
+    ])
+
+
+def _fastf1_weather_row(session_time_ms: int, **changes: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "Time": pd.Timedelta(session_time_ms, unit="ms"),
+        "AirTemp": pd.NA,
+        "Humidity": pd.NA,
+        "Pressure": pd.NA,
+        "Rainfall": pd.NA,
+        "TrackTemp": pd.NA,
+        "WindDirection": pd.NA,
+        "WindSpeed": pd.NA,
+    }
+    row.update(changes)
+    return row
 
 
 def _empty_tables() -> dict[str, Any]:

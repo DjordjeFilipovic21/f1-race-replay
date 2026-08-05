@@ -60,11 +60,12 @@ vi.mock('@dnd-kit/react/sortable', () => ({
 }))
 
 import { animateReplayPanelFlip, computeReplayPanelFlipKeyframes, ReplayWorkspace, type ReplayWorkspacePanel } from '../../../../src/features/replay/workspace/ReplayWorkspace'
-import type { ReplayWorkspaceStorage } from '../../../../src/features/replay/workspace/replay-workspace-preferences'
+import { REPLAY_WORKSPACE_PREFERENCES_STORAGE_KEY, type ReplayWorkspaceStorage } from '../../../../src/features/replay/workspace/replay-workspace-preferences'
 
 const appWorkspaceStyles = readFileSync(resolve(process.cwd(), 'src/styles/app-workspace.css'), 'utf8')
 const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8')
 const trackMapStyles = readFileSync(resolve(process.cwd(), 'src/styles/track-map.css'), 'utf8')
+const panelStyles = readFileSync(resolve(process.cwd(), 'src/styles/panels.css'), 'utf8')
 
 const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'player', label: 'Player', columns: 1, element: <p>Player content</p> },
@@ -72,6 +73,12 @@ const panels: readonly ReplayWorkspacePanel[] = [
   { id: 'leaderboard', label: 'Leaderboard', columns: 1, element: <p>Leaderboard content</p> },
   { id: 'driver', label: 'Driver', columns: 1, element: <p>Driver content</p> },
   { id: 'telemetry', label: 'Telemetry', columns: 1, element: <p>Telemetry content</p> },
+]
+
+/** The workspace fixture extended with the registered weather panel. */
+const panelsWithWeather: readonly ReplayWorkspacePanel[] = [
+  ...panels,
+  { id: 'weather', label: 'Weather', columns: 1, element: <p>Weather content</p> },
 ]
 
 afterEach(() => {
@@ -623,7 +630,7 @@ test('collapses only locked drag chrome while retaining semantic panel content',
 })
 
 test('swaps drag chrome for internal gradient headers across workspace modes', () => {
-  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header)'
+  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header, .weather-panel__header)'
   const unlockedHeaderScope = ":is(.replay-workspace, .replay-panel-drag-snapshot)[data-workspace-mode='unlocked']"
 
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)
@@ -981,6 +988,88 @@ test('recomputes the active drop preview when the workspace breakpoint changes',
   expect(tabletPreview?.style.getPropertyValue('--replay-preview-column')).toBe('2')
 })
 
+test('recognizes the weather panel and renders it with the registered panels', () => {
+  // Arrange - workspace extended with the registered weather panel.
+  render(<ReplayWorkspace panels={panelsWithWeather} />)
+
+  // Act - read the rendered panel frames.
+
+  // Assert - weather is recognized and placed at its default first-lane slot.
+  expect(screen.getByRole('region', { name: 'Weather' })).toBeTruthy()
+  expect(screen.getByText('Weather content')).toBeTruthy()
+  expect(workspacePanelLabels()).toEqual(['Weather', 'Track map', 'Player', 'Leaderboard', 'Driver', 'Telemetry'])
+})
+
+test('places the weather panel at its deterministic default desktop lane', () => {
+  // Arrange - default workspace with the weather panel registered.
+  render(<ReplayWorkspace panels={panelsWithWeather} />)
+
+  // Act - resolve the responsive column slots from the default desktop placement.
+
+  // Assert - weather lands on desktop lane 4 and tablet lane 2 without disturbing others.
+  const weather = screen.getByRole('region', { name: 'Weather' })
+  expect(weather.style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
+  expect(weather.style.getPropertyValue('--replay-panel-tablet-column')).toBe('2')
+  expect(screen.getByRole('region', { name: 'Telemetry' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('2')
+})
+
+test('pins and unpins the weather panel without affecting other panels', () => {
+  // Arrange - workspace with the weather panel registered.
+  render(<ReplayWorkspace panels={panelsWithWeather} />)
+
+  // Act - unpin weather from its frame, then re-pin it from Panel Manager.
+  fireEvent.click(screen.getByRole('button', { name: 'Unpin Weather panel' }))
+  expect(screen.queryByRole('region', { name: 'Weather' })).toBeNull()
+  expect(screen.getByRole('region', { name: 'Track map' })).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Telemetry' })).toBeTruthy()
+  expect(screen.getByText('5/6 panels')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  const manager = screen.getByRole('dialog', { name: 'Panel Manager' })
+  const pinWeather = within(manager).getByRole('button', { name: 'Pin Weather panel' })
+  expect(pinWeather.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(pinWeather)
+
+  // Assert - weather returns and the panel count reflects every panel again.
+  expect(screen.getByRole('region', { name: 'Weather' })).toBeTruthy()
+  expect(screen.getByText('6/6 panels')).toBeTruthy()
+})
+
+test('reconciles persisted layouts that predate the weather panel', () => {
+  // Arrange - a stored custom layout saved before weather existed (player on lane 1).
+  const storage = memoryStorage(JSON.stringify({
+    version: 1,
+    layout: [
+      { id: 'player', pinned: true, desktopColumnStart: 1 },
+      { id: 'track-map', pinned: true, desktopColumnStart: 2 },
+    ],
+    mode: 'unlocked',
+  }))
+
+  // Act - load the workspace with the weather panel now registered.
+  render(<ReplayWorkspace panels={panelsWithWeather} storage={storage} />)
+
+  // Assert - weather joins the layout at its default slot while saved choices survive.
+  expect(workspacePanelLabels()).toEqual(['Player', 'Track map', 'Weather', 'Leaderboard', 'Driver', 'Telemetry'])
+  expect(screen.getByRole('region', { name: 'Player' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('1')
+  expect(screen.getByRole('region', { name: 'Weather' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
+})
+
+test('keeps the weather panel responsive at the required breakpoints', () => {
+  // Arrange - extract the mobile-first and tablet weather layout rules.
+  const baseLayoutRule = panelStyles.match(/\.weather-panel__layout\s*\{([^}]*)\}/)?.[1] ?? ''
+  const tabletLayoutRule = responsiveStyles.match(/@media \(min-width: 768px\) \{[\s\S]*?\.weather-panel__layout\s*\{([^}]*)\}/)?.[1] ?? ''
+  const tabletMetricsRule = responsiveStyles.match(/@media \(min-width: 768px\) \{[\s\S]*?\.weather-panel__metrics\s*\{([^}]*)\}/)?.[1] ?? ''
+
+  // Act - inspect the declarations used by the shared workspace breakpoints.
+
+  // Assert - mobile stacks the weather regions and tablet widens them for a readable layout.
+  expect(baseLayoutRule).toContain('grid-template-columns: minmax(0, 1fr)')
+  expect(tabletLayoutRule).toContain('grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.45fr)')
+  expect(tabletMetricsRule).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
+  expect(panelStyles).toContain('.weather-panel { background: #101316')
+})
+
 function setViewportWidth(width: number): void {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width, writable: true })
 }
@@ -990,8 +1079,9 @@ function restorePrototypeDescriptor(target: object, property: PropertyKey, descr
   else Object.defineProperty(target, property, descriptor)
 }
 
-function memoryStorage(): ReplayWorkspaceStorage {
+function memoryStorage(seed?: string): ReplayWorkspaceStorage {
   const values = new Map<string, string>()
+  if (seed !== undefined) values.set(REPLAY_WORKSPACE_PREFERENCES_STORAGE_KEY, seed)
   return {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => { values.set(key, value) },

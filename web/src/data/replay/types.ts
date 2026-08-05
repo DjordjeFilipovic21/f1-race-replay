@@ -3,6 +3,19 @@ export interface JsonArray extends ReadonlyArray<JsonValue> {}
 export interface JsonObject { readonly [key: string]: JsonValue }
 export type JsonValue = JsonPrimitive | JsonArray | JsonObject
 
+type ManifestSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:manifest'
+type ChunkSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:chunk'
+type TrackAssetsSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:track-assets'
+type TimelineSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:timeline-summary'
+type LapSectorSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar'
+type StintSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:stint-summary'
+type PitLossSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model'
+type PenaltySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar'
+type QualifyingSummarySchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary'
+type QualifyingLapStatusSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status'
+type QualifyingTimelineSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline'
+type WeatherSidecarSchemaId = 'urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar'
+
 export interface ReplaySource {
   readonly read: (path: string) => Promise<Uint8Array>
 }
@@ -69,6 +82,12 @@ export interface PenaltySidecarReference extends ArtifactReference {
   readonly sha256: string
 }
 
+export interface WeatherSidecarReference extends ArtifactReference {
+  readonly path: 'weather-sidecar.json'
+  readonly schemaId: 'urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar'
+  readonly sha256: string
+}
+
 export interface LapSectorDriverColumns {
   readonly lapNumber: readonly number[]
   readonly lapStartMs: readonly number[]
@@ -80,20 +99,13 @@ export interface LapSectorDriverColumns {
   readonly sector1SessionTimeMs: readonly (number | null)[]
   readonly sector2SessionTimeMs: readonly (number | null)[]
   readonly sector3SessionTimeMs: readonly (number | null)[]
-  /** Present and aligned with lapNumber in V2 sidecars; absent in V1 sidecars. */
+  /** Present and aligned with lapNumber in every V2 sidecar. */
   readonly qualifyingPhase?: readonly (QualifyingPhase | null)[]
   /** Optional aligned lap classification; absent means the capability is unavailable (fail closed). */
   readonly lapKind?: readonly LapKind[]
 }
 
-export interface LapSectorSidecarV1 {
-  readonly contractVersion: 'v1'
-  readonly fixtureId: string
-  readonly phaseBoundaries?: never
-  readonly drivers: Readonly<Record<string, LapSectorDriverColumns>>
-}
-
-export interface LapSectorSidecarV2 {
+export interface LapSectorSidecar {
   readonly contractVersion: 'v2'
   readonly fixtureId: string
   readonly phaseBoundaries: readonly QualifyingPhaseBoundary[]
@@ -101,8 +113,6 @@ export interface LapSectorSidecarV2 {
     readonly qualifyingPhase: readonly (QualifyingPhase | null)[]
   }>>
 }
-
-export type LapSectorSidecar = LapSectorSidecarV1 | LapSectorSidecarV2
 
 export interface StintDriverColumns {
   readonly stintNumber: readonly number[]
@@ -257,6 +267,19 @@ export interface QualifyingSummary {
   readonly drivers: Readonly<Record<string, QualifyingDriverColumns>>
 }
 
+export interface WeatherSidecar {
+  readonly contractVersion: 'v2'
+  readonly fixtureId: string
+  readonly timeMs: readonly number[]
+  readonly airTempC: readonly (number | null)[]
+  readonly humidityPct: readonly (number | null)[]
+  readonly pressureMbar: readonly (number | null)[]
+  readonly rainfall: readonly (boolean | null)[]
+  readonly trackTempC: readonly (number | null)[]
+  readonly windDirectionDeg: readonly (number | null)[]
+  readonly windSpeedMps: readonly (number | null)[]
+}
+
 export interface ChunkReference extends ArtifactReference {
   readonly sequence: number
   readonly startMs: number
@@ -296,7 +319,20 @@ export interface ReplayManifest {
   readonly sessionMode: SessionMode
   readonly fixtureId: string
   readonly fixtureName: string
-  readonly schemas: Readonly<{ readonly manifest: string; readonly chunk: string; readonly trackAssets: string }>
+  readonly schemas: Readonly<{
+    readonly manifest: ManifestSchemaId
+    readonly chunk: ChunkSchemaId
+    readonly trackAssets: TrackAssetsSchemaId
+    readonly timelineSummary?: TimelineSummarySchemaId
+    readonly lapSectorSidecar?: LapSectorSchemaId
+    readonly stintSummary?: StintSummarySchemaId
+    readonly pitLossModel?: PitLossSchemaId
+    readonly penaltySidecar?: PenaltySchemaId
+    readonly qualifyingSummary?: QualifyingSummarySchemaId
+    readonly qualifyingLapStatus?: QualifyingLapStatusSchemaId
+    readonly qualifyingTimeline?: QualifyingTimelineSchemaId
+    readonly weatherSidecar?: WeatherSidecarSchemaId
+  }>
   readonly trackAssets: ArtifactReference
   readonly seasonMetadata?: SeasonMetadata
   readonly telemetryCapabilities?: TelemetryCapabilities
@@ -308,6 +344,7 @@ export interface ReplayManifest {
   readonly qualifyingSummary?: QualifyingSummaryReference
   readonly qualifyingLapStatus?: QualifyingLapStatusReference
   readonly qualifyingTimeline?: QualifyingTimelineReference
+  readonly weatherSidecar?: WeatherSidecarReference
   readonly chunks: readonly ChunkReference[]
   readonly drivers: readonly DriverMetadata[]
   readonly lapStarts?: readonly LapStart[]
@@ -359,7 +396,7 @@ export interface TrackAssets {
   readonly drsZones?: readonly DrsZone[]
 }
 
-/** Nullable derived columns preserve v1 null-only browser generations. */
+/** Nullable derived columns preserve unavailable source evidence. */
 export type DerivedDistanceMeters = number | null
 export type DerivedGapToLeaderMs = number | null
 export type DerivedPosition = number | null
@@ -367,16 +404,16 @@ export type DerivedPosition = number | null
 export interface DriverColumns {
   readonly x: readonly (number | null)[]; readonly y: readonly (number | null)[]
   readonly trackDistanceMeters: readonly DerivedDistanceMeters[]; readonly speed: readonly (number | null)[]
-  /** Optional in the frozen v1 payload; guards expose legacy absence as nulls. */
+  /** Optional when the source does not publish RPM samples. */
   readonly rpm?: readonly (number | null)[]
   readonly throttle: readonly (number | null)[]; readonly brake: readonly (number | null)[]
   readonly gapToLeaderMs: readonly DerivedGapToLeaderMs[]; readonly lap: readonly (number | null)[]
   readonly position: readonly DerivedPosition[]; readonly gear: readonly (number | null)[]
   readonly drs: readonly (number | null)[]; readonly tyreCompound: readonly (string | null)[]
-  /** Optional in v1 payloads; legacy chunks are normalized to nullable values by the guard. */
+  /** Optional when tyre-age samples are unavailable. */
   readonly tyreAge?: readonly (number | null)[]
   readonly status: readonly (string | null)[]; readonly isInPitLane: readonly (boolean | null)[]
-  /** Optional in v1 payloads; legacy chunks are normalized to nullable values by the guard. */
+  /** Optional when finish-state samples are unavailable. */
   readonly isFinished?: readonly (boolean | null)[]
 }
 
@@ -427,6 +464,7 @@ export interface ReplayData {
   readonly qualifyingSummary?: QualifyingSummary
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
   readonly qualifyingTimeline?: QualifyingTimeline
+  readonly weatherSidecar?: WeatherSidecar
   readonly chunks: readonly ReplayChunk[]
 }
 
@@ -444,6 +482,7 @@ export interface ReplayIndex {
   readonly qualifyingSummary?: QualifyingSummary
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
   readonly qualifyingTimeline?: QualifyingTimeline
+  readonly weatherSidecar?: WeatherSidecar
   readonly loadChunk: (sequence: number) => Promise<ReplayChunk>
   readonly loadAllChunks: (concurrency?: number) => Promise<readonly ReplayChunk[]>
 }

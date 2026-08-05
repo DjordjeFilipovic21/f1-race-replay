@@ -203,7 +203,42 @@ See [Replay Data Contract — Optional stint summary](replay-data-contract.md#op
 for the full contract including pit-mapping semantics, null rules, and
 fail-closed guarantees.
 
-## 9. Optional pit-loss model
+## 9. Optional weather sidecar
+
+Weather is delivered as an independent optional artifact. The manifest may
+carry a `weatherSidecar` reference (`path`, `schemaId`, `sha256`) pointing to
+`weather-sidecar.json` with schema ID
+`urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar`. The payload uses
+the exact v1 names `contractVersion`, `fixtureId`, `timeMs`, `airTempC`,
+`humidityPct`, `pressureMbar`, `rainfall`, `trackTempC`, `windDirectionDeg`,
+and `windSpeedMps`; all measurement arrays are nullable and aligned to native
+canonical weather rows.
+
+The sidecar retains native sparse cadence and absolute integer milliseconds.
+It is never resampled, interpolated, forward-filled, or populated by a future
+sample. A weather panel uses the latest observation at or before the replay
+cursor; observations more than 90,000 ms old, rows with no surviving
+measurement, pre-first-sample time, and a missing manifest reference all
+render the same fail-closed unavailable state. Wind direction is the
+meteorological from-direction in degrees; the v1 UI may show a cautious
+from-direction arrow, but the payload does not encode a flow-toward transform.
+
+The producer applies ADR-003's FastF1 zero-sentinel audit before publication.
+Sentinel-prone zeros become null, while genuine-zero-capable values require
+row corroboration. Explicit FastF1 rainfall `false` remains its dry/unknown
+source limitation; canonical or adapted rainfall `null` remains null and
+renders unavailable. This does not alter canonical Parquet. Deterministic JSON, aligned/strictly ordered
+arrays, schema validation, fixture identity, and SHA-256 verification remain
+publication-boundary checks. See [Replay Data Contract — Optional weather
+sidecar](replay-data-contract.md#optional-weather-sidecar) and
+[ADR-003](adr/003-weather-sidecar-and-replay-panel.md) for the complete policy.
+
+**Backward compatibility:** core chunks and `browser-delivery-v1` are
+unchanged. Strict consumers must allow manifests without `weatherSidecar`;
+old generations remain valid and replayable and simply show weather as
+unavailable.
+
+## 10. Optional pit-loss model
 
 A compact optional pit-loss model artifact enables future frontend
 after-pit position prediction without embedding arrays into replay chunks:
@@ -229,7 +264,7 @@ See [Replay Data Contract — Optional pit-loss model](replay-data-contract.md#o
 for the full contract including placeholder semantics, refinement rules,
 eligibility criteria, and causal availability.
 
-## 10. Optional issued-penalty sidecar
+## 11. Optional issued-penalty sidecar
 
 The manifest may carry a `penaltySidecar` reference (`path`, `schemaId`, and
 `sha256`) pointing to `penalty-sidecar.json`. The sidecar contains definitive

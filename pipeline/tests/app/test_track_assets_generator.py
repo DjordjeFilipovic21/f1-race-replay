@@ -14,10 +14,10 @@ from f1_replay_pipeline.app.track_assets_generator import (
 )
 
 
-SCHEMA = Path(__file__).resolve().parents[3] / "contracts/replay-data/v1/schemas/track-assets.schema.json"
+SCHEMA = Path(__file__).resolve().parents[3] / "contracts/replay-data/v2/schemas/track-assets.schema.json"
 
 
-def test_generator_selects_fastest_accurate_non_pit_lap_and_validates_against_v1_schema():
+def test_generator_selects_fastest_accurate_non_pit_lap_and_validates_against_v2_schema():
     snapshot = _snapshot()
 
     first = generate_track_assets(snapshot, centerline_points=8, visual_track_width_m=20.0)
@@ -25,7 +25,7 @@ def test_generator_selects_fastest_accurate_non_pit_lap_and_validates_against_v1
 
     Draft202012Validator(json.loads(SCHEMA.read_text())).validate(first)
     assert first == second
-    assert first["trackId"] == "2024-bahrain-race-telemetry-layout-v1"
+    assert first["trackId"] == "2024-bahrain-race-telemetry-layout-v2"
     assert first["centerLine"][0] == {"x": 100.0, "y": 0.0}
     assert len(first["centerLine"]) == len(first["innerBoundary"]) == len(first["outerBoundary"]) == 9
     assert first["centerLine"][0] == first["centerLine"][-1]

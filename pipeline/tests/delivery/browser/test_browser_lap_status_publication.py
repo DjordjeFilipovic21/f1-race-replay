@@ -8,8 +8,7 @@ Covers:
   - mode gating: non-qualifying sessions omit the artifact and add no
     unexpected manifest reference; qualifying sessions without deletion
     messages or with incomplete inputs fail closed
-  - V1 regression preservation: committed fixtures, golden snapshots, chunks,
-    and manifest validation remain unchanged and reject the new V2 keys
+  - v2 schema validation of the complete publication
 
 No network access and no web imports: all fixtures are synthetic, in-memory
 Polars frames and publication targets under ``tmp_path``.
@@ -57,18 +56,11 @@ from f1_replay_pipeline.domain.session_modes import SessionMode
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1" / "schemas"
-SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
-FIXTURE_ROOT = (
-    REPO_ROOT / "contracts" / "replay-data" / "v1" / "fixtures" / "deterministic-race"
-)
-
-_V1_SCHEMA_NAMES = (
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT_V2 = SCHEMA_ROOT
+_V2_SCHEMA_NAMES = (
     "manifest", "chunk", "track-assets", "timeline-summary",
     "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
-)
-_V2_SCHEMA_NAMES = (
-    *_V1_SCHEMA_NAMES,
     "qualifying-summary", "browser-qualifying-lap-status",
 )
 
@@ -100,7 +92,7 @@ def _track_assets() -> dict[str, object]:
         point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0},
     )
     return {
-        "contractVersion": "v1", "fixtureId": _FIXTURE_ID,
+        "contractVersion": "v2", "fixtureId": _FIXTURE_ID,
         "trackId": "monza", "trackName": "Monza",
         "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
@@ -254,7 +246,6 @@ def _snapshot(
 def _delivery(
     session_mode: str = "qualifying",
     *,
-    contract_version: Literal["v1", "v2"] = "v2",
     qualifying_lap_status_sidecar: BrowserQualifyingLapStatusSidecar | None = None,
     include_race_control: bool = True,
     messages: Literal["lap_status", "unrelated"] = "lap_status",
@@ -262,11 +253,8 @@ def _delivery(
     """Build one immutable delivery for qualifying-like publication tests."""
     manifest = BrowserManifest(
         _FIXTURE_ID, "Italian Grand Prix Qualifying", _driver_metadata(),
-        session_mode=cast(
-            SessionMode | None,
-            session_mode if contract_version == "v2" else None,
-        ),
-        contract_version=contract_version,
+        session_mode=cast(SessionMode, session_mode),
+        contract_version="v2",
     )
     return BrowserDeliveryBuild(
         _snapshot(
@@ -300,16 +288,13 @@ def _record_for(driver_id: str) -> BrowserQualifyingLapStatusRecord:
 
 def _publish(
     browser: Path, delivery: BrowserDeliveryBuild,
-    *,
-    contract_version: Literal["v1", "v2"] = "v2",
 ) -> PublishedBrowserDelivery:
-    schema_root = SCHEMA_ROOT_V2 if contract_version == "v2" else SCHEMA_ROOT
     return publish_browser_delivery(
         browser_parent=browser,
         delivery_version="delivery-v2",
         delivery=delivery,
-        schema_root=schema_root,
-        contract_version=contract_version,
+        schema_root=SCHEMA_ROOT,
+        contract_version="v2",
     )
 
 
@@ -716,102 +701,3 @@ class TestModeGating:
                 format_checker=Draft202012Validator.FORMAT_CHECKER,
             ).validate(manifest)
 
-
-# ===========================================================================
-# V1 regression preservation
-# ===========================================================================
-
-
-class TestV1RegressionPreservation:
-    """Committed V1 fixtures, goldens, chunks, and validation stay unchanged."""
-
-    def test_v1_fixture_goldens_and_chunks_remain_frozen(self) -> None:
-        """✅ Positive: the committed V1 fixture remains valid and V2-free."""
-        # Arrange: load only committed compatibility artifacts.
-        manifest = _load_json(FIXTURE_ROOT / "manifest.json")
-        chunks = tuple(
-            _load_json(FIXTURE_ROOT / reference["path"])
-            for reference in manifest["chunks"]
-        )
-        track_assets = _load_json(FIXTURE_ROOT / "track-assets.json")
-        golden = _load_json(FIXTURE_ROOT / "golden-snapshots.json")
-        schemas, registry = _schema_registry(SCHEMA_ROOT, _V1_SCHEMA_NAMES)
-
-        # Act: validate the immutable fixture against the local v1 registry.
-        Draft202012Validator(
-            schemas["manifest"], registry=registry,
-            format_checker=Draft202012Validator.FORMAT_CHECKER,
-        ).validate(manifest)
-        Draft202012Validator(schemas["track-assets"], registry=registry).validate(
-            track_assets,
-        )
-        for chunk in chunks:
-            Draft202012Validator(schemas["chunk"], registry=registry).validate(chunk)
-
-        # Assert: the compatibility shape and golden expectations are unchanged.
-        assert manifest["contractVersion"] == "v1"
-        assert "formatVersion" not in manifest
-        assert "sessionMode" not in manifest
-        assert "qualifyingSummary" not in manifest
-        assert "qualifyingLapStatus" not in manifest
-        assert "qualifyingLapStatus" not in manifest["schemas"]
-        assert golden["fixtureId"] == manifest["fixtureId"] == "deterministic-race"
-        assert {snapshot["id"] for snapshot in golden["snapshots"]} >= {
-            "overlap-ownership-at-1500", "interpolated-sparse-event-at-2600",
-        }
-        assert all(
-            reference["schemaId"].startswith("urn:f1-cache-replay:schema:replay-data:v1:")
-            for reference in manifest["chunks"]
-        )
-        assert all(chunk.get("contractVersion") == "v1" for chunk in chunks)
-
-    def test_v1_manifest_schema_rejects_qualifying_lap_status_keys(self) -> None:
-        """❌ Negative: the frozen V1 manifest schema rejects the new V2 keys."""
-        # Arrange
-        manifest = _load_json(FIXTURE_ROOT / "manifest.json")
-        schemas, registry = _schema_registry(SCHEMA_ROOT, _V1_SCHEMA_NAMES)
-        validator = Draft202012Validator(
-            schemas["manifest"], registry=registry,
-            format_checker=Draft202012Validator.FORMAT_CHECKER,
-        )
-        reference = {
-            "path": "qualifying-lap-status.json",
-            "schemaId": BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
-            "sha256": "a" * 64,
-        }
-
-        # Act & Assert: neither the reference nor a schema-registry leak is valid.
-        with_reference = dict(manifest)
-        with_reference["qualifyingLapStatus"] = reference
-        with pytest.raises(ValidationError):
-            validator.validate(with_reference)
-
-        with_registry_leak = dict(manifest)
-        with_registry_leak["schemas"] = {
-            **manifest["schemas"],
-            "qualifyingLapStatus": BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
-        }
-        with pytest.raises(ValidationError):
-            validator.validate(with_registry_leak)
-
-    def test_v1_contract_never_emits_lap_status_sidecar(self, tmp_path: Path) -> None:
-        """✅ Positive: V1 publication omits the sidecar despite qualifying data."""
-        # Arrange & Act
-        result = _publish(
-            tmp_path / "browser",
-            _delivery("qualifying", contract_version="v1"),
-            contract_version="v1",
-        )
-
-        # Assert
-        assert result.qualifying_lap_status_path is None
-        assert "qualifying-lap-status.json" not in result.artifact_digests
-        manifest = _load_json(result.manifest_path)
-        assert "qualifyingLapStatus" not in manifest
-        assert "qualifyingSummary" not in manifest
-        validate_complete_browser_delivery(
-            tmp_path / "browser",
-            expected_generation_id="canonical-one",
-            expected_manifest_sha256="a" * 64,
-            schema_root=SCHEMA_ROOT,
-        )

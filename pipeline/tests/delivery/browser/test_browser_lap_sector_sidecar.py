@@ -6,8 +6,8 @@ Covers:
   - BrowserLapSectorSidecarReference contract enforcement
   - build_lap_sector_sidecar derivation (determinism, null preservation,
     ordering, zero-lap drivers, causal pairing)
-  - Publication (artifact writing, SHA-256, schema validation,
-    mutation rejection, backward compatibility, cross-checks)
+     - Publication (artifact writing, SHA-256, schema validation,
+     mutation rejection, cross-checks)
 """
 
 from __future__ import annotations
@@ -64,16 +64,15 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS, CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.domain.session_modes import SessionMode
 from f1_replay_pipeline.storage.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
-SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
-SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
-FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT_V2 = SCHEMA_ROOT
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -81,8 +80,15 @@ FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
 
 
 def _snapshot() -> CanonicalGenerationSnapshot:
-    """Minimal anonymous snapshot for delivery construction."""
-    return CanonicalGenerationSnapshot("test-gen", "a" * 64, {})
+    """Minimal v2 snapshot with the required race session metadata."""
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_mode": "race", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return CanonicalGenerationSnapshot(
+        "test-gen", "a" * 64, {"session_metadata": session_metadata},
+    )
 
 
 def _chunk() -> BrowserChunk:
@@ -110,7 +116,7 @@ def _track_assets() -> dict[str, object]:
         point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0},
     )
     return {
-        "contractVersion": "v1", "fixtureId": "test-race",
+        "contractVersion": "v2", "fixtureId": "test-race",
         "trackId": "track-one", "trackName": "Track One",
         "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
@@ -121,6 +127,7 @@ def _track_assets() -> dict[str, object]:
 
 def _delivery(
     *,
+    session_mode: SessionMode = "race",
     sidecar: BrowserLapSectorSidecar | None = None,
     sidecar_drivers: tuple[Mapping[str, object], ...] | None = None,
 ) -> BrowserDeliveryBuild:
@@ -133,7 +140,9 @@ def _delivery(
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
     },)
-    manifest = BrowserManifest("test-race", "Test Race", drivers)
+    manifest = BrowserManifest(
+        "test-race", "Test Race", drivers, session_mode=session_mode,
+    )
     return BrowserDeliveryBuild(
         _snapshot(), manifest, _track_assets(), (_chunk(),),
         lap_sector_sidecar=sidecar,
@@ -172,7 +181,7 @@ def _publish(  # type: ignore[no-any-unimported]
 def _v2_practice_delivery(
     sidecar: BrowserLapSectorSidecar | None = None,
 ) -> BrowserDeliveryBuild:
-    delivery = _delivery(sidecar=sidecar)
+    delivery = _delivery(session_mode="practice", sidecar=sidecar)
     session_metadata = pl.DataFrame([{
         "session_id": "test-race", "year": 2026, "round_number": 1,
         "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
@@ -693,7 +702,7 @@ class TestBrowserLapSectorSidecar:
             BrowserLapSectorSidecar("race-01", {"HAM": "not-a-sector"})  # type: ignore[dict-item]
 
     def test_as_dict_returns_contract_format(self) -> None:
-        """✅ Positive: as_dict returns v1 contract with nested driver arrays."""
+        """✅ Positive: as_dict returns v2 contract with nested driver arrays."""
         # Arrange
         sidecar = _sidecar()
 
@@ -701,7 +710,7 @@ class TestBrowserLapSectorSidecar:
         result = sidecar.as_dict()
 
         # Assert
-        assert result["contractVersion"] == "v1"
+        assert result["contractVersion"] == "v2"
         assert result["fixtureId"] == "test-race"
         assert "drivers" in result
         assert "HAM" in result["drivers"]
@@ -857,7 +866,7 @@ class TestBrowserLapSectorSidecarReference:
         with pytest.raises(ValueError, match="schema_id is invalid"):
             BrowserLapSectorSidecarReference(
                 path="lap-sector-sidecar.json",
-                schema_id="urn:f1-cache-replay:schema:replay-data:v1:wrong",
+                schema_id="urn:f1-cache-replay:schema:replay-data:unsupported:lap-sector-sidecar",
                 sha256="a" * 64,
             )
 
@@ -884,7 +893,7 @@ class TestBuildLapSectorSidecar:
         laps_data: list[dict[str, object]],
         driver_ids: tuple[str, ...] = ("HAM",),
         fixture_id: str = "test-race",
-        session_mode: str | None = None,
+        session_mode: SessionMode = "race",
         track_status_data: list[dict[str, object]] | None = None,
         messages_data: list[dict[str, object]] | None = None,
     ) -> CanonicalGenerationSnapshot:
@@ -894,12 +903,9 @@ class TestBuildLapSectorSidecar:
             "year": 2026, "round_number": 1,
             "event_name": "Test Grand Prix", "session_name": "Race",
             "session_type": "R",
+            "session_mode": session_mode,
             "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
-        session_schema = CANONICAL_TABLE_SCHEMAS["session_metadata"]
-        if session_mode is not None:
-            session_row["session_mode"] = session_mode
-            session_schema = CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]
         driver_rows: list[dict[str, object]] = []
         for did in driver_ids:
             driver_rows.append({
@@ -908,14 +914,9 @@ class TestBuildLapSectorSidecar:
                 "full_name": did, "team_name": f"Team {did}",
                 "team_colour": "112233",
             })
-        # Build laps frame using the canonical LAPS_SCHEMA — fill only
-        # columns that build_lap_sector_sidecar reads, default others to null.
-        lap_schema_source = (
-            CANONICAL_TABLE_SCHEMAS_V2
-            if any("qualifying_phase" in row for row in laps_data)
-            else CANONICAL_TABLE_SCHEMAS
-        )
-        lap_schema = dict(lap_schema_source["laps"])
+        # Build the v2 laps frame — fill only columns that
+        # build_lap_sector_sidecar reads, default others to null.
+        lap_schema = dict(CANONICAL_TABLE_SCHEMAS_V2["laps"])
         lap_rows: list[dict[str, object]] = []
         for row in laps_data:
             full: dict[str, object] = {col: None for col in lap_schema}
@@ -925,12 +926,12 @@ class TestBuildLapSectorSidecar:
         frames: dict[str, pl.DataFrame] = {
             "session_metadata": pl.DataFrame(
                 [session_row],
-                schema=dict(session_schema),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]),
                 strict=True,
             ),
             "drivers": pl.DataFrame(
                 driver_rows,
-                schema=dict(CANONICAL_TABLE_SCHEMAS["drivers"]),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["drivers"]),
                 strict=True,
             ),
             "laps": laps,
@@ -1471,26 +1472,6 @@ class TestBuildLapSectorSidecar:
         assert sidecar.drivers["HAM"].lap_kind == (None,)
         payload = sidecar.as_dict(include_qualifying_phase=True)
         assert "lapKind" not in payload["drivers"]["HAM"]
-
-    def test_v1_schema_without_session_mode_omits_lap_kind(self) -> None:
-        """✅ Positive: a v1 snapshot (no session mode) never derives lapKind."""
-        # Arrange — v1 session metadata and a v1 laps frame without phases.
-        snapshot = self._snapshot_with_laps(
-            [self._lap_row("HAM", 1, is_accurate=True, deleted=False,
-                           track_status="1",
-                           sector_1_duration_ms=30_000,
-                           sector_2_duration_ms=30_000,
-                           sector_3_duration_ms=40_000,
-                           sector_1_session_time_ms=30_000,
-                           sector_2_session_time_ms=60_000,
-                           sector_3_session_time_ms=100_000)],
-        )
-
-        # Act
-        sidecar = build_lap_sector_sidecar(snapshot)
-
-        # Assert
-        assert sidecar.drivers["HAM"].lap_kind == (None,)
 
     def test_qualifying_v2_serialization_includes_lap_kind_values(self) -> None:
         """✅ Positive: a v2 qualifying sidecar serializes the aligned lapKind."""
@@ -2159,7 +2140,9 @@ class TestSidecarPublication:
 
         delivery = BrowserDeliveryBuild(
             _snapshot(),
-            BrowserManifest("test-race", "Test Race", manifest_drivers),
+            BrowserManifest(
+                "test-race", "Test Race", manifest_drivers, session_mode="race",
+            ),
             _track_assets(),
             (chunk,),
             lap_sector_sidecar=sidecar,
@@ -2168,7 +2151,7 @@ class TestSidecarPublication:
         # Act — publish and cross-check via full pipeline
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="delivery-v1",
+            delivery_version="delivery-v2",
             delivery=delivery,
             schema_root=SCHEMA_ROOT,
         )
@@ -2224,7 +2207,9 @@ class TestSidecarPublication:
         )
         delivery = BrowserDeliveryBuild(
             _snapshot(),
-            BrowserManifest("test-race", "Test Race", manifest_drivers),
+            BrowserManifest(
+                "test-race", "Test Race", manifest_drivers, session_mode="race",
+            ),
             _track_assets(),
             (_chunk(),),
             lap_sector_sidecar=_sidecar(),  # only HAM
@@ -2377,7 +2362,7 @@ class TestSidecarPublication:
         ).validate(sidecar_json)
 
         # Verify key contract fields
-        assert sidecar_json["contractVersion"] == "v1"
+        assert sidecar_json["contractVersion"] == "v2"
         assert sidecar_json["fixtureId"] == "test-race"
         assert "drivers" in sidecar_json
 
@@ -2452,7 +2437,7 @@ class TestSidecarPublication:
         frames = _canonical_frames_with_sectors()
         published_canonical = publish_canonical_generation(
             frames=frames, target_parent=canonical_parent,
-            generation_id="canonical-v1",
+            generation_id="canonical-v2",
         )
 
         from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
@@ -2468,7 +2453,7 @@ class TestSidecarPublication:
         # Act
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="delivery-v1",
+            delivery_version="delivery-v2",
             delivery=delivery,
             schema_root=SCHEMA_ROOT,
         )
@@ -2483,7 +2468,7 @@ class TestSidecarPublication:
 
         # Verify sidecar content from real pipeline has expected shape
         sidecar = _load_json(result.lap_sector_sidecar_path)
-        assert sidecar["contractVersion"] == "v1"
+        assert sidecar["contractVersion"] == "v2"
         assert sidecar["fixtureId"] == "synthetic-race"
         assert "HAM" in sidecar["drivers"]
         assert "lapNumber" in sidecar["drivers"]["HAM"]
@@ -2493,7 +2478,7 @@ class TestSidecarPublication:
         # Full validation — use the actual canonical manifest SHA
         validate_complete_browser_delivery(
             tmp_path / "browser",
-            expected_generation_id="canonical-v1",
+            expected_generation_id="canonical-v2",
             expected_manifest_sha256=published_canonical.manifest_sha256,
             schema_root=SCHEMA_ROOT,
         )

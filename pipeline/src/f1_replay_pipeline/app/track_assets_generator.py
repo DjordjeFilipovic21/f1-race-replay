@@ -59,7 +59,7 @@ def generate_track_assets(
     _validate_options(visual_track_width_m, centerline_points, rotation_degrees)
     session = snapshot.frames["session_metadata"].row(0, named=True)
     fixture_id = cast(str, session["session_id"])
-    resolved_track_id = track_id or f"{fixture_id}-telemetry-layout-v1"
+    resolved_track_id = track_id or f"{fixture_id}-telemetry-layout-v2"
     if not _SAFE_ID.fullmatch(resolved_track_id):
         raise TrackAssetsGenerationError("track_id must be a lowercase kebab-case identifier")
     reference = select_reference_lap(snapshot)
@@ -76,7 +76,7 @@ def generate_track_assets(
         fixture_id, centerline, rotation_degrees,
     )
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": fixture_id,
         "trackId": resolved_track_id,
         "trackName": cast(str, session["event_name"]),

@@ -53,7 +53,7 @@ def test_model_is_immutable_and_serializes_camel_case() -> None:
 
     assert model.time_ms == (0, 1_000, 2_000)
     assert model.as_dict() == {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "race-01",
         "method": "global-prior-weighted-mean-v1",
         "baselineMs": 22_000,
@@ -130,15 +130,18 @@ def test_reference_enforces_path_and_schema(path: str, schema_id: str) -> None:
 
 
 def test_manifest_accepts_reference_or_mapping_and_omits_unset_value() -> None:
-    without_model = BrowserManifest("race-01", "Race", DRIVERS)
+    without_model = BrowserManifest("race-01", "Race", DRIVERS, session_mode="race")
     assert "pitLossModel" not in without_model.as_dict()
 
     reference = _reference()
-    with_model = BrowserManifest("race-01", "Race", DRIVERS, pit_loss_model=reference)
+    with_model = BrowserManifest(
+        "race-01", "Race", DRIVERS, session_mode="race", pit_loss_model=reference,
+    )
     assert with_model.pit_loss_model == reference
     assert with_model.as_dict()["pitLossModel"] == reference.as_dict()
 
     from_mapping = BrowserManifest(
-        "race-01", "Race", DRIVERS, pit_loss_model=reference.as_dict(),
+        "race-01", "Race", DRIVERS, session_mode="race",
+        pit_loss_model=reference.as_dict(),
     )
     assert from_mapping.pit_loss_model == reference

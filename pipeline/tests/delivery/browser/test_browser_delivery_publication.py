@@ -10,6 +10,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -31,11 +32,13 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserQualifyingTimelineInterval,
     BrowserTimelineInterval,
     BrowserTimelineSummary,
+    BrowserWeatherSidecar,
     CanonicalGenerationSnapshot,
     QUALIFYING_SUMMARY_SCHEMA_ID,
     TIMELINE_SUMMARY_SCHEMA_ID,
     V2_QUALIFYING_TIMELINE_SCHEMA_ID,
     V2_TIMELINE_SUMMARY_SCHEMA_ID,
+    WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import BrowserDeliveryBuild
 import f1_replay_pipeline.delivery.browser.browser_delivery_publication as publication
@@ -49,12 +52,19 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
 from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 
 
-SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v1" / "schemas"
-SCHEMA_ROOT_V2 = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT_V2 = SCHEMA_ROOT
 
 
 def _snapshot() -> CanonicalGenerationSnapshot:
-    return CanonicalGenerationSnapshot("canonical-one", "a" * 64, {})
+    session_metadata = pl.DataFrame([{
+        "session_id": "race-one", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_mode": "race", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return CanonicalGenerationSnapshot(
+        "canonical-one", "a" * 64, {"session_metadata": session_metadata},
+    )
 
 
 def _chunk() -> BrowserChunk:
@@ -73,15 +83,16 @@ def _chunk() -> BrowserChunk:
 def _delivery(
     track_assets: dict[str, object] | None = None,
     timeline_summary: BrowserTimelineSummary | None = None,
+    weather_sidecar: BrowserWeatherSidecar | None = None,
 ) -> BrowserDeliveryBuild:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
-    },))
+    },), session_mode="race", contract_version="v2")
     point = {"x": 0.0, "y": 0.0}
     polyline = (point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0})
     assets: dict[str, object] = {
-        "contractVersion": "v1", "fixtureId": "race-one", "trackId": "track-one",
+        "contractVersion": "v2", "fixtureId": "race-one", "trackId": "track-one",
         "trackName": "Track One", "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
         "startFinish": {"center": point, "inner": point, "outer": point},
@@ -90,7 +101,24 @@ def _delivery(
     if track_assets is not None:
         assets.update(track_assets)
     return BrowserDeliveryBuild(
-        _snapshot(), manifest, assets, (_chunk(),), timeline_summary=timeline_summary,
+        _snapshot(),
+        manifest, assets, (_chunk(),), timeline_summary=timeline_summary,
+        weather_sidecar=weather_sidecar,
+    )
+
+
+def _weather_sidecar(*, fixture_id: str = "race-one") -> BrowserWeatherSidecar:
+    """One valid sparse weather sidecar with corroborated zero samples."""
+    return BrowserWeatherSidecar(
+        fixture_id,
+        (0, 1_000),
+        (21.0, 22.0),
+        (50.0, 55.0),
+        (1013.0, 1012.0),
+        (False, True),
+        (35.0, 36.0),
+        (90, 0),
+        (2.5, 0.0),
     )
 
 
@@ -107,7 +135,7 @@ def _timeline_summary() -> BrowserTimelineSummary:
 def _publish(browser: Path):
     return publish_browser_delivery(
         browser_parent=browser, delivery_version="delivery-one", delivery=_delivery(),
-        schema_root=SCHEMA_ROOT, contract_version="v1",
+        schema_root=SCHEMA_ROOT, contract_version="v2",
     )
 
 
@@ -458,12 +486,12 @@ def test_v2_manifest_rejects_qualifying_timeline_for_non_qualifying_mode() -> No
         )
 
 
-def test_v2_manifest_rejects_v1_qualifying_timeline_reference() -> None:
+def test_v2_manifest_rejects_unsupported_qualifying_timeline_reference() -> None:
     drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
                 "colorHex": "#000000", "carNumber": "44"},)
     reference = {
         "path": "qualifying-timeline.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:wrong",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:unsupported:wrong",
         "sha256": "a" * 64,
     }
 
@@ -797,16 +825,16 @@ def test_v2_manifest_rejects_race_only_sidecars_for_non_race_modes() -> None:
             )
 
 
-def test_v2_manifest_rejects_v1_artifact_references() -> None:
+def test_v2_manifest_rejects_unsupported_artifact_references() -> None:
     drivers = ({"id": "HAM", "displayName": "Hamilton", "teamName": "Team",
                 "colorHex": "#000000", "carNumber": "44"},)
     reference = {
         "path": "lap-sector-sidecar.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:unsupported:browser-lap-sector-sidecar",
         "sha256": "a" * 64,
     }
 
-    with pytest.raises(ValueError, match="v2 manifests must reference v2 artifacts"):
+    with pytest.raises(ValueError, match="lap sector sidecar schema_id is invalid"):
         BrowserManifest(
             "race-one", "Race One", drivers, lap_sector_sidecar=reference,
             session_mode="practice", contract_version="v2",
@@ -829,18 +857,17 @@ def test_v2_manifest_rejects_qualifying_summary_for_non_qualifying_mode() -> Non
         )
 
 
-@pytest.mark.parametrize(("schema_root", "contract_version"), [
-    (SCHEMA_ROOT, "v2"),
-    (SCHEMA_ROOT_V2, "v1"),
-])
-def test_publication_rejects_mixed_contract_schema_roots(
-    tmp_path: Path, schema_root: Path, contract_version: str,
+def test_publication_rejects_non_v2_contract_version(
+    tmp_path: Path,
 ) -> None:
-    with pytest.raises(BrowserDeliveryPublicationError, match="schema registry|schema validation"):
+    with pytest.raises(
+        BrowserDeliveryPublicationError,
+        match="requires the replay-data v2 schema root",
+    ):
         publish_browser_delivery(
             browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
-            delivery=_v2_delivery(), schema_root=schema_root,
-            contract_version=contract_version,  # type: ignore[arg-type]
+            delivery=_v2_delivery(), schema_root=SCHEMA_ROOT_V2,
+            contract_version="v1",  # type: ignore[arg-type]
         )
     assert not (tmp_path / "browser").exists()
 
@@ -1227,7 +1254,7 @@ def test_manifest_references_are_ordered_and_digested(tmp_path: Path) -> None:
     assert manifest["chunks"] == [{
         "endMs": 2000, "overlapWithPreviousMs": 0,
         "path": "chunks/chunk-001.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk", "sequence": 1,
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:chunk", "sequence": 1,
         "sha256": hashlib.sha256(result.chunk_paths[0].read_bytes()).hexdigest(), "startMs": 0,
     }]
 
@@ -1364,7 +1391,7 @@ def test_complete_validator_rejects_a_schema_invalid_timeline_summary(tmp_path: 
         )
 
     assert error.value.__cause__ is not None
-    assert "timeline summary fails replay-data v1 schema validation" in str(error.value.__cause__)
+    assert "timeline summary fails replay-data v2 schema validation" in str(error.value.__cause__)
 
 
 @pytest.mark.parametrize("pointer", [
@@ -1413,16 +1440,22 @@ def test_manifest_lap_starts_are_immutable_and_validate_order() -> None:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
-    },), (BrowserLapStart(1, 0), BrowserLapStart(3, 2_000)))
+    },), (BrowserLapStart(1, 0), BrowserLapStart(3, 2_000)), session_mode="race")
 
     assert manifest.as_dict()["lapStarts"] == [{"lap": 1, "startMs": 0}, {"lap": 3, "startMs": 2_000}]
     with pytest.raises(ValueError, match="increasing"):
-        BrowserManifest("race-one", "Race One", manifest.drivers, (BrowserLapStart(2, 1_000), BrowserLapStart(1, 2_000)))
+        BrowserManifest(
+            "race-one", "Race One", manifest.drivers,
+            (BrowserLapStart(2, 1_000), BrowserLapStart(1, 2_000)), session_mode="race",
+        )
 
 
 def test_publication_rejects_a_lap_start_at_the_exclusive_replay_end(tmp_path: Path) -> None:
     delivery = _delivery()
-    manifest = replace(delivery.manifest, lap_starts=(BrowserLapStart(1, 2_000),))
+    manifest = replace(
+        delivery.manifest,
+        lap_starts=(BrowserLapStart(1, delivery.chunks[-1].end_ms),),
+    )
 
     with pytest.raises(BrowserDeliveryPublicationError, match="within replay bounds"):
         publish_browser_delivery(
@@ -1636,7 +1669,7 @@ def test_publication_constructs_one_reusable_validator_per_contract_type(tmp_pat
 
     _publish(tmp_path / "browser")
 
-    assert calls == 8
+    assert calls == 12
 
 
 def test_publication_rejects_staged_short_write(tmp_path: Path, monkeypatch) -> None:
@@ -1705,3 +1738,224 @@ def test_schema_normalization_preserves_large_scalar_sequences() -> None:
     values = tuple(range(10_000))
 
     assert publication._schema_compatible_value(values) is values
+
+
+# ===========================================================================
+# Weather sidecar publication tests
+# ===========================================================================
+
+
+def test_publication_writes_and_references_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange & Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()),
+        schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+    weather_path = tmp_path / "browser" / "generations" / "delivery-one" / "weather-sidecar.json"
+    weather = json.loads(weather_path.read_bytes())
+
+    # Assert — artifact written, referenced, and digested in the manifest.
+    assert weather == _weather_sidecar().as_dict()
+    assert manifest["weatherSidecar"] == {
+        "path": "weather-sidecar.json",
+        "schemaId": WEATHER_SIDECAR_SCHEMA_ID,
+        "sha256": hashlib.sha256(weather_path.read_bytes()).hexdigest(),
+    }
+    assert result.weather_sidecar_path == weather_path
+    assert result.artifact_digests["weather-sidecar.json"] == manifest["weatherSidecar"]["sha256"]
+
+
+def test_weather_sidecar_publication_is_byte_identical(tmp_path: Path) -> None:
+    # Arrange
+    delivery = _delivery(weather_sidecar=_weather_sidecar())
+
+    # Act
+    first = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-one", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+    second = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-two", delivery_version="delivery-one",
+        delivery=delivery, schema_root=SCHEMA_ROOT,
+    )
+
+    # Assert — every artifact including the weather sidecar is byte-identical.
+    first_paths = (
+        first.manifest_path,
+        first.track_assets_path,
+        first.generation_path / "weather-sidecar.json",
+        *first.chunk_paths,
+    )
+    second_paths = (
+        second.manifest_path,
+        second.track_assets_path,
+        second.generation_path / "weather-sidecar.json",
+        *second.chunk_paths,
+    )
+    assert [path.read_bytes() for path in first_paths] == [path.read_bytes() for path in second_paths]
+
+
+def test_publication_without_weather_sidecar_is_backward_compatible(tmp_path: Path) -> None:
+    # Arrange & Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser",
+        delivery_version="legacy-delivery",
+        delivery=_delivery(weather_sidecar=None),
+        schema_root=SCHEMA_ROOT,
+    )
+    manifest = json.loads(result.manifest_path.read_bytes())
+
+    # Assert — old deliveries omit the sidecar and still validate fully.
+    assert result.weather_sidecar_path is None
+    assert "weather-sidecar.json" not in result.artifact_digests
+    assert "weatherSidecar" not in manifest
+
+    validate_complete_browser_delivery(
+        tmp_path / "browser",
+        expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64,
+        schema_root=SCHEMA_ROOT,
+    )
+
+
+def test_publication_rejects_weather_sidecar_fixture_id_mismatch(tmp_path: Path) -> None:
+    # Arrange — sidecar fixture_id disagrees with the manifest fixture_id.
+    delivery = _delivery(weather_sidecar=_weather_sidecar(fixture_id="other-race"))
+
+    # Act / Assert
+    with pytest.raises(BrowserDeliveryPublicationError, match="disagrees with the manifest"):
+        publish_browser_delivery(
+            browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+            delivery=delivery, schema_root=SCHEMA_ROOT,
+        )
+
+
+def test_complete_validator_rejects_a_weather_sidecar_digest_mismatch(tmp_path: Path) -> None:
+    # Arrange — publish with a weather sidecar, then mutate its stored bytes.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+    weather_path = result.weather_sidecar_path
+    assert weather_path is not None
+    weather_path.write_bytes(weather_path.read_bytes().replace(b'"airTempC"', b'"airTempX"'))
+
+    # Act / Assert — manifest checksum disagrees with the stored artifact.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "checksum disagrees for weather-sidecar.json" in str(error.value.__cause__)
+
+
+def _rewrite_weather_sidecar_and_manifest(result, mutate) -> None:
+    """Redigest a stored weather sidecar, manifest reference, and pointer."""
+    weather_path = result.weather_sidecar_path
+    assert weather_path is not None
+    weather = json.loads(weather_path.read_bytes())
+    mutate(weather)
+    weather_bytes = json.dumps(weather, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    weather_path.write_bytes(weather_bytes)
+
+    manifest = json.loads(result.manifest_path.read_bytes())
+    manifest["weatherSidecar"]["sha256"] = hashlib.sha256(weather_bytes).hexdigest()
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    result.manifest_path.write_bytes(manifest_bytes)
+
+    pointer = json.loads(result.pointer_path.read_bytes())
+    pointer["manifestSha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result.pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+
+def test_complete_validator_rejects_a_schema_invalid_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest a schema-invalid weather payload.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def replace_air_temp_with_string(weather: dict[str, object]) -> None:
+        cast(list[object], weather["airTempC"])[0] = "warm"
+
+    _rewrite_weather_sidecar_and_manifest(result, replace_air_temp_with_string)
+
+    # Act / Assert — schema validation rejects the mutated payload.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "weather sidecar fails replay-data v2 schema validation" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_weather_sidecar_with_unsorted_timestamps(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest a payload with non-increasing times.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def regress_timestamps(weather: dict[str, object]) -> None:
+        # [0, 1000] -> [1000, 0]: schema-unique but semantically unsorted.
+        times = cast(list[object], weather["timeMs"])
+        times[0] = 1_000
+        times[1] = 0
+
+    _rewrite_weather_sidecar_and_manifest(result, regress_timestamps)
+
+    # Act / Assert — the semantic contract rejects bad ordering.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "strictly increasing" in str(error.value.__cause__)
+
+
+def test_complete_validator_rejects_an_unsanitized_zero_sentinel_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange — publish, then redigest an uncorroborated zero humidity sentinel.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-one",
+        delivery=_delivery(weather_sidecar=_weather_sidecar()), schema_root=SCHEMA_ROOT,
+    )
+
+    def zero_humidity_without_corroboration(weather: dict[str, object]) -> None:
+        cast(list[object], weather["airTempC"])[1] = None
+        cast(list[object], weather["humidityPct"])[1] = 0.0
+        cast(list[object], weather["pressureMbar"])[1] = None
+        cast(list[object], weather["trackTempC"])[1] = None
+        cast(list[object], weather["windDirectionDeg"])[1] = None
+        cast(list[object], weather["windSpeedMps"])[1] = None
+
+    _rewrite_weather_sidecar_and_manifest(result, zero_humidity_without_corroboration)
+
+    # Act / Assert — the ADR-003 sentinel audit rejects the payload.
+    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
+        validate_complete_browser_delivery(
+            tmp_path / "browser", expected_generation_id="canonical-one",
+            expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "unsanitized zero sentinel" in str(error.value.__cause__)
+
+
+def test_weather_sidecar_model_rejects_non_finite_before_publication() -> None:
+    # ❌ Negative: the model boundary rejects non-finite measurements before any
+    # payload can reach the publication path (the JSON engines admit NaN as a
+    # nullable number, so the finite guarantee lives in the immutable model).
+    with pytest.raises(TypeError, match="air_temp_c"):
+        BrowserWeatherSidecar(
+            "race-one", (0, 1_000), (float("nan"), 22.0), (50.0, 55.0),
+            (1013.0, 1012.0), (False, True), (35.0, 36.0), (90, 0), (2.5, 0.0),
+        )

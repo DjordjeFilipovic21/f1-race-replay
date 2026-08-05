@@ -35,7 +35,7 @@ def test_penalty_sidecar_serializes_tuple_of_issuances() -> None:
 
     assert sidecar.penalty_issuances == (issuance,)
     assert sidecar.as_dict() == {
-        "contractVersion": "v1", "fixtureId": "brazil-2024",
+        "contractVersion": "v2", "fixtureId": "brazil-2024",
         "penaltyIssuances": [issuance.as_dict()],
     }
 

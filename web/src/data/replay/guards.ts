@@ -9,6 +9,7 @@ import type {
   QualifyingDriverColumns, QualifyingLapStatusReference, QualifyingSummary, QualifyingSummaryReference,
   QualifyingLapStatus, QualifyingLapStatusEvent, QualifyingLapStatusEventStatus, QualifyingLapStatusRecord,
   QualifyingLapStatusSidecar, QualifyingPhase, QualifyingPhaseBoundary,
+  WeatherSidecar, WeatherSidecarReference,
 } from './types'
 import { array, exact, finite, freeze, integer, jsonObject, nullable, object, string, type ObjectValue } from './value-guards'
 import { assertSafeRelativePath } from './source'
@@ -24,6 +25,7 @@ export const PENALTY_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2
 export const QUALIFYING_SUMMARY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary'
 export const QUALIFYING_LAP_STATUS_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:browser-qualifying-lap-status'
 export const QUALIFYING_TIMELINE_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline'
+export const WEATHER_SIDECAR_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar'
 const REQUIRED_DRIVER_FIELDS = ['x', 'y', 'trackDistanceMeters', 'speed', 'throttle', 'brake', 'gapToLeaderMs', 'lap', 'position', 'gear', 'drs', 'tyreCompound', 'status', 'isInPitLane'] as const
 const OPTIONAL_DRIVER_FIELDS = ['rpm', 'tyreAge', 'isFinished'] as const
 const FIXTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -69,12 +71,12 @@ export function parsePointer(value: unknown): BrowserPointer {
 
 export function parseManifest(value: unknown): ReplayManifest {
   const item = object(value, 'manifest')
-  exact(item, ['contractVersion', 'formatVersion', 'sessionMode', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline'], 'manifest')
+  exact(item, ['contractVersion', 'formatVersion', 'sessionMode', 'fixtureId', 'fixtureName', 'schemas', 'trackAssets', 'chunks', 'drivers'], ['description', 'deliveryVersion', 'sourceGenerationId', 'sourceManifestSha256', 'goldenSnapshots', 'createdAt', 'lapStarts', 'seasonMetadata', 'telemetryCapabilities', 'timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline', 'weatherSidecar'], 'manifest')
   if (item.contractVersion !== 'v2') throw new Error('manifest must be contract version v2')
   if (item.formatVersion !== 'browser-delivery-v2') throw new Error('manifest format version is unsupported')
   if (!SESSION_MODES.includes(item.sessionMode as SessionMode)) throw new Error('manifest.sessionMode is invalid')
   const schemas = object(item.schemas, 'manifest.schemas')
-  exact(schemas, ['manifest', 'chunk', 'trackAssets'], ['timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline'], 'manifest.schemas')
+  exact(schemas, ['manifest', 'chunk', 'trackAssets'], ['timelineSummary', 'lapSectorSidecar', 'stintSummary', 'pitLossModel', 'penaltySidecar', 'qualifyingSummary', 'qualifyingLapStatus', 'qualifyingTimeline', 'weatherSidecar'], 'manifest.schemas')
   if (schemas.manifest !== MANIFEST_SCHEMA || schemas.chunk !== CHUNK_SCHEMA || schemas.trackAssets !== TRACK_SCHEMA) throw new Error('manifest schema identities are unsupported')
   const trackAssets = artifact(item.trackAssets, 'manifest.trackAssets')
   if (trackAssets.path !== 'track-assets.json' || trackAssets.schemaId !== TRACK_SCHEMA) throw new Error('track asset schema identity or path is unsupported')
@@ -88,6 +90,7 @@ export function parseManifest(value: unknown): ReplayManifest {
   const qualifyingSummary = item.qualifyingSummary === undefined ? undefined : parseQualifyingSummaryReference(item.qualifyingSummary)
   const qualifyingLapStatus = item.qualifyingLapStatus === undefined ? undefined : parseQualifyingLapStatusReference(item.qualifyingLapStatus)
   const qualifyingTimeline = item.qualifyingTimeline === undefined ? undefined : parseQualifyingTimelineReference(item.qualifyingTimeline)
+  const weatherSidecar = item.weatherSidecar === undefined ? undefined : parseWeatherSidecarReference(item.weatherSidecar)
   const chunks = array(item.chunks, 'manifest.chunks').map(parseChunkReference)
   const drivers = array(item.drivers, 'manifest.drivers').map(parseDriver)
   const lapStarts = item.lapStarts === undefined ? undefined : array(item.lapStarts, 'manifest.lapStarts').map(parseLapStart)
@@ -106,10 +109,10 @@ export function parseManifest(value: unknown): ReplayManifest {
   const golden = item.goldenSnapshots === undefined ? undefined : object(item.goldenSnapshots, 'manifest.goldenSnapshots')
   if (golden) { exact(golden, ['path'], [], 'manifest.goldenSnapshots'); if (golden.path !== 'golden-snapshots.json') throw new Error('golden snapshot path is unsupported') }
   validateModeGating(item.sessionMode as SessionMode, timelineSummary, pitLossModel, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline)
-  validateSchemaRegistry(schemas, { timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline })
+  validateSchemaRegistry(schemas, { timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar })
   const deliveryVersion = item.deliveryVersion === undefined ? undefined : safeComponent(item.deliveryVersion, 'manifest.deliveryVersion')
   const sourceGenerationId = item.sourceGenerationId === undefined ? undefined : safeComponent(item.sourceGenerationId, 'manifest.sourceGenerationId')
-  return freeze({ contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: item.sessionMode as SessionMode, fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ ...schemas } as ReplayManifest['schemas']), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), ...(qualifyingSummary === undefined ? {} : { qualifyingSummary }), ...(qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus }), ...(qualifyingTimeline === undefined ? {} : { qualifyingTimeline }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(deliveryVersion === undefined ? {} : { deliveryVersion }), ...(sourceGenerationId === undefined ? {} : { sourceGenerationId }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
+  return freeze({ contractVersion: 'v2', formatVersion: 'browser-delivery-v2', sessionMode: item.sessionMode as SessionMode, fixtureId, fixtureName: string(item.fixtureName, 'manifest.fixtureName'), schemas: freeze({ ...schemas } as ReplayManifest['schemas']), trackAssets, ...(seasonMetadata === undefined ? {} : { seasonMetadata }), ...(telemetryCapabilities === undefined ? {} : { telemetryCapabilities }), ...(timelineSummary === undefined ? {} : { timelineSummary }), ...(lapSectorSidecar === undefined ? {} : { lapSectorSidecar }), ...(stintSummary === undefined ? {} : { stintSummary }), ...(pitLossModel === undefined ? {} : { pitLossModel }), ...(penaltySidecar === undefined ? {} : { penaltySidecar }), ...(qualifyingSummary === undefined ? {} : { qualifyingSummary }), ...(qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus }), ...(qualifyingTimeline === undefined ? {} : { qualifyingTimeline }), ...(weatherSidecar === undefined ? {} : { weatherSidecar }), chunks, drivers, ...(lapStarts === undefined ? {} : { lapStarts: freeze(lapStarts) }), ...(item.description === undefined ? {} : { description: item.description as string }), ...(deliveryVersion === undefined ? {} : { deliveryVersion }), ...(sourceGenerationId === undefined ? {} : { sourceGenerationId }), ...(item.sourceManifestSha256 === undefined ? {} : { sourceManifestSha256: item.sourceManifestSha256 as string }), ...(golden ? { goldenSnapshots: freeze({ path: 'golden-snapshots.json' as const }) } : {}), ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt as string }) })
 }
 
 function safeComponent(value: unknown, label: string): string {
@@ -149,6 +152,7 @@ function validateSchemaRegistry(
     qualifyingSummary: QUALIFYING_SUMMARY_SCHEMA,
     qualifyingLapStatus: QUALIFYING_LAP_STATUS_SCHEMA,
     qualifyingTimeline: QUALIFYING_TIMELINE_SCHEMA,
+    weatherSidecar: WEATHER_SIDECAR_SCHEMA,
   }
   for (const [field, schemaId] of Object.entries(expected)) {
     const reference = references[field]
@@ -252,16 +256,20 @@ export function parseQualifyingTimelineReference(value: unknown): QualifyingTime
   return freeze({ path: 'qualifying-timeline.json', schemaId: QUALIFYING_TIMELINE_SCHEMA, sha256: item.sha256 as string })
 }
 
+export function parseWeatherSidecarReference(value: unknown): WeatherSidecarReference {
+  const item = object(value, 'manifest.weatherSidecar')
+  exact(item, ['path', 'schemaId', 'sha256'], [], 'manifest.weatherSidecar')
+  if (item.path !== 'weather-sidecar.json') throw new Error('weather sidecar path is unsupported')
+  if (item.schemaId !== WEATHER_SIDECAR_SCHEMA) throw new Error('weather sidecar schema identity is unsupported')
+  const sha256 = item.sha256
+  if (typeof sha256 !== 'string' || !SHA256.test(sha256)) throw new Error('manifest.weatherSidecar.sha256 is invalid')
+  return freeze({ path: 'weather-sidecar.json', schemaId: WEATHER_SIDECAR_SCHEMA, sha256 })
+}
+
 export function parseLapSectorSidecar(value: unknown): LapSectorSidecar {
   const item = object(value, 'lap sector sidecar')
-  if (item.contractVersion === 'v1') {
-    exact(item, ['contractVersion', 'fixtureId', 'drivers'], [], 'lap sector sidecar')
-    const fixtureId = parseFixtureId(item.fixtureId, 'lap sector sidecar fixture id')
-    const drivers = parseDrivers(item.drivers, 'lap sector sidecar drivers', (columns, label) => parseLapSectorColumns(columns, label, false))
-    return freeze({ contractVersion: 'v1', fixtureId, drivers })
-  }
   exact(item, ['contractVersion', 'fixtureId', 'phaseBoundaries', 'drivers'], [], 'lap sector sidecar')
-  if (item.contractVersion !== 'v2') throw new Error('lap sector sidecar must be contract version v1 or v2')
+  if (item.contractVersion !== 'v2') throw new Error('lap sector sidecar must be contract version v2')
   const fixtureId = parseFixtureId(item.fixtureId, 'lap sector sidecar fixture id')
   const phaseBoundaries = array(item.phaseBoundaries, 'lap sector sidecar phaseBoundaries').map(parseQualifyingPhaseBoundary)
   const drivers = parseDrivers<QualifyingLapSectorColumns>(item.drivers, 'lap sector sidecar drivers', (columns, label) => parseLapSectorColumns(columns, label, true) as QualifyingLapSectorColumns)
@@ -271,7 +279,6 @@ export function parseLapSectorSidecar(value: unknown): LapSectorSidecar {
 
 /** Enforces source-derived phase evidence only when a bundle is qualifying-like. */
 export function validateQualifyingLikeLapSectorSidecar(sidecar: LapSectorSidecar): void {
-  if (sidecar.contractVersion !== 'v2') throw new Error('qualifying-like lap sector sidecar must use contract version v2')
   if (sidecar.phaseBoundaries.length === 0) throw new Error('qualifying-like lap sector sidecar requires at least one phase boundary')
   const hasAssignedPhaseLap = Object.values(sidecar.drivers).some((driver) => driver.qualifyingPhase.some((phase) => phase !== null))
   if (!hasAssignedPhaseLap) throw new Error('qualifying-like lap sector sidecar requires at least one assigned phase lap')
@@ -430,6 +437,47 @@ function parseQualifyingColumns(value: unknown, label: string): QualifyingDriver
   const bestLapNumber = parseNullablePositiveColumn(item.bestLapNumber, `${label}.bestLapNumber`, length)
   const bestLapTimeMs = parseNullableNonNegativeColumn(item.bestLapTimeMs, `${label}.bestLapTimeMs`, length)
   return freeze({ qualifyingPosition, q1TimeMs, q2TimeMs, q3TimeMs, bestLapNumber, bestLapTimeMs })
+}
+
+export function parseWeatherSidecar(value: unknown): WeatherSidecar {
+  const item = object(value, 'weather sidecar')
+  exact(item, ['contractVersion', 'fixtureId', 'timeMs', 'airTempC', 'humidityPct', 'pressureMbar', 'rainfall', 'trackTempC', 'windDirectionDeg', 'windSpeedMps'], [], 'weather sidecar')
+  if (item.contractVersion !== 'v2') throw new Error('weather sidecar must be contract version v2')
+  const fixtureId = parseFixtureId(item.fixtureId, 'weather sidecar fixture id')
+  const timeMs = parseStandaloneColumn(item.timeMs, 'weather sidecar timeMs', (entry) => integer(entry, 'weather sidecar timeMs value'))
+  if (!timeMs.length) throw new Error('weather sidecar timeMs must be non-empty')
+  assertStrictlyIncreasing(timeMs, 'weather sidecar timeMs must be strictly increasing')
+  const airTempC = parseWeatherMeasurement(item.airTempC, timeMs.length, 'airTempC', (value) => positiveFinite(value, 'weather sidecar airTempC value'))
+  const humidityPct = parseWeatherMeasurement(item.humidityPct, timeMs.length, 'humidityPct', (value) => boundedFinite(value, 'weather sidecar humidityPct value', 0, 100))
+  const pressureMbar = parseWeatherMeasurement(item.pressureMbar, timeMs.length, 'pressureMbar', (value) => positiveFinite(value, 'weather sidecar pressureMbar value'))
+  const rainfall = parseWeatherColumn(item.rainfall, timeMs.length, 'rainfall', (value) => {
+    if (typeof value !== 'boolean') throw new Error('weather sidecar rainfall must contain booleans or null')
+    return value
+  })
+  const trackTempC = parseWeatherMeasurement(item.trackTempC, timeMs.length, 'trackTempC', (value) => positiveFinite(value, 'weather sidecar trackTempC value'))
+  const windDirectionDeg = parseWeatherMeasurement(item.windDirectionDeg, timeMs.length, 'windDirectionDeg', (value) => integer(value, 'weather sidecar windDirectionDeg value', 0, 359))
+  const windSpeedMps = parseWeatherMeasurement(item.windSpeedMps, timeMs.length, 'windSpeedMps', (value) => boundedFinite(value, 'weather sidecar windSpeedMps value', 0, Number.MAX_VALUE))
+  return freeze({ contractVersion: 'v2', fixtureId, timeMs, airTempC, humidityPct, pressureMbar, rainfall, trackTempC, windDirectionDeg, windSpeedMps })
+}
+
+function parseWeatherMeasurement<T>(value: unknown, length: number, label: string, parse: (entry: unknown) => T): readonly (T | null)[] {
+  return parseWeatherColumn(value, length, label, parse)
+}
+
+function parseWeatherColumn<T>(value: unknown, length: number, label: string, parse: (entry: unknown) => T): readonly (T | null)[] {
+  return parseColumn(value, length, `weather sidecar.${label}`, (entry) => nullable(entry, parse))
+}
+
+function positiveFinite(value: unknown, label: string): number {
+  const parsed = finite(value, label)
+  if (parsed <= 0) throw new Error(`${label} must be greater than zero`)
+  return parsed
+}
+
+function boundedFinite(value: unknown, label: string, minimum: number, maximum: number): number {
+  const parsed = finite(value, label)
+  if (parsed < minimum || parsed > maximum) throw new Error(`${label} must be between ${minimum} and ${maximum}`)
+  return parsed
 }
 
 function parsePenaltyIssuance(value: unknown, index: number): PenaltyIssuance {
@@ -781,7 +829,7 @@ function parseColumns(value: unknown, length: number, label: string): DriverColu
   const tyreAge = columns.tyreAge === undefined
     ? Array<null>(length).fill(null)
     : parseColumn(columns.tyreAge, length, `${label}.tyreAge`, (entry) => nullable(entry, (value) => integer(value, 'tyre age', 0)))
-  // Legacy v1 chunks omit this optional field; null normalization preserves their shape for sampling.
+  // Optional v2 columns are normalized to nulls when the producer has no samples.
   const isFinished = columns.isFinished === undefined
     ? Array<null>(length).fill(null)
     : parseColumn(columns.isFinished, length, `${label}.isFinished`, (entry) => nullable(entry, (value) => { if (typeof value !== 'boolean') throw new Error('finished state must be boolean'); return value }))

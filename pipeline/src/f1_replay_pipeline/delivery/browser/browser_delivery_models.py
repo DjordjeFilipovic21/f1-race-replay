@@ -17,14 +17,9 @@ from f1_replay_pipeline.domain.canonical_contract import QUALIFYING_PHASES, Qual
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DRIVER_ID = re.compile(r"[A-Z0-9]{2,4}\Z")
+_FIXTURE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 MAX_INT64 = (1 << 63) - 1
 FASTF1_POSITION_UNITS_PER_METER = 10.0
-TIMELINE_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary"
-BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:browser-lap-sector-sidecar"
-PENALTY_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar"
-BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
-STINT_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:stint-summary"
-PIT_LOSS_MODEL_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model"
 V2_SCHEMA_PREFIX = "urn:f1-cache-replay:schema:replay-data:v2:"
 V2_MANIFEST_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}manifest"
 V2_CHUNK_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}chunk"
@@ -41,7 +36,15 @@ V2_STINT_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}stint-summary"
 V2_PIT_LOSS_MODEL_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}pit-loss-model"
 QUALIFYING_SUMMARY_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}qualifying-summary"
 V2_QUALIFYING_TIMELINE_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}qualifying-timeline"
-ContractVersion = Literal["v1", "v2"]
+ContractVersion = Literal["v2"]
+WEATHER_SIDECAR_SCHEMA_ID = f"{V2_SCHEMA_PREFIX}weather-sidecar"
+BROWSER_WEATHER_SIDECAR_SCHEMA_ID = WEATHER_SIDECAR_SCHEMA_ID
+TIMELINE_SUMMARY_SCHEMA_ID = V2_TIMELINE_SUMMARY_SCHEMA_ID
+BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
+PENALTY_SIDECAR_SCHEMA_ID = V2_PENALTY_SIDECAR_SCHEMA_ID
+BROWSER_PENALTY_SIDECAR_SCHEMA_ID = PENALTY_SIDECAR_SCHEMA_ID
+STINT_SUMMARY_SCHEMA_ID = V2_STINT_SUMMARY_SCHEMA_ID
+PIT_LOSS_MODEL_SCHEMA_ID = V2_PIT_LOSS_MODEL_SCHEMA_ID
 TimelineSummaryKind = Literal["yellow", "sc", "red", "vsc"]
 QualifyingLapStatusEventKind = Literal["deleted", "reinstated"]
 QualifyingLapStatus = Literal["valid", "deleted"]
@@ -50,13 +53,9 @@ QualifyingTimelineIntervalKind = Literal["yellow", "red"]
 
 
 def _validate_contract_version(value: object) -> ContractVersion:
-    if value not in {"v1", "v2"}:
-        raise ValueError("contract_version must be v1 or v2")
+    if value != "v2":
+        raise ValueError("contract_version must be v2")
     return cast(ContractVersion, value)
-
-
-def _schema_for_version(version: ContractVersion, v1: str, v2: str) -> str:
-    return v2 if version == "v2" else v1
 
 
 def deep_freeze_json(value: object) -> object:
@@ -269,7 +268,7 @@ class BrowserLapSectorSidecar:
 
     fixture_id: str
     drivers: Mapping[str, BrowserDriverLapSector]
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
     qualifying_phase_boundaries: tuple[BrowserQualifyingPhaseBoundary, ...] = ()
 
     def __post_init__(self) -> None:
@@ -382,7 +381,7 @@ class BrowserPenaltySidecar:
 
     fixture_id: str
     penalty_issuances: tuple[BrowserPenaltyIssuance, ...]
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -697,7 +696,7 @@ class BrowserStintSummary:
 
     fixture_id: str
     drivers: Mapping[str, BrowserDriverStintSummary]
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -784,7 +783,7 @@ class BrowserTimelineSummary:
     end_ms: int
     intervals: tuple[BrowserTimelineInterval, ...] = ()
     dnf_markers: tuple[BrowserDnfMarker, ...] = ()
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -964,6 +963,27 @@ def _validate_signed_int64(value: object, label: str, *, minimum: int | None = N
         raise ValueError(f"{label} must be at least {minimum}")
 
 
+def _validate_weather_float_values(
+    values: tuple[object, ...],
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    exclusive_minimum: bool = False,
+) -> None:
+    """Validate nullable finite float measurements at the sidecar boundary."""
+    for value in values:
+        if value is None:
+            continue
+        if type(value) is not float or not math.isfinite(value):
+            raise TypeError(f"{label} must contain finite floats or null")
+        if minimum is not None and (value <= minimum if exclusive_minimum else value < minimum):
+            comparison = "greater than" if exclusive_minimum else "at least"
+            raise ValueError(f"{label} must be {comparison} {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{label} must be at most {maximum}")
+
+
 @dataclass(frozen=True)
 class BrowserPitLossModel:
     """Immutable causal pit-loss estimates sampled over replay time."""
@@ -975,7 +995,7 @@ class BrowserPitLossModel:
     time_ms: tuple[int, ...]
     estimated_loss_ms: tuple[int, ...]
     observed_sample_count: tuple[int, ...]
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
@@ -1056,7 +1076,7 @@ class BrowserTimelineSummaryReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "timeline-summary.json":
             raise ValueError("timeline summary path must be timeline-summary.json")
-        if self.schema_id not in {TIMELINE_SUMMARY_SCHEMA_ID, V2_TIMELINE_SUMMARY_SCHEMA_ID}:
+        if self.schema_id != V2_TIMELINE_SUMMARY_SCHEMA_ID:
             raise ValueError("timeline summary schema_id is invalid")
 
 
@@ -1068,7 +1088,7 @@ class BrowserLapSectorSidecarReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "lap-sector-sidecar.json":
             raise ValueError("lap sector sidecar path must be lap-sector-sidecar.json")
-        if self.schema_id not in {BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID, V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID}:
+        if self.schema_id != V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID:
             raise ValueError("lap sector sidecar schema_id is invalid")
 
 
@@ -1080,7 +1100,7 @@ class BrowserPenaltySidecarReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "penalty-sidecar.json":
             raise ValueError("penalty sidecar path must be penalty-sidecar.json")
-        if self.schema_id not in {PENALTY_SIDECAR_SCHEMA_ID, V2_PENALTY_SIDECAR_SCHEMA_ID}:
+        if self.schema_id != V2_PENALTY_SIDECAR_SCHEMA_ID:
             raise ValueError("penalty sidecar schema_id is invalid")
 
 
@@ -1092,7 +1112,7 @@ class BrowserStintSummaryReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "stint-summary.json":
             raise ValueError("stint summary path must be stint-summary.json")
-        if self.schema_id not in {STINT_SUMMARY_SCHEMA_ID, V2_STINT_SUMMARY_SCHEMA_ID}:
+        if self.schema_id != V2_STINT_SUMMARY_SCHEMA_ID:
             raise ValueError("stint summary schema_id is invalid")
 
 
@@ -1104,7 +1124,7 @@ class BrowserPitLossModelReference(BrowserArtifactReference):
         super().__post_init__()
         if self.path != "pit-loss-model.json":
             raise ValueError("pit loss model path must be pit-loss-model.json")
-        if self.schema_id not in {PIT_LOSS_MODEL_SCHEMA_ID, V2_PIT_LOSS_MODEL_SCHEMA_ID}:
+        if self.schema_id != V2_PIT_LOSS_MODEL_SCHEMA_ID:
             raise ValueError("pit loss model schema_id is invalid")
 
 
@@ -1224,6 +1244,92 @@ class BrowserQualifyingSummary:
             "drivers": {driver_id: value.as_dict() for driver_id, value in self.drivers.items()},
         }
 
+@dataclass(frozen=True)
+class BrowserWeatherSidecar:
+    """Immutable native-cadence weather observations for one browser replay."""
+
+    fixture_id: str
+    time_ms: tuple[int, ...]
+    air_temp_c: tuple[float | None, ...]
+    humidity_pct: tuple[float | None, ...]
+    pressure_mbar: tuple[float | None, ...]
+    rainfall: tuple[bool | None, ...]
+    track_temp_c: tuple[float | None, ...]
+    wind_direction_deg: tuple[int | None, ...]
+    wind_speed_mps: tuple[float | None, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fixture_id, str) or not _FIXTURE_ID.fullmatch(self.fixture_id):
+            raise ValueError("weather sidecar fixture_id must match the canonical identifier pattern")
+
+        arrays = (
+            tuple(self.time_ms),
+            tuple(self.air_temp_c),
+            tuple(self.humidity_pct),
+            tuple(self.pressure_mbar),
+            tuple(self.rainfall),
+            tuple(self.track_temp_c),
+            tuple(self.wind_direction_deg),
+            tuple(self.wind_speed_mps),
+        )
+        if not arrays[0]:
+            raise ValueError("weather sidecar arrays must be non-empty")
+        if any(len(values) != len(arrays[0]) for values in arrays[1:]):
+            raise ValueError("weather sidecar arrays must be equal length")
+
+        for value in arrays[0]:
+            _validate_signed_int64(value, "weather time_ms", minimum=0)
+        if any(following <= current for current, following in zip(arrays[0], arrays[0][1:], strict=False)):
+            raise ValueError("weather time_ms must be strictly increasing")
+
+        _validate_weather_float_values(arrays[1], "air_temp_c", minimum=0.0, exclusive_minimum=True)
+        _validate_weather_float_values(arrays[2], "humidity_pct", minimum=0.0, maximum=100.0)
+        _validate_weather_float_values(arrays[3], "pressure_mbar", minimum=0.0, exclusive_minimum=True)
+        if any(value is not None and type(value) is not bool for value in arrays[4]):
+            raise TypeError("rainfall must contain booleans or null")
+        _validate_weather_float_values(arrays[5], "track_temp_c", minimum=0.0, exclusive_minimum=True)
+        if any(
+            value is not None and (type(value) is not int or not 0 <= value <= 359)
+            for value in arrays[6]
+        ):
+            raise ValueError("wind_direction_deg must contain integers from 0 through 359 or null")
+        _validate_weather_float_values(arrays[7], "wind_speed_mps", minimum=0.0)
+
+        for field, values in zip(
+            ("time_ms", "air_temp_c", "humidity_pct", "pressure_mbar", "rainfall",
+             "track_temp_c", "wind_direction_deg", "wind_speed_mps"),
+            arrays,
+            strict=True,
+        ):
+            object.__setattr__(self, field, values)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the contract-shaped payload in its frozen field order."""
+        return {
+            "contractVersion": "v2",
+            "fixtureId": self.fixture_id,
+            "timeMs": list(self.time_ms),
+            "airTempC": list(self.air_temp_c),
+            "humidityPct": list(self.humidity_pct),
+            "pressureMbar": list(self.pressure_mbar),
+            "rainfall": list(self.rainfall),
+            "trackTempC": list(self.track_temp_c),
+            "windDirectionDeg": list(self.wind_direction_deg),
+            "windSpeedMps": list(self.wind_speed_mps),
+        }
+
+
+@dataclass(frozen=True)
+class BrowserWeatherSidecarReference(BrowserArtifactReference):
+    """Immutable manifest reference for the optional weather sidecar."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.path != "weather-sidecar.json":
+            raise ValueError("weather sidecar path must be weather-sidecar.json")
+        if self.schema_id != WEATHER_SIDECAR_SCHEMA_ID:
+            raise ValueError("weather sidecar schema_id is invalid")
+
 
 @dataclass(frozen=True)
 class BrowserManifest:
@@ -1242,34 +1348,32 @@ class BrowserManifest:
     telemetry_capabilities: Mapping[str, object] | None = None
     qualifying_summary: BrowserArtifactReference | Mapping[str, object] | None = None
     session_mode: SessionMode | None = None
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
     qualifying_lap_status: BrowserArtifactReference | Mapping[str, object] | None = None
     qualifying_timeline: BrowserArtifactReference | Mapping[str, object] | None = None
+    weather_sidecar: BrowserArtifactReference | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fixture_id, str) or not self.fixture_id:
             raise ValueError("fixture_id must be a non-empty string")
         if not isinstance(self.fixture_name, str) or not self.fixture_name:
             raise ValueError("fixture_name must be a non-empty string")
-        contract_version = _validate_contract_version(self.contract_version)
-        if contract_version == "v2":
-            if self.session_mode is None:
-                raise ValueError("v2 manifests require explicit session_mode metadata")
-            try:
-                session_mode = normalize_session_mode(self.session_mode)
-            except ValueError as error:
-                raise ValueError("session_mode must be a supported normalized value") from error
-            if session_mode != self.session_mode:
-                raise ValueError("session_mode must be normalized")
-        elif self.session_mode is not None:
-            raise ValueError("v1 manifests must not contain session_mode metadata")
+        _validate_contract_version(self.contract_version)
+        if self.session_mode is None:
+            raise ValueError("v2 manifests require explicit session_mode metadata")
+        try:
+            session_mode = normalize_session_mode(self.session_mode)
+        except ValueError as error:
+            raise ValueError("session_mode must be a supported normalized value") from error
+        if session_mode != self.session_mode:
+            raise ValueError("session_mode must be normalized")
         frozen_drivers = tuple(
             cast(Mapping[str, object], deep_freeze_json(driver)) for driver in self.drivers
         )
         required = {"id", "displayName", "teamName", "colorHex", "carNumber"}
         if not frozen_drivers or any(set(driver) != required for driver in frozen_drivers):
             raise ValueError("drivers must contain immutable driver metadata")
-        if contract_version == "v2" and any(
+        if any(
             not isinstance(driver["id"], str) or not _DRIVER_ID.fullmatch(driver["id"])
             for driver in frozen_drivers
         ):
@@ -1418,40 +1522,39 @@ class BrowserManifest:
             )
         elif qualifying_timeline is not None:
             raise TypeError("qualifying_timeline must be a BrowserArtifactReference or mapping")
-        if contract_version == "v2":
-            references = (
-                timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model,
-                penalty_sidecar, qualifying_summary, qualifying_lap_status,
-                qualifying_timeline,
+        weather_sidecar = self.weather_sidecar
+        if isinstance(weather_sidecar, Mapping):
+            required = {"path", "schemaId", "sha256"}
+            if set(weather_sidecar) != required:
+                raise ValueError("weather_sidecar must contain path, schemaId, and sha256")
+            weather_sidecar = BrowserWeatherSidecarReference(
+                cast(str, weather_sidecar["path"]),
+                cast(str, weather_sidecar["schemaId"]),
+                cast(str, weather_sidecar["sha256"]),
             )
-            if any(reference is not None and ":v1:" in reference.schema_id for reference in references):
-                raise ValueError("v2 manifests must reference v2 artifacts")
-            if self.session_mode in {
-                "practice", "qualifying", "sprint-qualifying", "sprint-shootout", "testing",
-            } and any(
-                reference is not None for reference in (timeline_summary, pit_loss_model)
-            ):
-                raise ValueError("race-only browser sidecars are invalid for this session mode")
-            if self.session_mode not in {
-                "qualifying", "sprint-qualifying", "sprint-shootout",
-            } and qualifying_summary is not None:
-                raise ValueError("qualifying_summary is valid only for qualifying-like modes")
-            if self.session_mode not in {
-                "qualifying", "sprint-qualifying", "sprint-shootout",
-            } and qualifying_lap_status is not None:
-                raise ValueError(
-                    "qualifying_lap_status is valid only for qualifying-like modes"
-                )
-            if self.session_mode not in {
-                "qualifying", "sprint-qualifying", "sprint-shootout",
-            } and qualifying_timeline is not None:
-                raise ValueError(
-                    "qualifying_timeline is valid only for qualifying-like modes"
-                )
-        elif qualifying_lap_status is not None:
-            raise ValueError("qualifying lap status is available only in contract version v2")
-        elif qualifying_timeline is not None:
-            raise ValueError("qualifying timeline is available only in contract version v2")
+        elif isinstance(weather_sidecar, BrowserArtifactReference):
+            weather_sidecar = BrowserWeatherSidecarReference(
+                weather_sidecar.path, weather_sidecar.schema_id, weather_sidecar.sha256,
+            )
+        elif weather_sidecar is not None:
+            raise TypeError("weather_sidecar must be a BrowserArtifactReference or mapping")
+        references = (
+            timeline_summary, lap_sector_sidecar, stint_summary, pit_loss_model,
+            penalty_sidecar, qualifying_summary, qualifying_lap_status,
+            qualifying_timeline, weather_sidecar,
+        )
+        if any(reference is not None and not reference.schema_id.startswith(V2_SCHEMA_PREFIX) for reference in references):
+            raise ValueError("v2 manifests must reference v2 artifacts")
+        if self.session_mode in {
+            "practice", "qualifying", "sprint-qualifying", "sprint-shootout", "testing",
+        } and any(reference is not None for reference in (timeline_summary, pit_loss_model)):
+            raise ValueError("race-only browser sidecars are invalid for this session mode")
+        if self.session_mode not in {"qualifying", "sprint-qualifying", "sprint-shootout"} and qualifying_summary is not None:
+            raise ValueError("qualifying_summary is valid only for qualifying-like modes")
+        if self.session_mode not in {"qualifying", "sprint-qualifying", "sprint-shootout"} and qualifying_lap_status is not None:
+            raise ValueError("qualifying_lap_status is valid only for qualifying-like modes")
+        if self.session_mode not in {"qualifying", "sprint-qualifying", "sprint-shootout"} and qualifying_timeline is not None:
+            raise ValueError("qualifying_timeline is valid only for qualifying-like modes")
         object.__setattr__(self, "drivers", frozen_drivers)
         object.__setattr__(self, "lap_starts", lap_starts)
         object.__setattr__(self, "timeline_summary", timeline_summary)
@@ -1464,16 +1567,17 @@ class BrowserManifest:
         object.__setattr__(self, "telemetry_capabilities", telemetry_capabilities)
         object.__setattr__(self, "qualifying_lap_status", qualifying_lap_status)
         object.__setattr__(self, "qualifying_timeline", qualifying_timeline)
+        object.__setattr__(self, "weather_sidecar", weather_sidecar)
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
-            "contractVersion": self.contract_version,
+            "contractVersion": "v2",
             "fixtureId": self.fixture_id,
             "fixtureName": self.fixture_name,
             "schemas": {
-                "manifest": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:manifest", V2_MANIFEST_SCHEMA_ID),
-                "chunk": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:chunk", V2_CHUNK_SCHEMA_ID),
-                "trackAssets": _schema_for_version(self.contract_version, "urn:f1-cache-replay:schema:replay-data:v1:track-assets", V2_TRACK_ASSETS_SCHEMA_ID),
+                "manifest": V2_MANIFEST_SCHEMA_ID,
+                "chunk": V2_CHUNK_SCHEMA_ID,
+                "trackAssets": V2_TRACK_ASSETS_SCHEMA_ID,
             },
             "drivers": [dict(driver) for driver in self.drivers],
         }
@@ -1503,23 +1607,23 @@ class BrowserManifest:
             value["penaltySidecar"] = cast(
                 BrowserArtifactReference, self.penalty_sidecar,
             ).as_dict()
-        if self.contract_version == "v2":
-            value["formatVersion"] = "browser-delivery-v2"
-            value["sessionMode"] = self.session_mode
-            schemas = cast(dict[str, object], value["schemas"])
-            optional_schemas = {
-                "timelineSummary": V2_TIMELINE_SUMMARY_SCHEMA_ID,
-                "lapSectorSidecar": V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
-                "stintSummary": V2_STINT_SUMMARY_SCHEMA_ID,
-                "pitLossModel": V2_PIT_LOSS_MODEL_SCHEMA_ID,
-                "penaltySidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
-                "qualifyingSummary": QUALIFYING_SUMMARY_SCHEMA_ID,
-                "qualifyingLapStatus": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
-                "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
-            }
-            for field_name, schema_id in optional_schemas.items():
-                if getattr(self, _camel_to_snake(field_name)) is not None:
-                    schemas[field_name] = schema_id
+        value["formatVersion"] = "browser-delivery-v2"
+        value["sessionMode"] = self.session_mode
+        schemas = cast(dict[str, object], value["schemas"])
+        optional_schemas = {
+            "timelineSummary": V2_TIMELINE_SUMMARY_SCHEMA_ID,
+            "lapSectorSidecar": V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+            "stintSummary": V2_STINT_SUMMARY_SCHEMA_ID,
+            "pitLossModel": V2_PIT_LOSS_MODEL_SCHEMA_ID,
+            "penaltySidecar": V2_PENALTY_SIDECAR_SCHEMA_ID,
+            "qualifyingSummary": QUALIFYING_SUMMARY_SCHEMA_ID,
+            "qualifyingLapStatus": V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID,
+            "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+            "weatherSidecar": WEATHER_SIDECAR_SCHEMA_ID,
+        }
+        for field_name, schema_id in optional_schemas.items():
+            if getattr(self, _camel_to_snake(field_name)) is not None:
+                schemas[field_name] = schema_id
         if self.qualifying_summary is not None:
             value["qualifyingSummary"] = cast(
                 BrowserArtifactReference, self.qualifying_summary,
@@ -1531,6 +1635,10 @@ class BrowserManifest:
         if self.qualifying_timeline is not None:
             value["qualifyingTimeline"] = cast(
                 BrowserArtifactReference, self.qualifying_timeline,
+            ).as_dict()
+        if self.weather_sidecar is not None:
+            value["weatherSidecar"] = cast(
+                BrowserArtifactReference, self.weather_sidecar,
             ).as_dict()
         return value
 
@@ -1594,6 +1702,8 @@ __all__ = [
     "BrowserQualifyingLapStatusSidecar",
     "BrowserQualifyingTimeline", "BrowserQualifyingTimelineInterval", "BrowserQualifyingIncidentMarker",
     "BrowserQualifyingTimelineReference",
+    "BrowserTimelineInterval", "BrowserTimelineSummary",
+    "BrowserWeatherSidecar", "BrowserWeatherSidecarReference",
     "BrowserPitLossModel", "BrowserPitLossModelReference", "BrowserTimelineSummaryReference",
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
@@ -1607,7 +1717,8 @@ __all__ = [
     "V2_QUALIFYING_TIMELINE_SCHEMA_ID",
     "ContractVersion",
     "BROWSER_PENALTY_SIDECAR_SCHEMA_ID", "PENALTY_SIDECAR_SCHEMA_ID", "PIT_LOSS_MODEL_SCHEMA_ID",
-    "STINT_SUMMARY_SCHEMA_ID",
+    "STINT_SUMMARY_SCHEMA_ID", "BROWSER_WEATHER_SIDECAR_SCHEMA_ID",
+    "WEATHER_SIDECAR_SCHEMA_ID",
     "TIMELINE_SUMMARY_SCHEMA_ID",
     "QualifyingLapStatus", "QualifyingLapStatusEventKind",
     "TimelineSummaryKind", "LapKind", "QualifyingTimelineIntervalKind",

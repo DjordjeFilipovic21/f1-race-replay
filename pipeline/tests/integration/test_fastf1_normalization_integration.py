@@ -46,6 +46,8 @@ from f1_replay_pipeline.adapters.fastf1.session_loader import SessionLoaderError
 from f1_replay_pipeline.adapters.fastf1.session_metadata import adapt_drivers, adapt_session_metadata
 from f1_replay_pipeline.adapters.fastf1.weather_status import adapt_track_status_intervals, adapt_weather
 
+REQUIRED_SOURCE_TABLE_NAMES = tuple(name for name in SESSION_TABLE_NAMES if name != "weather_data")
+
 
 @pytest.fixture(autouse=True)
 def reject_network(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,7 +148,7 @@ def test_empty_session_emits_typed_empty_observation_tables_and_preserves_roster
         assert tables[name].schema == CANONICAL_TABLE_SCHEMAS_V2[name]
 
 
-@pytest.mark.parametrize("table_name", SESSION_TABLE_NAMES)
+@pytest.mark.parametrize("table_name", REQUIRED_SOURCE_TABLE_NAMES)
 def test_loader_rejects_each_missing_required_source_table_before_any_adapter(table_name: str):
     # Arrange: remove exactly one table from an otherwise complete source session.
     factory = build_session_factory(build_session_with_missing_table(table_name))
@@ -154,6 +156,17 @@ def test_loader_rejects_each_missing_required_source_table_before_any_adapter(ta
     # Act / Assert: the injected boundary fails locally rather than fetching missing data.
     with pytest.raises(SessionLoaderError, match=table_name):
         load_session(session_factory=factory)
+
+
+def test_loader_accepts_missing_optional_weather_source_table():
+    # Arrange: weather is absent while every required source table remains available.
+    factory = build_session_factory(build_session_with_missing_table("weather_data"))
+
+    # Act: normalize the session through the same injected loading boundary.
+    tables = _normalize_all(factory)
+
+    # Assert: optional weather absence produces a typed empty canonical table.
+    assert tables["weather"].is_empty()
 
 
 def test_native_car_and_position_streams_remain_separate_sparse_noninterpolated_cadences():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverFields,
     BrowserManifest,
     CanonicalGenerationSnapshot,
+    WEATHER_SIDECAR_SCHEMA_ID,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     BrowserDeliveryBuildError,
@@ -43,9 +45,9 @@ from f1_replay_pipeline.analysis.live_position.live_position_quality import Proj
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
 CONTRACT_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2"
-FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
+CONTRACT_ROOT = CONTRACT_ROOT_V2
+FIXTURE_ROOT = CONTRACT_ROOT_V2 / "fixtures" / "deterministic-race"
 
 
 def test_validated_canonical_generation_derives_deterministic_schema_valid_browser_artifacts(
@@ -85,7 +87,7 @@ def test_validated_canonical_generation_derives_deterministic_schema_valid_brows
     first_manifest = _load_json(first.manifest_path)
     first_chunks = tuple(_load_json(path) for path in first.chunk_paths)
 
-    # Assert: artifacts are deterministic, v1-valid, ordered, and retain delivery semantics.
+    # Assert: artifacts are deterministic, v2-valid, ordered, and retain delivery semantics.
     assert _artifact_bytes(first) == _artifact_bytes(second)
     assert published_canonical.pointer_path.read_bytes() == canonical_parent.joinpath("current.json").read_bytes()
     _validate_browser_contract(first_manifest, first_chunks, track_assets)
@@ -203,6 +205,126 @@ def test_penalty_sidecar_is_published_only_when_issuances_exist_and_validates(
     assert no_penalty_published.penalty_sidecar_path is None
 
 
+def test_browser_delivery_publishes_native_cadence_weather_sidecar(tmp_path: Path) -> None:
+    # Arrange: canonical weather keeps sparse native-cadence observations,
+    # including corroborated zero wind samples and a partially null row.
+    frames = _canonical_frames(weather_rows=[
+        _row(
+            "weather", session_time_ms=0, air_temperature_c=21.0, humidity_pct=50.0,
+            pressure_mbar=1013.0, rainfall=False, track_temperature_c=35.0,
+            wind_direction_deg=90.0, wind_speed_mps=2.5,
+        ),
+        _row(
+            "weather", session_time_ms=6_000, air_temperature_c=22.5, rainfall=True,
+            wind_direction_deg=0.0, wind_speed_mps=0.0,
+        ),
+        _row(
+            "weather", session_time_ms=9_500, air_temperature_c=22.0, humidity_pct=55.0,
+            rainfall=False,
+        ),
+    ])
+    canonical_parent = tmp_path / "canonical"
+    published_canonical = publish_canonical_generation(
+        frames=frames, target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    snapshot = read_validated_canonical_generation(canonical_parent)
+    delivery = build_browser_delivery(snapshot, _track_assets())
+
+    # Assert: the sidecar preserves native cadence and the canonical frame is untouched.
+    assert delivery.weather_sidecar is not None
+    assert delivery.weather_sidecar.time_ms == (0, 6_000, 9_500)
+    assert snapshot.frames["weather"].equals(frames["weather"])
+
+    # Act: publish and re-validate the delivery including the weather sidecar.
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(result.manifest_path)
+    weather = _load_json(result.weather_sidecar_path)  # type: ignore[arg-type]
+
+    # Assert: manifest reference, digest, contract shape, and schema validity.
+    assert manifest["weatherSidecar"]["path"] == "weather-sidecar.json"
+    assert manifest["weatherSidecar"]["schemaId"] == WEATHER_SIDECAR_SCHEMA_ID
+    assert manifest["weatherSidecar"]["sha256"] == hashlib.sha256(
+        result.weather_sidecar_path.read_bytes(),  # type: ignore[union-attr]
+    ).hexdigest()
+    assert weather["timeMs"] == [0, 6_000, 9_500]
+    assert weather["airTempC"] == [21.0, 22.5, 22.0]
+    assert weather["humidityPct"] == [50.0, None, 55.0]
+    assert weather["windDirectionDeg"] == [90, 0, None]
+    assert weather["windSpeedMps"] == [2.5, 0.0, None]
+    schemas, registry = _registry()
+    Draft202012Validator(schemas["weather-sidecar"], registry=registry).validate(weather)
+
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-v1",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+
+def test_browser_delivery_without_weather_observations_omits_sidecar(tmp_path: Path) -> None:
+    # Arrange: a valid canonical generation whose weather table is empty.
+    canonical_parent = tmp_path / "canonical"
+    published_canonical = publish_canonical_generation(
+        frames=_canonical_frames(weather_rows=[]),
+        target_parent=canonical_parent, generation_id="canonical-v1",
+    )
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+
+    # Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    manifest = _load_json(result.manifest_path)
+
+    # Assert: no sidecar is written, referenced, or validated.
+    assert delivery.weather_sidecar is None
+    assert result.weather_sidecar_path is None
+    assert "weather-sidecar.json" not in result.artifact_digests
+    assert "weatherSidecar" not in manifest
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-v1",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+
+def test_weather_sidecar_publication_does_not_mutate_core_chunk_bytes(tmp_path: Path) -> None:
+    # Arrange: one delivery derived with weather sidecar present.
+    canonical_parent = tmp_path / "canonical"
+    frames = _canonical_frames(weather_rows=[
+        _row("weather", session_time_ms=0, air_temperature_c=21.0, rainfall=False),
+        _row("weather", session_time_ms=6_000, air_temperature_c=22.5, rainfall=True),
+    ])
+    publish_canonical_generation(frames=frames, target_parent=canonical_parent, generation_id="canonical-v1")
+    delivery = build_browser_delivery(
+        read_validated_canonical_generation(canonical_parent), _track_assets(),
+    )
+    assert delivery.weather_sidecar is not None
+
+    # Act: publish once with the sidecar and once with the sidecar stripped.
+    with_sidecar = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-with", delivery_version="delivery-v1",
+        delivery=delivery, schema_root=CONTRACT_ROOT / "schemas",
+    )
+    without_sidecar = publish_browser_delivery(
+        browser_parent=tmp_path / "browser-without", delivery_version="delivery-v1",
+        delivery=replace(delivery, weather_sidecar=None), schema_root=CONTRACT_ROOT / "schemas",
+    )
+
+    # Assert: core chunk artifacts are byte-identical; only the sidecar is added.
+    assert tuple(path.read_bytes() for path in with_sidecar.chunk_paths) == tuple(
+        path.read_bytes() for path in without_sidecar.chunk_paths
+    )
+    assert with_sidecar.weather_sidecar_path is not None
+    assert without_sidecar.weather_sidecar_path is None
+
+
 def test_browser_delivery_serializes_native_nullable_rpm_without_zero_filling(tmp_path: Path) -> None:
     canonical_parent = tmp_path / "canonical"
     publish_canonical_generation(
@@ -260,14 +382,14 @@ def test_browser_delivery_rejects_a_malformed_season_year_before_publishing(tmp_
         build_browser_delivery(read_validated_canonical_generation(canonical_parent), _track_assets())
 
 
-def test_direct_browser_manifest_without_metadata_keeps_legacy_output_and_freezes_metadata() -> None:
+def test_direct_v2_browser_manifest_freezes_optional_metadata() -> None:
     drivers = ({
         "id": "HAM", "displayName": "Lewis Hamilton", "teamName": "Mercedes",
         "colorHex": "#00D2BE", "carNumber": "44",
     },)
-    legacy = BrowserManifest("synthetic-race", "Synthetic Race", drivers)
-    assert "seasonMetadata" not in legacy.as_dict()
-    assert "telemetryCapabilities" not in legacy.as_dict()
+    manifest = BrowserManifest("synthetic-race", "Synthetic Race", drivers, session_mode="race")
+    assert manifest.as_dict()["contractVersion"] == "v2"
+    assert manifest.as_dict()["sessionMode"] == "race"
 
     metadata = {"year": 2026}
     capabilities = {
@@ -276,6 +398,7 @@ def test_direct_browser_manifest_without_metadata_keeps_legacy_output_and_freeze
     }
     enriched = BrowserManifest(
         "synthetic-race", "Synthetic Race", drivers,
+        session_mode="race",
         season_metadata=metadata, telemetry_capabilities=capabilities,
     )
     metadata["year"] = 2025
@@ -965,34 +1088,7 @@ def test_practice_lap_pace_semantics_are_published_in_sidecar_without_race_lap_s
     assert manifest["lapSectorSidecar"]["path"] == "lap-sector-sidecar.json"
 
 
-def test_v1_browser_delivery_is_rejected_at_the_v2_validation_boundary(tmp_path: Path) -> None:
-    # Arrange: a valid v1 browser delivery is published against the frozen v1 schemas.
-    canonical_parent = tmp_path / "canonical"
-    published_canonical = publish_canonical_generation(
-        frames=_canonical_frames(), target_parent=canonical_parent, generation_id="canonical-v1",
-    )
-    delivery = build_browser_delivery(
-        read_validated_canonical_generation(canonical_parent), _track_assets(),
-    )
-    browser_parent = tmp_path / "browser-v1"
-    publish_browser_delivery(
-        browser_parent=browser_parent, delivery_version="delivery-v1", delivery=delivery,
-        schema_root=CONTRACT_ROOT / "schemas",
-    )
-
-    # Act / Assert: the same artifact is rejected at the active v2 boundary.
-    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed") as error:
-        validate_complete_browser_delivery(
-            browser_parent,
-            expected_generation_id="canonical-v1",
-            expected_manifest_sha256=published_canonical.manifest_sha256,
-            schema_root=CONTRACT_ROOT_V2 / "schemas",
-        )
-    assert error.value.__cause__ is not None
-    assert "schema validation" in str(error.value.__cause__)
-
-
-def test_v2_browser_delivery_is_rejected_at_the_v1_validation_boundary(tmp_path: Path) -> None:
+def test_v2_browser_delivery_validates_at_the_active_boundary(tmp_path: Path) -> None:
     # Arrange: a valid v2 race delivery is published against the v2 schemas.
     canonical_parent = tmp_path / "canonical-v2"
     published_canonical = publish_canonical_generation(
@@ -1007,14 +1103,13 @@ def test_v2_browser_delivery_is_rejected_at_the_v1_validation_boundary(tmp_path:
         schema_root=CONTRACT_ROOT_V2 / "schemas", contract_version="v2",
     )
 
-    # Act / Assert: v2 artifacts cannot be verified through the frozen v1 schemas.
-    with pytest.raises(BrowserDeliveryPublicationError, match="validation failed"):
-        validate_complete_browser_delivery(
-            browser_parent,
-            expected_generation_id="canonical-v2",
-            expected_manifest_sha256=published_canonical.manifest_sha256,
-            schema_root=CONTRACT_ROOT / "schemas",
-        )
+    # Act / Assert: the active v2 boundary accepts the immutable delivery.
+    validate_complete_browser_delivery(
+        browser_parent,
+        expected_generation_id="canonical-v2",
+        expected_manifest_sha256=published_canonical.manifest_sha256,
+        schema_root=CONTRACT_ROOT_V2 / "schemas",
+    )
 
 
 def test_delivery_timeline_unions_canonical_timestamps_and_filters_pre_race_values() -> None:
@@ -1106,16 +1201,16 @@ def test_browser_delivery_derives_each_driver_once_on_the_final_timeline(tmp_pat
 
 
 def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compatible() -> None:
-    # Arrange: load only committed compatibility artifacts.
+    # Arrange: load only committed v2 replay artifacts.
     manifest = _load_json(FIXTURE_ROOT / "manifest.json")
     chunks = tuple(_load_json(FIXTURE_ROOT / reference["path"]) for reference in manifest["chunks"])
     track_assets = _load_json(FIXTURE_ROOT / "track-assets.json")
     golden = _load_json(FIXTURE_ROOT / "golden-snapshots.json")
 
-    # Act: validate the immutable v1 fixture against the local schema registry.
+    # Act: validate the immutable v2 fixture against the local schema registry.
     _validate_replay_contract(manifest, chunks, track_assets)
 
-    # Assert: its compatibility shape and golden expectations have not been replaced.
+    # Assert: its overlap shape and golden expectations remain stable.
     assert [(item["startMs"], item["endMs"], item["overlapWithPreviousMs"]) for item in manifest["chunks"]] == [
         (0, 2_000, 0), (2_000, 4_000, 500)
     ]
@@ -1123,18 +1218,16 @@ def test_committed_deterministic_fixture_remains_schema_valid_and_golden_compati
     assert {snapshot["id"] for snapshot in golden["snapshots"]} >= {
         "overlap-ownership-at-1500", "interpolated-sparse-event-at-2600"
     }
-    # Assert: the explicit v1 historical contract remains frozen with no v2
-    # session-mode metadata or v2 schema identifiers leaking into the fixture.
-    assert manifest["contractVersion"] == "v1"
-    assert "sessionMode" not in manifest
-    assert "formatVersion" not in manifest
-    assert manifest["schemas"]["manifest"] == "urn:f1-cache-replay:schema:replay-data:v1:manifest"
+    assert manifest["contractVersion"] == "v2"
+    assert manifest["sessionMode"] == "race"
+    assert manifest["formatVersion"] == "browser-delivery-v2"
+    assert manifest["schemas"]["manifest"] == "urn:f1-cache-replay:schema:replay-data:v2:manifest"
     assert manifest["trackAssets"]["path"] == "track-assets.json"
     assert manifest["goldenSnapshots"]["path"] == "golden-snapshots.json"
-    assert track_assets["contractVersion"] == "v1"
-    assert all(chunk.get("contractVersion") == "v1" for chunk in chunks)
+    assert track_assets["contractVersion"] == "v2"
+    assert all(chunk.get("contractVersion") == "v2" for chunk in chunks)
     assert all(
-        reference["schemaId"].startswith("urn:f1-cache-replay:schema:replay-data:v1:")
+        reference["schemaId"].startswith("urn:f1-cache-replay:schema:replay-data:v2:")
         for reference in manifest["chunks"]
     )
 
@@ -1600,6 +1693,7 @@ def _canonical_frames(
     lap_one_rows: tuple[tuple[str, int | None], ...] | None = None,
     qualifying_phase: str | None = None, include_pre_race: bool = False,
     include_rpm: bool = False, year: int = 2026,
+    weather_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, pl.DataFrame]:
     rows = {name: [_row(name)] for name in CANONICAL_PARQUET_TABLE_NAMES}
     rows["session_metadata"][0]["year"] = year
@@ -1615,7 +1709,7 @@ def _canonical_frames(
         _row("position_telemetry", session_time_ms=time, x=x, y=y, status=status)
         for time, x, y, status in ((0, 0.0, 1.0, "OnTrack"), (9_500, None, 9.5, None), (10_000, 10.0, 11.0, "OnTrack"), (19_999, 20.0, None, "OnTrack"))
     ]
-    rows["weather"] = [
+    rows["weather"] = weather_rows if weather_rows is not None else [
         _row("weather", session_time_ms=0, rainfall=False),
         _row("weather", session_time_ms=6_000, rainfall=True),
     ]
@@ -1691,6 +1785,7 @@ def _row(table: str, **changes: object) -> dict[str, object]:
 
 def _track_assets() -> dict[str, object]:
     assets = _load_json(FIXTURE_ROOT / "track-assets.json")
+    assets["contractVersion"] = "v2"
     assets["fixtureId"] = "synthetic-race"
     return assets
 
@@ -1913,6 +2008,8 @@ def _artifact_bytes(result: object) -> tuple[bytes, ...]:
     paths = (result.manifest_path, result.track_assets_path, *result.chunk_paths)
     if result.timeline_summary_path is not None:
         paths = (*paths, result.timeline_summary_path)
+    if result.weather_sidecar_path is not None:
+        paths = (*paths, result.weather_sidecar_path)
     return tuple(path.read_bytes() for path in paths)
 
 
@@ -1926,6 +2023,7 @@ def _registry() -> tuple[dict[str, object], Registry]:
         for name in (
             "manifest", "chunk", "track-assets", "timeline-summary",
             "browser-lap-sector-sidecar", "penalty-sidecar", "stint-summary", "pit-loss-model",
+            "weather-sidecar",
         )
     }
     registry = Registry()

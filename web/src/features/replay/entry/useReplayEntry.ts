@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { loadReplayIndex } from '../../../data/replay/loader'
 import { createFetchSource } from '../../../data/replay/source'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayIndex, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayIndex, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../../../engine/replay'
 import { isQualifyingSessionMode } from '../session-capabilities'
 
@@ -30,6 +30,7 @@ export interface ReadyReplay {
   readonly qualifyingSummary?: QualifyingSummary
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
   readonly qualifyingTimeline?: QualifyingTimeline
+  readonly weatherSidecar?: WeatherSidecar
 }
 
 export interface ReplayEntryState {
@@ -99,6 +100,7 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
     ...(index.qualifyingSummary === undefined ? {} : { qualifyingSummary: index.qualifyingSummary }),
     ...(index.qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus: index.qualifyingLapStatus }),
     ...(index.qualifyingTimeline === undefined ? {} : { qualifyingTimeline: index.qualifyingTimeline }),
+    ...(index.weatherSidecar === undefined ? {} : { weatherSidecar: index.weatherSidecar }),
     trackAssets: index.trackAssets,
     coordinateInterpolation,
   })

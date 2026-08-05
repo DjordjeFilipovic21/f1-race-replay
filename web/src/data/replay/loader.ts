@@ -1,7 +1,8 @@
 import { verifyDigest } from './digest'
 import { parseChunk, parseLapSectorSidecar, parseManifest, parsePenaltySidecar, parsePitLossModel, parsePointer, parseQualifyingLapStatus, parseQualifyingSummary, parseQualifyingTimeline, parseStintSummary, parseTimelineSummary, parseTrackAssets, validateQualifyingLikeLapSectorSidecar } from './guards'
 import { assertSafeRelativePath, readJson, resolveRelativePath } from './source'
-import type { ChunkReference, QualifyingTimeline, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary } from './types'
+import { parseWeatherSidecar, parseWeatherSidecarReference } from './guards'
+import type { ChunkReference, QualifyingTimeline, ReplayChunk, ReplayData, ReplayIndex, ReplayManifest, ReplaySource, TimelineSummary, WeatherSidecar } from './types'
 
 export interface LoadReplayDataOptions {
   readonly source: ReplaySource
@@ -15,14 +16,14 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
   const manifestPath = assertSafeRelativePath(pointer?.manifestPath ?? options.manifestPath ?? 'manifest.json')
   const manifestBytes = await options.source.read(manifestPath)
   if (pointer) await verifyDigest(manifestBytes, pointer.manifestSha256)
-  const manifest = parseManifest(decodeJson(manifestBytes, manifestPath))
+  const manifest = parseManifestWithOptionalWeather(decodeJson(manifestBytes, manifestPath))
   if (pointer && manifest.deliveryVersion !== pointer.deliveryVersion) throw new Error('Pointer and manifest delivery identities disagree')
   const trackPath = resolveRelativePath(manifestPath, manifest.trackAssets.path)
   const trackBytes = await options.source.read(trackPath)
   if (manifest.trackAssets.sha256) await verifyDigest(trackBytes, manifest.trackAssets.sha256)
   const trackAssets = parseTrackAssets(decodeJson(trackBytes, trackPath))
   if (trackAssets.fixtureId !== manifest.fixtureId) throw new Error('Track assets and manifest fixture identities disagree')
-  const [timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline] = await Promise.all([
+  const [timelineSummary, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar] = await Promise.all([
     manifest.timelineSummary === undefined
       ? Promise.resolve(undefined)
       : loadTimelineSummary(options.source, manifestPath, manifest),
@@ -30,7 +31,6 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
       validateSidecarIdentity(manifest, sidecar, 'Lap sector sidecar')
       validateSidecarDrivers(manifest, sidecar, 'Lap sector sidecar')
       if (manifest.sessionMode === 'qualifying' || manifest.sessionMode === 'sprint-qualifying' || manifest.sessionMode === 'sprint-shootout') {
-        if (sidecar.contractVersion !== 'v2') throw new Error('Lap sector sidecar contract version disagrees with manifest')
         validateQualifyingLikeLapSectorSidecar(sidecar)
       }
     }),
@@ -58,6 +58,7 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
       validateQualifyingTimelineBounds(manifest, timeline)
       validateQualifyingTimelineDrivers(manifest, timeline)
     }),
+    loadOptionalWeatherSidecar(options.source, manifestPath, manifest.weatherSidecar, manifest),
   ])
 
   const loadChunk = async (sequence: number): Promise<ReplayChunk> => {
@@ -90,6 +91,7 @@ export async function loadReplayIndex(options: LoadReplayDataOptions): Promise<R
     ...(qualifyingSummary === undefined ? {} : { qualifyingSummary }),
     ...(qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus }),
     ...(qualifyingTimeline === undefined ? {} : { qualifyingTimeline }),
+    ...(weatherSidecar === undefined ? {} : { weatherSidecar }),
     loadChunk,
     loadAllChunks,
   })
@@ -112,6 +114,7 @@ export async function loadReplayData(options: LoadReplayDataOptions): Promise<Re
     ...(index.qualifyingSummary === undefined ? {} : { qualifyingSummary: index.qualifyingSummary }),
     ...(index.qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus: index.qualifyingLapStatus }),
     ...(index.qualifyingTimeline === undefined ? {} : { qualifyingTimeline: index.qualifyingTimeline }),
+    ...(index.weatherSidecar === undefined ? {} : { weatherSidecar: index.weatherSidecar }),
     chunks,
   })
 }
@@ -130,6 +133,61 @@ async function loadOptionalSidecar<T extends { readonly fixtureId: string }>(
   const sidecar = parse(decodeJson(bytes, path))
   validate(sidecar)
   return sidecar
+}
+
+/**
+ * Weather is an optional enhancement to an otherwise usable replay. Its
+ * payload boundary is fail-closed, unlike the existing required sidecars.
+ */
+async function loadOptionalWeatherSidecar(
+  source: ReplaySource,
+  manifestPath: string,
+  reference: ReplayManifest['weatherSidecar'],
+  manifest: ReplayManifest,
+): Promise<WeatherSidecar | undefined> {
+  if (reference === undefined) return undefined
+  try {
+    return await loadOptionalSidecar(source, manifestPath, reference, parseWeatherSidecar, (sidecar) => {
+      validateSidecarIdentity(manifest, sidecar, 'Weather sidecar')
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Keep malformed weather references from turning an otherwise valid manifest
+ * into a replay outage. Core manifest validation still runs strictly after the
+ * optional field is removed; other sidecar references retain their strictness.
+ */
+function parseManifestWithOptionalWeather(value: unknown): ReplayManifest {
+  if (!isRecord(value) || !('weatherSidecar' in value)) return parseManifest(value)
+  try {
+    parseWeatherSidecarReference(value.weatherSidecar)
+    return parseManifest(value)
+  } catch (weatherManifestError) {
+    const coreManifest = withoutOptionalWeather(value)
+    try {
+      return parseManifest(coreManifest)
+    } catch {
+      throw weatherManifestError
+    }
+  }
+}
+
+function withoutOptionalWeather(value: Record<string, unknown>): Record<string, unknown> {
+  const coreManifest = { ...value }
+  delete coreManifest.weatherSidecar
+  if (isRecord(coreManifest.schemas)) {
+    const schemas = { ...coreManifest.schemas }
+    delete schemas.weatherSidecar
+    coreManifest.schemas = schemas
+  }
+  return coreManifest
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function validateSidecarIdentity<T extends { readonly fixtureId: string }>(manifest: ReplayManifest, sidecar: T, label: string): void {

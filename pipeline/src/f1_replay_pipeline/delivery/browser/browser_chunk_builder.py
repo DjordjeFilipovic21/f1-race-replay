@@ -16,7 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 
 
 FieldValue = TypeVar("FieldValue")
-ContractVersion = Literal["v1", "v2"]
+ContractVersion = Literal["v2"]
 
 
 CHUNK_DURATION_MS = 10_000
@@ -134,7 +134,7 @@ class BrowserChunk:
     track_status_code: tuple[int | None, ...]
     weather_state: tuple[str | None, ...]
     events: tuple[BrowserEvent, ...]
-    contract_version: ContractVersion = "v1"
+    contract_version: ContractVersion = "v2"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "time_ms", tuple(self.time_ms))
@@ -144,8 +144,8 @@ class BrowserChunk:
         object.__setattr__(self, "track_status_code", tuple(self.track_status_code))
         object.__setattr__(self, "weather_state", tuple(self.weather_state))
         object.__setattr__(self, "events", tuple(self.events))
-        if self.contract_version not in {"v1", "v2"}:
-            raise ValueError("contract_version must be v1 or v2")
+        if self.contract_version != "v2":
+            raise ValueError("contract_version must be v2")
         if self.chunk_id != f"chunk-{self.sequence:03d}" or self.sequence < 1:
             raise ValueError("chunk identity and sequence disagree")
         if type(self.start_ms) is not int or type(self.end_ms) is not int or not 0 <= self.start_ms < self.end_ms <= MAX_INT64:
@@ -178,12 +178,7 @@ class BrowserChunk:
         object.__setattr__(self, "drivers", MappingProxyType(dict(sorted(self.drivers.items()))))
 
     def as_dict(self, fixture_id: str) -> dict[str, object]:
-        """Serialize a chunk with an explicit contract version.
-
-        Publication code may continue using its historical v1 serializer; the
-        model serializer is version-aware so new v2 writers cannot silently
-        emit v1 identifiers.
-        """
+        """Serialize a chunk using the active v2 contract."""
         return {
             "contractVersion": self.contract_version,
             "fixtureId": fixture_id,
@@ -271,12 +266,12 @@ def build_browser_chunks(
     end_ms: int,
     chunk_duration_ms: int = CHUNK_DURATION_MS,
     overlap_ms: int = HANDOFF_OVERLAP_MS,
-    contract_version: ContractVersion = "v1",
+    contract_version: ContractVersion = "v2",
 ) -> tuple[BrowserChunk, ...]:
     """Partition exact observations without resampling or interpolating source rows."""
     _validate_bounds(start_ms, end_ms, chunk_duration_ms, overlap_ms)
-    if contract_version not in {"v1", "v2"}:
-        raise ValueError("contract_version must be v1 or v2")
+    if contract_version != "v2":
+        raise ValueError("contract_version must be v2")
     _validate_drivers(driver_fields)
     ordered_events = tuple(sorted(events, key=_event_sort_key))
     timeline = _shared_timeline(driver_fields, global_fields)
@@ -301,7 +296,7 @@ def _build_chunk(
     sequence: int, start_ms: int, end_ms: int, timeline: tuple[int, ...],
     driver_fields: Mapping[str, BrowserDriverFields], global_fields: BrowserGlobalFields,
     events: tuple[BrowserEvent, ...], overlap_ms: int,
-    contract_version: ContractVersion = "v1",
+    contract_version: ContractVersion = "v2",
 ) -> BrowserChunk:
     overlap_start = start_ms if sequence == 1 else start_ms - overlap_ms
     left = bisect_left(timeline, overlap_start)

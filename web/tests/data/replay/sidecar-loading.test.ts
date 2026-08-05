@@ -510,37 +510,6 @@ describe('parseLapSectorSidecar', () => {
     expect(() => validateQualifyingLikeLapSectorSidecar(parseLapSectorSidecar(lapSectorSidecarPayload()))).toThrow('phase boundary')
   })
 
-  test('keeps V1 lap-sector payloads phase-free', () => {
-    const payload = lapSectorSidecarPayload()
-    delete payload.phaseBoundaries
-    for (const columns of Object.values(payload.drivers as Record<string, Record<string, unknown>>)) delete columns.qualifyingPhase
-    payload.contractVersion = 'v1'
-
-    const result = parseLapSectorSidecar(payload)
-
-    expect(result.contractVersion).toBe('v1')
-    expect(result).not.toHaveProperty('phaseBoundaries')
-    expect(result.drivers.HAM).not.toHaveProperty('qualifyingPhase')
-  })
-
-  test.each(['race', 'sprint'] as const)('loads a legacy V1 lap-sector sidecar for %s sessions', async (sessionMode) => {
-    const payload = lapSectorSidecarPayload()
-    delete payload.phaseBoundaries
-    for (const columns of Object.values(payload.drivers as Record<string, Record<string, unknown>>)) delete columns.qualifyingPhase
-    payload.contractVersion = 'v1'
-
-    const { source } = await fixtureSourceWithSidecars({
-      sessionMode,
-      omitStintSummary: true,
-      omitPitLossModel: true,
-      lapSectorSidecar: payload,
-    })
-
-    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
-
-    expect(index.lapSectorSidecar?.contractVersion).toBe('v1')
-  })
-
   test.each([
     ['invalid phase values', (payload: Record<string, unknown>) => {
       ;(payload.drivers as Record<string, Record<string, unknown>>).HAM.qualifyingPhase = ['Q4', null, null]
@@ -580,10 +549,10 @@ describe('parseLapSectorSidecar', () => {
 
   test('rejects a payload with wrong contractVersion', () => {
     // Arrange
-     const payload = lapSectorSidecarPayload({ contractVersion: 'v3' })
+    const payload = lapSectorSidecarPayload({ contractVersion: 'v3' })
 
     // Act & Assert
-     expect(() => parseLapSectorSidecar(payload)).toThrow('contract version v1 or v2')
+    expect(() => parseLapSectorSidecar(payload)).toThrow('contract version v2')
   })
 
   test('rejects a payload with invalid fixtureId', () => {

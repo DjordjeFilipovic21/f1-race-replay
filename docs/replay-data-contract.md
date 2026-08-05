@@ -260,6 +260,88 @@ to equal-length column arrays sorted by ascending lap number:
   `lapSectorSidecar` remain valid and loadable. Strict parsers must explicitly
   allow its absence.
 
+### Optional v2 weather sidecar
+
+The v2 manifest may include a native-cadence `weatherSidecar` reference. Weather
+is mode-agnostic: it may be published for any v2 `sessionMode` when canonical
+weather rows exist, while the race-only and qualifying-only artifact rules above
+remain in force for their respective artifacts.
+
+```json
+"weatherSidecar": {
+  "path": "weather-sidecar.json",
+  "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar",
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The referenced `weather-sidecar.json` is a `v2` object with exactly these
+fields, in this deterministic serialized order:
+
+```json
+{
+  "contractVersion": "v2",
+  "fixtureId": "bahrain-2024",
+  "timeMs": [1000, 61000],
+  "airTempC": [24.5, null],
+  "humidityPct": [62.0, null],
+  "pressureMbar": [1012.0, null],
+  "rainfall": [false, false],
+  "trackTempC": [31.0, null],
+  "windDirectionDeg": [270, null],
+  "windSpeedMps": [3.2, null]
+}
+```
+
+All arrays are non-empty, equal-length columns with one entry per canonical
+`weather` row. `timeMs` contains absolute, non-negative, strictly ascending
+session milliseconds. Measurement entries are independently nullable; null
+means unavailable and is never replaced with zero, a previous value, or a
+fabricated measurement. Units are unchanged from the canonical table: air and
+track temperature are °C, humidity is %, pressure is mbar, rainfall is a
+nullable wet/dry boolean, wind direction is an integer meteorological
+from-direction in degrees (0–359), and wind speed is m/s. No unit conversion or
+compass-label field is added to the payload.
+
+The v2 schema enforces the v2 contract version, field types, nullable ranges,
+non-negative unique timestamps, and the fixed field set. Delivery-model and
+loader validation additionally enforces strict timestamp ordering, equal array
+lengths, finite measurements, fixture identity, deterministic serialization,
+and the manifest digest before publication or consumption. This version-aware
+validation prevents a v1 weather payload from being accepted as v2.
+
+The sidecar preserves the source's sparse, approximately once-per-minute
+cadence. It is not resampled, interpolated, forward-filled, bucketed, clipped,
+or supplemented with synthesized rows. At replay time `T`, a panel may use
+only the latest row with `timeMs <= T`; it must not inspect a future row or
+interpolate (especially not wind direction). A last-known row older than
+90,000 ms is stale and renders unavailable. Unavailable is also the result
+when the manifest has no sidecar, replay precedes the first row, or the
+selected row has no surviving measurements.
+
+FastF1 can turn missing or malformed numeric channels into zero. Its raw
+rainfall parser also maps non-`'1'` source values to `false`. The sidecar
+producer applies the fail-closed zero-sentinel policy from
+[ADR-003](adr/003-weather-sidecar-and-replay-panel.md): sentinel-prone
+temperature and pressure zeros become `null`; zero humidity, wind direction,
+and wind speed are retained only with corroborating measurements; explicit
+rainfall `false` remains the source's dry/unknown limitation, while canonical or
+adapted rainfall `null` remains null and renders unavailable. The canonical
+table is not rewritten by this sanitization.
+
+Weather remains an independent optional artifact: core chunks and canonical
+Parquet are unchanged. A v2 manifest may omit `weatherSidecar`, and an empty or
+unavailable canonical weather table produces no reference; consumers must
+render weather as unavailable rather than treating absence as an error.
+
+**Frozen v1 compatibility boundary:**
+`urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar`, the v1 payload
+shape, and historical v1 fixtures remain compatibility references only. They
+are not adapted in place and must never appear in a v2 manifest, v2 fixture, or
+v2 publication. The active v2 reader rejects v1 pointers, manifests, and
+sidecars; v1 compatibility is limited to the frozen historical surface
+described in [V1 frozen baseline and catalog cutover](#v1-frozen-baseline-and-catalog-cutover).
+
 ### Optional stint summary
 
 The manifest may include a compact, optional `stintSummary` reference to

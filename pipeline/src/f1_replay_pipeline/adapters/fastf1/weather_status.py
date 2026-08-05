@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import inspect
 from typing import cast
 
 import polars as pl
@@ -32,7 +33,7 @@ _WEATHER_FIELDS = (
 def adapt_weather(session: object, session_id: str | None = None) -> pl.DataFrame:
     """Return native weather observations without filling gaps between samples."""
     canonical_session_id = _session_id(session, session_id)
-    rows = [_weather_row(record, canonical_session_id) for record in _records(session, "weather_data")]
+    rows = [_weather_row(record, canonical_session_id) for record in _records(session, "weather_data", optional=True)]
     retained = _retain_weather_duplicates(rows)
     frame = pl.DataFrame(retained, schema=WEATHER_SCHEMA_V2).sort("session_id", "session_time_ms")
     validate_canonical_table("weather", frame, version="v2")
@@ -65,25 +66,59 @@ def _session_id(session: object, provided: str | None) -> str:
     return session_id
 
 
-def _records(session: object, field: str) -> Iterable[Mapping[str, object]]:
+def _records(session: object, field: str, *, optional: bool = False) -> Iterable[Mapping[str, object]]:
     try:
         table = getattr(session, field)
     except AttributeError as error:
+        if optional:
+            if not _has_declared_attribute(session, field):
+                return ()
+            if _is_fastf1_data_not_loaded(error):
+                return ()
+            raise
         raise NormalizationError(f"loaded session is missing required {field}") from error
+    except Exception as error:
+        if optional and _is_fastf1_data_not_loaded(error):
+            return ()
+        raise
     if table is None:
         return ()
-    to_dicts = getattr(table, "to_dicts", None)
-    if callable(to_dicts):
-        return _mapping_records(cast(Iterable[object], to_dicts()), field)
-    to_dict = getattr(table, "to_dict", None)
-    if callable(to_dict):
-        try:
-            return _mapping_records(cast(Iterable[object], to_dict("records")), field)
-        except TypeError:
-            return _mapping_records(cast(Iterable[object], to_dict(orient="records")), field)
-    if isinstance(table, Iterable) and not isinstance(table, (str, bytes, Mapping)):
-        return _mapping_records(table, field)
-    raise NormalizationError(f"{field} must provide iterable mapping records")
+    try:
+        to_dicts = getattr(table, "to_dicts", None)
+        if callable(to_dicts):
+            return _mapping_records(cast(Iterable[object], to_dicts()), field)
+        to_dict = getattr(table, "to_dict", None)
+        if callable(to_dict):
+            try:
+                return _mapping_records(cast(Iterable[object], to_dict("records")), field)
+            except TypeError:
+                return _mapping_records(cast(Iterable[object], to_dict(orient="records")), field)
+        if isinstance(table, Iterable) and not isinstance(table, (str, bytes, Mapping)):
+            return _mapping_records(table, field)
+        raise NormalizationError(f"{field} must provide iterable mapping records")
+    except Exception as error:
+        # FastF1 raises this known error when its soft weather load did not
+        # populate the lazy property. Do not hide malformed table errors.
+        if optional and _is_fastf1_data_not_loaded(error):
+            return ()
+        raise
+
+
+def _is_fastf1_data_not_loaded(error: Exception) -> bool:
+    """Recognize FastF1's documented lazy-weather exception without importing it."""
+    # The adapter is deliberately dependency-injected and duck-typed. Matching
+    # this exact documented class name keeps fake sessions deterministic while
+    # allowing every unrelated table/access error to propagate.
+    return type(error).__name__ == "DataNotLoadedError"
+
+
+def _has_declared_attribute(session: object, field: str) -> bool:
+    """Distinguish a genuinely absent field from an accessor that failed."""
+    try:
+        inspect.getattr_static(session, field)
+    except AttributeError:
+        return False
+    return True
 
 
 def _mapping_records(records: Iterable[object], field: str) -> Iterable[Mapping[str, object]]:

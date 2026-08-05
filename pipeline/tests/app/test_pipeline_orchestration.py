@@ -17,6 +17,7 @@ from fixtures.fake_fastf1_session import (
     build_complete_session,
     build_qualifying_session,
     build_qualifying_session_with_missing_splitter,
+    build_no_weather_session,
     build_sprint_session,
 )
 
@@ -202,6 +203,26 @@ def test_sprint_session_normalization_keeps_qualifying_phase_null() -> None:
 
     assert frames["session_metadata"].get_column("session_mode").to_list() == ["sprint"]
     assert frames["laps"].get_column("qualifying_phase").to_list() == [None, None]
+
+
+def test_pipeline_keeps_core_replay_usable_when_weather_is_absent() -> None:
+    # Arrange — FastF1 session data is complete except for optional weather rows.
+    published: list[Mapping[str, object]] = []
+
+    def publisher(*, frames: Mapping[str, object], target_parent: Path, generation_id: str) -> str:
+        published.append(frames)
+        return "published"
+
+    # Act
+    run_pipeline(_request(), lambda selection: build_no_weather_session(), publisher)
+
+    # Assert — the canonical weather table is typed and empty while core tables remain present.
+    frames = published[0]
+    assert getattr(frames["weather"], "is_empty")()
+    assert all(name in frames for name in (
+        "laps", "results", "car_telemetry", "position_telemetry",
+        "track_status_intervals", "race_control_messages",
+    ))
 
 
 def test_invalid_source_driver_mapping_does_not_call_publisher_and_preserves_stage_cause() -> None:

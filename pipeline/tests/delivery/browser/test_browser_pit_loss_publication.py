@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
@@ -23,6 +24,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     BrowserDeliveryBuild,
 )
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     BrowserDeliveryPublicationError,
     publish_browser_delivery,
@@ -31,7 +33,18 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1" / "schemas"
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+
+
+def _snapshot() -> CanonicalGenerationSnapshot:
+    session_metadata = pl.DataFrame([{
+        "session_id": "race-one", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_mode": "race", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return CanonicalGenerationSnapshot(
+        "canonical-one", "a" * 64, {"session_metadata": session_metadata},
+    )
 
 
 def _chunk() -> BrowserChunk:
@@ -51,18 +64,18 @@ def _delivery(model: BrowserPitLossModel | None = None) -> BrowserDeliveryBuild:
     manifest = BrowserManifest("race-one", "Race One", ({
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
-    },))
+    },), session_mode="race")
     point = {"x": 0.0, "y": 0.0}
     polyline = (point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0})
     assets = {
-        "contractVersion": "v1", "fixtureId": "race-one", "trackId": "track-one",
+        "contractVersion": "v2", "fixtureId": "race-one", "trackId": "track-one",
         "trackName": "Track One", "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
         "startFinish": {"center": point, "inner": point, "outer": point},
         "centerLine": polyline, "innerBoundary": polyline, "outerBoundary": polyline,
     }
     return BrowserDeliveryBuild(
-        CanonicalGenerationSnapshot("canonical-one", "a" * 64, {}),
+        _snapshot(),
         manifest, assets, (_chunk(),), pit_loss_model=model,
     )
 
@@ -114,7 +127,7 @@ def test_mutated_pit_loss_model_bytes_are_rejected_by_secure_validation(tmp_path
         )
 
 
-def test_legacy_manifest_without_pit_loss_model_remains_valid(tmp_path: Path) -> None:
+def test_v2_manifest_without_pit_loss_model_remains_valid(tmp_path: Path) -> None:
     result = _publish(tmp_path / "browser", _delivery())
     manifest = json.loads(result.manifest_path.read_bytes())
 
@@ -134,7 +147,7 @@ def test_pit_loss_model_refinement_must_start_at_replay_start(tmp_path: Path) ->
 def test_browser_delivery_build_rejects_an_untyped_pit_loss_model() -> None:
     with pytest.raises(TypeError, match="BrowserPitLossModel"):
         BrowserDeliveryBuild(
-            CanonicalGenerationSnapshot("canonical-one", "a" * 64, {}),
+            _snapshot(),
             _delivery().manifest, _delivery().track_assets, (_chunk(),),
             pit_loss_model=object(),  # type: ignore[arg-type]
         )

@@ -61,6 +61,44 @@
 .race-control-panel__message--penalty .race-control-panel__message-headline { color: #ffc2c4; }
 .race-control-panel__message-copy { color: #fff; font-family: Oxanium, sans-serif; font-size: .9rem; font-weight: 800; line-height: 1.35; margin: 0; overflow-wrap: anywhere; text-transform: uppercase; }
 
+.weather-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
+.weather-panel--stale { border-color: #8f6c2d; }
+.weather-panel--unavailable { border-color: var(--border); }
+.weather-panel__header { align-items: center; background: linear-gradient(105deg, #171c20, #101316); display: flex; gap: .75rem; justify-content: space-between; padding: .7rem; }
+.weather-panel__header h2 { font-size: 1rem; line-height: 1.2; }
+.weather-panel__status { border: 1px solid currentColor; border-radius: .2rem; font-size: .62rem; font-weight: 900; letter-spacing: .07em; line-height: 1; padding: .35rem .45rem; text-transform: uppercase; white-space: nowrap; }
+.weather-panel__status--fresh { color: var(--accent); }
+.weather-panel__status--stale { color: #f0bc53; }
+.weather-panel__status--unavailable { color: var(--text-muted); }
+.weather-panel__notice { color: var(--text-muted); font-size: .78rem; margin: 0; padding: .65rem .75rem 0; }
+.weather-panel__layout { display: grid; gap: .6rem; grid-template-columns: minmax(0, 1fr); padding: .75rem; }
+.weather-panel__wind { background: #1a2025; border-left: 2px solid var(--border-strong); min-width: 0; padding: .6rem; }
+.weather-panel--fresh .weather-panel__wind { border-left-color: var(--accent); }
+.weather-panel--stale .weather-panel__wind { border-left-color: #f0bc53; }
+.weather-panel__section-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: .4rem .6rem; justify-content: space-between; }
+.weather-panel__section-heading h3 { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; }
+.weather-panel__wind-summary { align-items: start; display: grid; gap: .65rem; grid-template-columns: minmax(0, 1fr); margin-top: .55rem; }
+.weather-panel__wind-direction { align-items: center; display: flex; gap: .5rem; min-width: 0; }
+.weather-panel__wind-arrow { block-size: 2.75rem; flex: 0 0 2.75rem; inline-size: 2.75rem; overflow: visible; }
+.weather-panel__wind-arrow path { fill: none; stroke: var(--accent); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.5; }
+.weather-panel--stale .weather-panel__wind-arrow path { stroke: #f0bc53; }
+.weather-panel--unavailable .weather-panel__wind-arrow path { stroke: var(--text-muted); }
+.weather-panel__wind-arrow-placeholder { stroke-dasharray: 3 3; }
+.weather-panel__wind-reading { display: grid; gap: .1rem; min-width: 0; }
+.weather-panel__wind-reading strong { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.weather-panel__wind-reading span { color: var(--text-muted); font-size: .66rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.weather-panel__wind-speed { border-top: 1px solid var(--border); display: grid; gap: .2rem; min-width: 0; padding-top: .5rem; }
+.weather-panel__wind-speed span, .weather-panel__metric dt, .weather-panel__update-label { color: var(--text-muted); font-size: .6rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.weather-panel__wind-speed strong, .weather-panel__metric dd { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .82rem; font-variant-numeric: tabular-nums; font-weight: 800; margin: 0; }
+.weather-panel__metrics { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.weather-panel__metric { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .5rem; }
+.weather-panel__metric dd { margin-top: .2rem; overflow-wrap: anywhere; }
+.weather-panel__update { align-items: baseline; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: .25rem .5rem; margin: 0 .75rem; padding: .6rem 0 .7rem; }
+.weather-panel__update-value { font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: .72rem; font-variant-numeric: tabular-nums; font-weight: 800; }
+.weather-panel__update-detail { color: var(--text-muted); font-size: .62rem; }
+.weather-panel__update--stale .weather-panel__update-value { color: #f0bc53; }
+.weather-panel__update--unavailable .weather-panel__update-value { color: var(--text-muted); }
+
 @keyframes race-control-message-enter { from { opacity: 0; transform: translateY(-.35rem); } to { opacity: 1; transform: translateY(0); } }
 @keyframes race-control-message-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-.35rem); } }
 

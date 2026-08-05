@@ -6,8 +6,8 @@ Covers:
   - BrowserStintSummaryReference contract enforcement (path, schemaId, sha256)
   - build_stint_summary derivation (determinism, null preservation, ordering,
     pit-in/pit-out mapping semantics, fail-closed error cases)
-  - Publication (artifact writing, SHA-256, schema validation, mutation
-    rejection, backward compatibility, cross-checks)
+     - Publication (artifact writing, SHA-256, schema validation, mutation
+     rejection, optional artifact absence, cross-checks)
 """
 
 from __future__ import annotations
@@ -54,16 +54,12 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import (
     build_stint_summary,
 )
-from f1_replay_pipeline.domain.canonical_schema import (
-    CANONICAL_TABLE_SCHEMAS,
-    CANONICAL_TABLE_SCHEMAS_V2,
-)
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
-SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
-SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT_V2 = SCHEMA_ROOT
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -71,8 +67,15 @@ SCHEMA_ROOT_V2 = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
 
 
 def _snapshot() -> CanonicalGenerationSnapshot:
-    """Minimal anonymous snapshot for delivery construction."""
-    return CanonicalGenerationSnapshot("test-gen", "a" * 64, {})
+    """Minimal v2 snapshot with the required practice session metadata."""
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return CanonicalGenerationSnapshot(
+        "test-gen", "a" * 64, {"session_metadata": session_metadata},
+    )
 
 
 def _chunk() -> BrowserChunk:
@@ -100,7 +103,7 @@ def _track_assets() -> dict[str, object]:
         point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0},
     )
     return {
-        "contractVersion": "v1", "fixtureId": "test-race",
+        "contractVersion": "v2", "fixtureId": "test-race",
         "trackId": "track-one", "trackName": "Track One",
         "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
@@ -135,7 +138,7 @@ def _delivery(
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
     },)
-    manifest = BrowserManifest("test-race", "Test Race", drivers)
+    manifest = BrowserManifest("test-race", "Test Race", drivers, session_mode="practice")
     return BrowserDeliveryBuild(
         _snapshot(), manifest, _track_assets(), (_chunk(),),
         stint_summary=stint_summary,
@@ -535,7 +538,7 @@ class TestBrowserStintSummary:
             BrowserStintSummary("race-01", {"HAM": "not-a-summary"})  # type: ignore[dict-item]
 
     def test_as_dict_returns_contract_format(self) -> None:
-        """✅ Positive: as_dict returns v1 contract with camelCase keys."""
+        """✅ Positive: as_dict returns the v2 contract with camelCase keys."""
         driver = BrowserDriverStintSummary(
             stint_number=(1,),
             compound=("SOFT",),
@@ -552,7 +555,7 @@ class TestBrowserStintSummary:
 
         result = summary.as_dict()
 
-        assert result["contractVersion"] == "v1"
+        assert result["contractVersion"] == "v2"
         assert result["fixtureId"] == "test-race"
         assert "drivers" in result
         assert "HAM" in result["drivers"]
@@ -593,7 +596,7 @@ class TestBrowserStintSummaryReference:
         with pytest.raises(ValueError, match="schema_id is invalid"):
             BrowserStintSummaryReference(
                 path="stint-summary.json",
-                schema_id="urn:f1-cache-replay:schema:replay-data:v1:wrong",
+                schema_id="urn:f1-cache-replay:schema:replay-data:unsupported:wrong",
                 sha256="a" * 64,
             )
 
@@ -628,6 +631,7 @@ class TestBuildStintSummary:
             "year": 2026, "round_number": 1,
             "event_name": "Test Grand Prix", "session_name": "Race",
             "session_type": "R",
+            "session_mode": "race",
             "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
         driver_rows: list[dict[str, object]] = []
@@ -638,14 +642,14 @@ class TestBuildStintSummary:
                 "full_name": did, "team_name": f"Team {did}",
                 "team_colour": "112233",
             })
-        stint_schema = dict(CANONICAL_TABLE_SCHEMAS["stints"])
+        stint_schema = dict(CANONICAL_TABLE_SCHEMAS_V2["stints"])
         full_stint_rows: list[dict[str, object]] = []
         for row in stint_rows:
             full: dict[str, object] = {col: None for col in stint_schema}
             full.update(row)
             full_stint_rows.append(full)
 
-        lap_schema = dict(CANONICAL_TABLE_SCHEMAS["laps"])
+        lap_schema = dict(CANONICAL_TABLE_SCHEMAS_V2["laps"])
         full_lap_rows: list[dict[str, object]] = []
         if lap_rows:
             for row in lap_rows:
@@ -656,12 +660,12 @@ class TestBuildStintSummary:
         frames: dict[str, pl.DataFrame] = {
             "session_metadata": pl.DataFrame(
                 [session_row],
-                schema=dict(CANONICAL_TABLE_SCHEMAS["session_metadata"]),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]),
                 strict=True,
             ),
             "drivers": pl.DataFrame(
                 driver_rows,
-                schema=dict(CANONICAL_TABLE_SCHEMAS["drivers"]),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["drivers"]),
                 strict=True,
             ),
             "stints": pl.DataFrame(
@@ -1091,11 +1095,11 @@ class TestStintSummaryPublication:
                 schema_root=SCHEMA_ROOT,
             )
 
-    def test_backward_compatible_without_stint_summary(self, tmp_path: Path) -> None:
-        """✅ Positive: a delivery without a stint summary publishes and validates."""
+    def test_v2_delivery_without_stint_summary_remains_valid(self, tmp_path: Path) -> None:
+        """✅ Positive: a v2 delivery without a stint summary publishes and validates."""
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="legacy-delivery",
+            delivery_version="delivery-v2-without-summary",
             delivery=_delivery(stint_summary=None),
             schema_root=SCHEMA_ROOT,
         )
@@ -1195,7 +1199,9 @@ class TestStintSummaryPublication:
 
         delivery = BrowserDeliveryBuild(
             _snapshot(),
-            BrowserManifest("test-race", "Test Race", manifest_drivers),
+            BrowserManifest(
+                "test-race", "Test Race", manifest_drivers, session_mode="practice",
+            ),
             _track_assets(),
             (chunk,),
             stint_summary=summary,
@@ -1203,7 +1209,7 @@ class TestStintSummaryPublication:
 
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="delivery-v1",
+            delivery_version="delivery-v2",
             delivery=delivery,
             schema_root=SCHEMA_ROOT,
         )
@@ -1262,7 +1268,7 @@ class TestStintSummaryPublication:
     def test_stint_summary_schema_validates_against_its_own_schema(
         self, tmp_path: Path,
     ) -> None:
-        """✅ Positive: stint summary JSON passes its own schema validation."""
+        """✅ Positive: v2 stint summary JSON passes its own schema validation."""
         summary = BrowserStintSummary("test-race", {"HAM": _empty_driver_summary()})
 
         result = _publish(tmp_path / "browser", stint_summary=summary)
@@ -1281,7 +1287,7 @@ class TestStintSummaryPublication:
             format_checker=Draft202012Validator.FORMAT_CHECKER,
         ).validate(stint_json)
 
-        assert stint_json["contractVersion"] == "v1"
+        assert stint_json["contractVersion"] == "v2"
         assert stint_json["fixtureId"] == "test-race"
         assert "drivers" in stint_json
 
