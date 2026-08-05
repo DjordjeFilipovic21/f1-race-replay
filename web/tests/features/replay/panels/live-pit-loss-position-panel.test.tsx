@@ -6,18 +6,18 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { LivePitLossPositionPanel } from '../../../../src/features/replay/panels/LivePitLossPositionPanel'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
-import type { DriverMetadata, PitLossModel } from '../../../../src/data/replay/types'
+import type { DriverMetadata, PitLossEstimateSidecar, PitLossModel } from '../../../../src/data/replay/types'
 
 const drivers: readonly DriverMetadata[] = [
   { id: 'VER', displayName: 'Max Verstappen', teamName: 'Red Bull Racing', colorHex: '#3671c6', carNumber: '1' },
   { id: 'NOR', displayName: 'Lando Norris', teamName: 'McLaren', colorHex: '#ff8000', carNumber: '4' },
 ]
 
-function replay(sessionTimeMs: number, lap: number): ReplaySnapshot {
+function replay(sessionTimeMs: number, lap: number, trackStatusCode: number | null = null): ReplaySnapshot {
   return {
     sessionTimeMs,
     leaderboardOrder: ['VER', 'NOR'],
-    trackStatusCode: null,
+    trackStatusCode,
     weatherState: null,
     events: [],
     drivers: {
@@ -36,7 +36,24 @@ function createPitLossModel(): PitLossModel {
     priorWeight: 2,
     timeMs: [0],
     estimatedLossMs: [22_000],
-    observedSampleCount: [0],
+    observedSampleCount: [1],
+  }
+}
+
+/**
+ * Australia curated baseline entry: Green 19300 ms, VSC 12300 ms, SC 9300 ms.
+ * Curated status timelines are single replay-start points without current-race
+ * observedSampleCount; catalog audit metadata is not part of the browser payload.
+ */
+function createCuratedPitLossEstimateSidecar(): PitLossEstimateSidecar {
+  return {
+    contractVersion: 'v1',
+    fixtureId: 'fixture-1',
+    trackId: 'track-1',
+    method: 'curated-track-baseline-v1',
+    race: { timeMs: [0], estimatedLossMs: [19_300] },
+    safetyCar: { timeMs: [0], estimatedLossMs: [9_300] },
+    virtualSafetyCar: { timeMs: [0], estimatedLossMs: [12_300] },
   }
 }
 
@@ -243,6 +260,178 @@ test('renders after pit comparison as unavailable when no pit-loss model', () =>
   const rejoinCard = rejoinLabel.closest('.pit-loss-position-panel__summary-cell')
   expect(rejoinCard).not.toBeNull()
   expect(rejoinCard!.textContent).toContain('Unavailable')
+
+  source.controller.dispose()
+})
+
+test('renders curated Green catalog value at replay start without a legacy model', () => {
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={createCuratedPitLossEstimateSidecar()}
+    />,
+  )
+
+  // Catalog-backed values are available from replay start without current-race samples
+  expect(screen.getByText('+19.300s')).toBeTruthy()
+  expect(screen.getByText('Green Flag value')).toBeTruthy()
+  expect(screen.queryByText(/Baseline/)).toBeNull()
+
+  source.controller.dispose()
+})
+
+test('switches curated catalog values as the track status changes across the cursor', () => {
+  vi.useFakeTimers()
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={createCuratedPitLossEstimateSidecar()}
+    />,
+  )
+
+  // Green at replay start
+  expect(screen.getByText('+19.300s')).toBeTruthy()
+
+  // Safety Car at a later cursor
+  source.publish({ ...source.snapshot(), timeMs: 600_000, replay: replay(600_000, 45, 4) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(screen.getByText('+9.300s')).toBeTruthy()
+
+  // VSC at a later cursor
+  source.publish({ ...source.snapshot(), timeMs: 900_000, replay: replay(900_000, 50, 6) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(screen.getByText('+12.300s')).toBeTruthy()
+
+  // Back to Green
+  source.publish({ ...source.snapshot(), timeMs: 1_200_000, replay: replay(1_200_000, 55, 1) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(screen.getByText('+19.300s')).toBeTruthy()
+  expect(screen.queryByText(/Baseline/)).toBeNull()
+
+  source.controller.dispose()
+})
+
+test('fails closed for an unknown status with a curated sidecar and no legacy model', () => {
+  vi.useFakeTimers()
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={createCuratedPitLossEstimateSidecar()}
+    />,
+  )
+
+  expect(screen.getByText('+19.300s')).toBeTruthy()
+
+  // Unknown track status at a later cursor
+  source.publish({ ...source.snapshot(), timeMs: 120_000, replay: replay(120_000, 10, 99) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+
+  // Explicit unavailable, never a value or the old 22000 ms baseline
+  const pitLossCard = screen.getByText('Pit-loss estimate').closest('.pit-loss-position-panel__summary-cell')
+  expect(pitLossCard).not.toBeNull()
+  expect(pitLossCard!.textContent).toContain('—')
+  expect(pitLossCard!.textContent).toContain('Unavailable')
+  expect(screen.queryByText('+22.000s')).toBeNull()
+  expect(screen.queryByText(/Baseline/)).toBeNull()
+
+  source.controller.dispose()
+})
+
+test('never renders catalog-only source status metadata', () => {
+  const sidecar = createCuratedPitLossEstimateSidecar() as unknown as Record<string, unknown>
+  sidecar.sourceStatus = 'official'
+  ;(sidecar.race as Record<string, unknown>).sourceStatus = 'measured'
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={sidecar as unknown as PitLossEstimateSidecar}
+    />,
+  )
+
+  // The catalog-only field name and its values never reach the browser DOM
+  expect(screen.queryByText(/sourceStatus/i)).toBeNull()
+  expect(document.body.textContent).not.toContain('sourceStatus')
+  expect(document.body.textContent).not.toContain('measured')
+
+  source.controller.dispose()
+})
+
+test('renders only the selected curated value, never catalog audit metadata', () => {
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={createCuratedPitLossEstimateSidecar()}
+    />,
+  )
+
+  const pitLossCard = screen.getByText('Pit-loss estimate').closest('.pit-loss-position-panel__summary-cell')
+  expect(pitLossCard).not.toBeNull()
+  expect(pitLossCard!.textContent).toContain('Green Flag value')
+  expect(pitLossCard!.textContent).not.toContain('Catalog evidence')
+  expect(pitLossCard!.textContent).not.toContain('Confidence')
+  expect(pitLossCard!.textContent).not.toContain('sample')
+
+  source.controller.dispose()
+})
+
+test('labels legacy sidecar observations as current-race samples, never catalog evidence', () => {
+  const sidecar: PitLossEstimateSidecar = {
+    contractVersion: 'v1',
+    fixtureId: 'fixture-1',
+    trackId: 'track-1',
+    method: 'track-status-median-v1',
+    race: { timeMs: [0, 100], estimatedLossMs: [22_000, 21_500], observedSampleCount: [0, 4] },
+  }
+  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, replay: replay(120_000, 10, 1), crossedEvents: [], error: null })
+
+  render(
+    <LivePitLossPositionPanel
+      controller={source.controller}
+      drivers={drivers}
+      refreshKey={0}
+      selectedDriverId="VER"
+      pitLossModel={null}
+      pitLossEstimateSidecar={sidecar}
+    />,
+  )
+
+  // Current-race observations are labelled as samples, not catalog metadata
+  const pitLossCard = screen.getByText('Pit-loss estimate').closest('.pit-loss-position-panel__summary-cell')
+  expect(pitLossCard).not.toBeNull()
+  expect(pitLossCard!.textContent).toContain('4 samples')
+  expect(pitLossCard!.textContent).not.toContain('Catalog evidence')
+  expect(pitLossCard!.textContent).not.toContain('calibration')
+  expect(screen.queryByText(/Baseline/)).toBeNull()
 
   source.controller.dispose()
 })

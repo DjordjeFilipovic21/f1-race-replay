@@ -5,11 +5,12 @@ import { sha256Hex } from '../../../src/data/replay/digest'
 import {
   parseLapSectorSidecar,
   parseManifest,
+  parsePitLossEstimateSidecar,
   parsePitLossModel,
   parseStintSummary,
 } from '../../../src/data/replay/guards'
 import { loadReplayIndex } from '../../../src/data/replay/loader'
-import type { ReplaySource } from '../../../src/data/replay/types'
+import type { PitLossEstimateSidecar, ReplaySource } from '../../../src/data/replay/types'
 
 const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
@@ -115,6 +116,68 @@ function pitLossModelMinimalPayload(): Record<string, unknown> {
   }
 }
 
+function pitLossEstimateSidecarPayload(overrides?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    contractVersion: 'v1',
+    fixtureId: 'deterministic-race',
+    trackId: 'deterministic-short-loop',
+    method: 'track-status-median-v1',
+    race: {
+      timeMs: [0, 1_000, 2_000],
+      estimatedLossMs: [20_000, 19_000, 18_000],
+      observedSampleCount: [0, 1, 2],
+    },
+    ...overrides,
+  }
+}
+
+/**
+ * Australia curated baseline entry: Green 19300 ms, VSC 12300 ms (7-second
+ * discount), SC 9300 ms (10-second discount). Each status timeline is a single
+ * replay-start point without current-race observedSampleCount. The helper keeps
+ * legacy audit fields so the loader's backwards-compatible discard path is
+ * covered.
+ */
+function curatedPitLossEstimateSidecarPayload(overrides?: Record<string, unknown>): Record<string, unknown> {
+  const provenance = {
+    sourceUrl: 'https://www.formula1.com/en/latest/article/need-to-know-the-most-important-facts-stats-and-trivia-ahead-of-the-2026.7gyyqNLcwuCPZdXvgGwhCM',
+    capturedDate: '2026-03-10',
+    evidence: 'Official Formula1.com per-circuit pit-loss baseline for the 2026 Australian Grand Prix.',
+    method: 'official-circuit-baseline',
+  }
+  return {
+    contractVersion: 'v1',
+    fixtureId: 'deterministic-race',
+    trackId: 'deterministic-short-loop',
+    method: 'curated-track-baseline-v1',
+    catalogVersion: 'v1',
+    provenance,
+    evidenceCount: 1,
+    confidence: 'high',
+    statusMetadata: {
+      green: {
+        provenance: { ...provenance, evidence: 'Official Formula1.com Australia Green baseline.' },
+        evidenceCount: 1,
+        confidence: 'high',
+      },
+      sc: {
+        provenance: { ...provenance, evidence: 'Derived Safety Car baseline for Australia.' },
+        evidenceCount: 1,
+        confidence: 'medium',
+      },
+      vsc: {
+        provenance: { ...provenance, evidence: 'Derived Virtual Safety Car baseline for Australia.' },
+        evidenceCount: 1,
+        confidence: 'medium',
+      },
+    },
+    race: { timeMs: [0], estimatedLossMs: [19_300] },
+    safetyCar: { timeMs: [0], estimatedLossMs: [9_300] },
+    virtualSafetyCar: { timeMs: [0], estimatedLossMs: [12_300] },
+    ...overrides,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Source builder — extends publishedFixtureSource with sidecar files
 // ---------------------------------------------------------------------------
@@ -126,13 +189,20 @@ async function fixtureSourceWithSidecars(options: {
   corruptLapSectorDigest?: boolean
   corruptStintDigest?: boolean
   corruptPitLossDigest?: boolean
-  malformedSidecarPath?: 'lap-sector-sidecar.json' | 'stint-summary.json' | 'pit-loss-model.json'
+  includePitLossEstimateSidecar?: boolean
+  pitLossEstimateSidecar?: Record<string, unknown>
+  corruptPitLossEstimateDigest?: boolean
+  malformedSidecarPath?: 'lap-sector-sidecar.json' | 'stint-summary.json' | 'pit-loss-model.json' | 'pit-loss-estimate-sidecar.json'
   omitLapSector?: boolean
   omitStintSummary?: boolean
   omitPitLossModel?: boolean
+  omitPitLossEstimateSidecar?: boolean
   wrongFixtureLapSector?: boolean
   wrongFixtureStintSummary?: boolean
   wrongFixturePitLossModel?: boolean
+  wrongFixturePitLossEstimate?: boolean
+  wrongTrackPitLossEstimate?: boolean
+  unsafePitLossEstimatePath?: boolean
   seasonMetadata?: Record<string, unknown>
   telemetryCapabilities?: Record<string, unknown>
   omitSeasonMetadata?: boolean
@@ -195,6 +265,19 @@ async function fixtureSourceWithSidecars(options: {
     files.set('generations/demo/pit-loss-model.json', encoder.encode(JSON.stringify(pitLossModelPayload())))
   }
 
+  // Status-aware pit-loss estimate sidecar
+  if (options.wrongFixturePitLossEstimate) {
+    const payloadBytes = encoder.encode(JSON.stringify(pitLossEstimateSidecarPayload({ fixtureId: 'wrong-fixture' })))
+    files.set('generations/demo/pit-loss-estimate-sidecar.json', payloadBytes)
+  } else if (options.wrongTrackPitLossEstimate) {
+    const payloadBytes = encoder.encode(JSON.stringify(pitLossEstimateSidecarPayload({ trackId: 'wrong-track' })))
+    files.set('generations/demo/pit-loss-estimate-sidecar.json', payloadBytes)
+  } else if (options.pitLossEstimateSidecar) {
+    files.set('generations/demo/pit-loss-estimate-sidecar.json', encoder.encode(JSON.stringify(options.pitLossEstimateSidecar)))
+  } else if (options.includePitLossEstimateSidecar && !options.omitPitLossEstimateSidecar) {
+    files.set('generations/demo/pit-loss-estimate-sidecar.json', encoder.encode(JSON.stringify(pitLossEstimateSidecarPayload())))
+  }
+
   // ---- Phase 2: apply malformed JSON overrides (after files are written, before digest computation) ----
   if (options.malformedSidecarPath) {
     files.set(`generations/demo/${options.malformedSidecarPath}`, encoder.encode('not json'))
@@ -217,6 +300,16 @@ async function fixtureSourceWithSidecars(options: {
     const bytes = files.get('generations/demo/pit-loss-model.json')!
     const digest = options.corruptPitLossDigest ? '0'.repeat(64) : await sha256Hex(bytes)
     manifest.pitLossModel = { path: 'pit-loss-model.json', schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model', sha256: digest }
+  }
+
+  if (files.has('generations/demo/pit-loss-estimate-sidecar.json')) {
+    const bytes = files.get('generations/demo/pit-loss-estimate-sidecar.json')!
+    const digest = options.corruptPitLossEstimateDigest ? '0'.repeat(64) : await sha256Hex(bytes)
+    manifest.pitLossEstimateSidecar = {
+      path: options.unsafePitLossEstimatePath ? '../pit-loss-estimate-sidecar.json' : 'pit-loss-estimate-sidecar.json',
+      schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:pit-loss-estimate-sidecar',
+      sha256: digest,
+    }
   }
 
   // ---- Phase 4: build final manifest and pointer ----
@@ -829,10 +922,240 @@ describe('parsePitLossModel', () => {
 })
 
 // ---------------------------------------------------------------------------
+// parsePitLossEstimateSidecar
+// ---------------------------------------------------------------------------
+
+describe('parsePitLossEstimateSidecar', () => {
+  test('parses a valid race-only sidecar', () => {
+    // Arrange
+    const payload = pitLossEstimateSidecarPayload()
+
+    // Act
+    const result = parsePitLossEstimateSidecar(payload)
+
+    // Assert
+    expect(result.trackId).toBe('deterministic-short-loop')
+    expect(result.race.estimatedLossMs).toEqual([20_000, 19_000, 18_000])
+    expect(result.safetyCar).toBeUndefined()
+    expect(result.virtualSafetyCar).toBeUndefined()
+  })
+
+  test('parses a valid Safety Car sidecar', () => {
+    // Arrange
+    const payload = pitLossEstimateSidecarPayload({
+      safetyCar: { timeMs: [0, 1_000], estimatedLossMs: [20_000, 18_000], observedSampleCount: [0, 1] },
+    })
+
+    // Act
+    const result = parsePitLossEstimateSidecar(payload)
+
+    // Assert
+    expect(result.safetyCar).toEqual({ timeMs: [0, 1_000], estimatedLossMs: [20_000, 18_000], observedSampleCount: [0, 1] })
+  })
+
+  test('parses a valid Virtual Safety Car sidecar', () => {
+    // Arrange
+    const payload = pitLossEstimateSidecarPayload({
+      virtualSafetyCar: { timeMs: [0, 1_000], estimatedLossMs: [20_000, 19_000], observedSampleCount: [0, 1] },
+    })
+
+    // Act
+    const result = parsePitLossEstimateSidecar(payload)
+
+    // Assert
+    expect(result.virtualSafetyCar).toEqual({ timeMs: [0, 1_000], estimatedLossMs: [20_000, 19_000], observedSampleCount: [0, 1] })
+  })
+
+  test('parses an unavailable status estimate', () => {
+    // Arrange
+    const payload = pitLossEstimateSidecarPayload({ safetyCar: { status: 'unavailable' } })
+
+    // Act
+    const result = parsePitLossEstimateSidecar(payload)
+
+    // Assert
+    expect(result.safetyCar).toEqual({ status: 'unavailable' })
+  })
+
+  test.each([
+    ['missing race timeline', { race: undefined }],
+    ['misaligned timeline arrays', { race: { timeMs: [0], estimatedLossMs: [], observedSampleCount: [0] } }],
+    ['invalid unavailable status', { safetyCar: { status: 'missing' } }],
+  ])('rejects malformed sidecar shape: %s', (_description, override) => {
+    // Arrange
+    const payload = pitLossEstimateSidecarPayload(override)
+
+    // Act & Assert
+    expect(() => parsePitLossEstimateSidecar(payload)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parsePitLossEstimateSidecar — curated baseline entries
+// ---------------------------------------------------------------------------
+
+describe('parsePitLossEstimateSidecar curated baseline', () => {
+  test('parses a valid curated sidecar with single replay-start values', () => {
+    // Arrange
+    const payload = curatedPitLossEstimateSidecarPayload()
+
+    // Act
+    const result = parsePitLossEstimateSidecar(payload) as Extract<PitLossEstimateSidecar, { readonly method: 'curated-track-baseline-v1' }>
+
+    // Assert
+    expect(result.method).toBe('curated-track-baseline-v1')
+    expect(result.race).toEqual({ timeMs: [0], estimatedLossMs: [19_300] })
+    expect(result.safetyCar).toEqual({ timeMs: [0], estimatedLossMs: [9_300] })
+    expect(result.virtualSafetyCar).toEqual({ timeMs: [0], estimatedLossMs: [12_300] })
+    // Curated replay-start values carry no current-race observedSampleCount.
+    expect(result.race).not.toHaveProperty('observedSampleCount')
+    for (const key of ['catalogVersion', 'provenance', 'evidenceCount', 'confidence', 'statusMetadata']) {
+      expect(result).not.toHaveProperty(key)
+    }
+  })
+
+  test('rejects a curated sidecar with an unavailable status timeline', () => {
+    // Arrange — unavailable is a legacy-only shape; curated sidecars require
+    // available replay-start timelines for all three statuses
+    const payload = curatedPitLossEstimateSidecarPayload({ safetyCar: { status: 'unavailable' } })
+
+    // Act & Assert
+    expect(() => parsePitLossEstimateSidecar(payload)).toThrow('not valid for curated sidecars')
+  })
+
+  test('rejects a curated sidecar where Safety Car exceeds Virtual Safety Car', () => {
+    // Arrange — SC 13000 > VSC 12300 violates SC <= VSC <= Green
+    const payload = curatedPitLossEstimateSidecarPayload()
+    payload.safetyCar = { timeMs: [0], estimatedLossMs: [13_000] }
+
+    // Act & Assert
+    expect(() => parsePitLossEstimateSidecar(payload)).toThrow('SC <= VSC <= Green')
+  })
+
+  test('rejects a curated sidecar where Virtual Safety Car exceeds Green', () => {
+    // Arrange — VSC 20000 > Green 19300 violates SC <= VSC <= Green
+    const payload = curatedPitLossEstimateSidecarPayload()
+    payload.virtualSafetyCar = { timeMs: [0], estimatedLossMs: [20_000] }
+
+    // Act & Assert
+    expect(() => parsePitLossEstimateSidecar(payload)).toThrow('SC <= VSC <= Green')
+  })
+
+  test('rejects a curated sidecar whose race timeline is not a single replay-start point', () => {
+    // Arrange — curated values must be static generation-time values
+    const payload = curatedPitLossEstimateSidecarPayload()
+    payload.race = { timeMs: [0, 100], estimatedLossMs: [19_300, 19_000] }
+
+    // Act & Assert
+    expect(() => parsePitLossEstimateSidecar(payload)).toThrow('must contain one replay-start value')
+  })
+
+})
+
+// ---------------------------------------------------------------------------
 // Sidecar loader integration
 // ---------------------------------------------------------------------------
 
 describe('sidecar loader integration', () => {
+  test.each([
+    ['race-only', pitLossEstimateSidecarPayload()],
+    ['Safety Car', pitLossEstimateSidecarPayload({ safetyCar: { timeMs: [0, 1_000], estimatedLossMs: [20_000, 18_000], observedSampleCount: [0, 1] } })],
+    ['Virtual Safety Car', pitLossEstimateSidecarPayload({ virtualSafetyCar: { timeMs: [0, 1_000], estimatedLossMs: [20_000, 19_000], observedSampleCount: [0, 1] } })],
+  ])('loads a valid %s pit-loss estimate sidecar', async (_name, sidecar) => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({ pitLossEstimateSidecar: sidecar })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert
+    expect(index.pitLossEstimateSidecar).toEqual(sidecar)
+  })
+
+  test('loads an unavailable status estimate without treating it as malformed', async () => {
+    // Arrange
+    const sidecar = pitLossEstimateSidecarPayload({ virtualSafetyCar: { status: 'unavailable' } })
+    const { source } = await fixtureSourceWithSidecars({ pitLossEstimateSidecar: sidecar })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert
+    expect(index.pitLossEstimateSidecar?.virtualSafetyCar).toEqual({ status: 'unavailable' })
+  })
+
+  test('loads an omitted estimate sidecar from a legacy delivery', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({
+      omitPitLossEstimateSidecar: true,
+      omitSeasonMetadata: true,
+      omitTelemetryCapabilities: true,
+    })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert
+    expect(index.pitLossEstimateSidecar).toBeUndefined()
+    expect(index.pitLossModel).toBeDefined()
+    expect(index.manifest.pitLossEstimateSidecar).toBeUndefined()
+  })
+
+  test('rejects a malformed estimate sidecar payload', async () => {
+    // Arrange
+    const sidecar = pitLossEstimateSidecarPayload({
+      race: { timeMs: [0], estimatedLossMs: [], observedSampleCount: [0] },
+    })
+    const { source } = await fixtureSourceWithSidecars({ pitLossEstimateSidecar: sidecar })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('arrays must be aligned')
+  })
+
+  test('rejects an estimate sidecar SHA-256 digest mismatch', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({
+      includePitLossEstimateSidecar: true,
+      corruptPitLossEstimateDigest: true,
+    })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('digest does not match')
+  })
+
+  test('rejects an unsafe estimate sidecar path before reading it', async () => {
+    // Arrange
+    const { source, reads } = await fixtureSourceWithSidecars({
+      includePitLossEstimateSidecar: true,
+      unsafePitLossEstimatePath: true,
+    })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('path is unsupported')
+    expect(reads).not.toContain('pit-loss-estimate-sidecar.json')
+  })
+
+  test('rejects an estimate sidecar with the wrong fixtureId', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({ wrongFixturePitLossEstimate: true })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('fixture identities disagree')
+  })
+
+  test('rejects an estimate sidecar with the wrong trackId', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({ wrongTrackPitLossEstimate: true })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('track identities disagree')
+  })
+
   test('exposes frozen manifest telemetry metadata alongside sidecars', async () => {
     const { source } = await fixtureSourceWithSidecars({
       seasonMetadata: { year: 2026 },
@@ -1136,5 +1459,82 @@ describe('sidecar loader integration', () => {
     expect(parsed.lapSectorSidecar!.path).toBe('lap-sector-sidecar.json')
     expect(parsed.stintSummary!.path).toBe('stint-summary.json')
     expect(parsed.pitLossModel!.path).toBe('pit-loss-model.json')
+  })
+
+  test('loads a digest-checked curated pit-loss estimate sidecar', async () => {
+    // Arrange
+    const sidecar = curatedPitLossEstimateSidecarPayload()
+    const { source } = await fixtureSourceWithSidecars({ pitLossEstimateSidecar: sidecar })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert — legacy audit fields are discarded and the loaded object is frozen
+    expect(index.pitLossEstimateSidecar).toMatchObject({
+      contractVersion: 'v1',
+      fixtureId: 'deterministic-race',
+      trackId: 'deterministic-short-loop',
+      method: 'curated-track-baseline-v1',
+      race: sidecar.race,
+      safetyCar: sidecar.safetyCar,
+      virtualSafetyCar: sidecar.virtualSafetyCar,
+    })
+    for (const key of ['catalogVersion', 'provenance', 'evidenceCount', 'confidence', 'statusMetadata']) {
+      expect(index.pitLossEstimateSidecar).not.toHaveProperty(key)
+    }
+    expect(index.pitLossEstimateSidecar?.method).toBe('curated-track-baseline-v1')
+    expect(Object.isFrozen(index.pitLossEstimateSidecar)).toBe(true)
+  })
+
+  test('rejects a curated pit-loss estimate sidecar SHA-256 digest mismatch', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({
+      pitLossEstimateSidecar: curatedPitLossEstimateSidecarPayload(),
+      corruptPitLossEstimateDigest: true,
+    })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('digest does not match')
+  })
+
+  test('rejects a curated pit-loss estimate sidecar with the wrong trackId', async () => {
+    // Arrange
+    const { source } = await fixtureSourceWithSidecars({
+      pitLossEstimateSidecar: curatedPitLossEstimateSidecarPayload({ trackId: 'wrong-track' }),
+    })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('track identities disagree')
+  })
+
+  test('rejects a curated pit-loss estimate sidecar that violates monotonic baseline ordering', async () => {
+    // Arrange — SC 13000 > VSC 12300 fails the SC <= VSC <= Green invariant
+    const { source } = await fixtureSourceWithSidecars({
+      pitLossEstimateSidecar: curatedPitLossEstimateSidecarPayload({
+        safetyCar: { timeMs: [0], estimatedLossMs: [13_000] },
+      }),
+    })
+
+    // Act & Assert
+    await expect(loadReplayIndex({ source, pointerPath: 'browser-current.json' }))
+      .rejects.toThrow('SC <= VSC <= Green')
+  })
+
+  test('legacy loading does not attempt to read the curated sidecar when absent', async () => {
+    // Arrange
+    const { source, reads } = await fixtureSourceWithSidecars({
+      omitPitLossEstimateSidecar: true,
+    })
+
+    // Act
+    const index = await loadReplayIndex({ source, pointerPath: 'browser-current.json' })
+
+    // Assert — legacy delivery keeps the pit-loss model and never reads the sidecar
+    expect(index.pitLossEstimateSidecar).toBeUndefined()
+    expect(index.manifest.pitLossEstimateSidecar).toBeUndefined()
+    expect(index.pitLossModel).toBeDefined()
+    expect(reads).not.toContain('generations/demo/pit-loss-estimate-sidecar.json')
   })
 })

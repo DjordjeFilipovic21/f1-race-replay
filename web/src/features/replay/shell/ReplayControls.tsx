@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayEvent, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossEstimateSidecar, PitLossModel, ReplayEvent, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets } from '../../../data/replay/types'
 import type { CoordinateInterpolationStrategy, ReplayController } from '../../../engine/replay'
 import { DriverInfoPanel } from '../panels/DriverInfoPanel'
 import { DriverTelemetryPanel } from '../panels/DriverTelemetryPanel'
@@ -31,11 +31,12 @@ export interface ReplayControlsProps {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar
   readonly penaltySidecar?: PenaltySidecar
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, penaltySidecar }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, pitLossEstimateSidecar, penaltySidecar }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -189,7 +190,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
       id: 'pit-loss-position',
       label: 'Pit loss position',
       columns: 1,
-      element: <LivePitLossPositionPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} pitLossModel={pitLossModel} />,
+      element: <LivePitLossPositionPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} pitLossModel={pitLossModel} pitLossEstimateSidecar={pitLossEstimateSidecar} />,
     },
   ]
 

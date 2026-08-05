@@ -1,5 +1,5 @@
 import { memo, useMemo, type CSSProperties } from 'react'
-import type { DriverMetadata, PitLossModel } from '../../../data/replay/types'
+import type { DriverMetadata, PitLossEstimateSidecar, PitLossModel } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 import { selectPitLossEstimate } from '../selectors/pit-loss-selectors'
 import { selectPitRejoinProjection } from '../selectors/pit-rejoin-selectors'
@@ -10,6 +10,7 @@ export interface PitLossPositionPanelProps {
   readonly selectedDriverId: string | null
   readonly snapshot: ReplaySnapshot | null
   readonly pitLossModel: PitLossModel | null | undefined
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar | null
 }
 
 const PANEL_BACKGROUND = '#101316'
@@ -24,10 +25,13 @@ export const PitLossPositionPanel = memo(function PitLossPositionPanel({
   selectedDriverId,
   snapshot,
   pitLossModel,
+  pitLossEstimateSidecar,
 }: PitLossPositionPanelProps) {
   const pitLoss = useMemo(
-    () => selectPitLossEstimate(pitLossModel, snapshot ?? 0),
-    [pitLossModel, snapshot],
+    () => snapshot === null
+      ? null
+      : selectPitLossEstimate(pitLossModel, snapshot, pitLossEstimateSidecar),
+    [pitLossModel, pitLossEstimateSidecar, snapshot],
   )
   const rejoinProjection = useMemo(
     () => selectPitRejoinProjection(snapshot, selectedDriverId, pitLoss),
@@ -61,7 +65,7 @@ export const PitLossPositionPanel = memo(function PitLossPositionPanel({
       {renderHeader(driver)}
       <div className="pit-loss-position-panel__content" style={contentStyle()}>
         <div className="pit-loss-position-panel__summary" style={summaryRowStyle()}>
-          <PitLossSummaryCell estimate={pitLoss} />
+          <PitLossSummaryCell estimate={pitLoss} sidecar={pitLossEstimateSidecar} />
           <AfterPitSummaryCell projection={rejoinProjection} />
         </div>
         <div className="pit-loss-position-panel__graph" style={graphAreaStyle()}>
@@ -95,27 +99,95 @@ function teamAccentValue(colorHex: string): string {
 
 interface PitLossSummaryCellProps {
   readonly estimate: ReturnType<typeof selectPitLossEstimate>
+  readonly sidecar?: PitLossEstimateSidecar | null
 }
 
-function PitLossSummaryCell({ estimate }: PitLossSummaryCellProps) {
-  const lossLabel = formatPitLossMs(estimate?.estimatedLossMs ?? null)
-  const sourceLabel = estimate === null
-    ? 'Unavailable'
-    : estimate.isBaseline
-      ? 'Baseline'
-      : `${estimate.observedSampleCount} sample${estimate.observedSampleCount === 1 ? '' : 's'}`
+function PitLossSummaryCell({ estimate, sidecar }: PitLossSummaryCellProps) {
+  const curated = isCuratedSidecar(sidecar)
+  const hasEstimate = estimate !== null
+    && Number.isFinite(estimate.estimatedLossMs)
+    && (curated || estimate.observedSampleCount > 0)
+  const lossLabel = formatPitLossMs(hasEstimate ? estimate?.estimatedLossMs ?? null : null)
+  const sampleLabel = estimate !== null && !curated && estimate.observedSampleCount > 0
+    ? `${estimate.observedSampleCount} sample${estimate.observedSampleCount === 1 ? '' : 's'}`
+    : 'Unavailable'
 
   return (
     <div className="pit-loss-position-panel__summary-cell" style={summaryCellStyle()}>
       <p style={cardEyebrowStyle()}>Pit-loss estimate</p>
-      <p style={cardValueStyle()} aria-live="polite">
-        {lossLabel}
-      </p>
-      <p style={cardMetaStyle()} aria-label={`Pit-loss source: ${sourceLabel}`}>
-        {sourceLabel}
-      </p>
+      {curated ? (
+        <>
+          <p style={cardValueStyle()} aria-live="polite">
+            {lossLabel}
+          </p>
+          <p style={cardMetaStyle()} aria-label={`Pit-loss status: ${curatedStatusLabel(estimate?.source)}`}>
+            {curatedStatusLabel(estimate?.source)}
+          </p>
+        </>
+      ) : (
+        <>
+          <p style={cardValueStyle()} aria-live="polite">
+            {lossLabel}
+          </p>
+          <p style={cardMetaStyle()} aria-label={`Pit-loss source: ${estimate?.sourceLabel ?? 'Unavailable'}`}>
+            {estimate?.sourceLabel ?? 'Unavailable'}
+          </p>
+          <LegacyEstimateDetails estimate={estimate} hasEstimate={hasEstimate} sampleLabel={sampleLabel} />
+        </>
+      )}
     </div>
   )
+}
+
+function curatedStatusLabel(source: NonNullable<ReturnType<typeof selectPitLossEstimate>>['source'] | undefined): string {
+  switch (source) {
+    case 'safety-car':
+      return 'SC value'
+    case 'virtual-safety-car':
+      return 'VSC value'
+    case 'race':
+      return 'Green Flag value'
+    default:
+      return 'Unavailable'
+  }
+}
+
+interface LegacyEstimateDetailsProps {
+  readonly estimate: ReturnType<typeof selectPitLossEstimate>
+  readonly hasEstimate: boolean
+  readonly sampleLabel: string
+}
+
+function LegacyEstimateDetails({ estimate, hasEstimate, sampleLabel }: LegacyEstimateDetailsProps) {
+  if (!hasEstimate) {
+    return (
+      <p style={cardMetaStyle()} aria-label={`Pit-loss calibration: ${sampleLabel}`}>
+        {sampleLabel}
+      </p>
+    )
+  }
+
+  const sourceDescription = estimate?.source === 'race-fallback'
+    ? 'Legacy race-derived fallback'
+    : 'Legacy race-derived estimate'
+
+  return (
+    <>
+      <p style={cardMetaStyle()} aria-label={`Pit-loss calibration: ${sampleLabel}`}>
+        {sampleLabel}
+      </p>
+      <p style={cardMetaStyle()}>{sourceDescription}</p>
+    </>
+  )
+}
+
+function isCuratedSidecar(
+  sidecar: PitLossEstimateSidecar | null | undefined,
+): sidecar is Extract<PitLossEstimateSidecar, { readonly method: 'curated-track-baseline-v1' }> {
+  return sidecar !== null
+    && sidecar !== undefined
+    && typeof sidecar === 'object'
+    && sidecar.method === 'curated-track-baseline-v1'
 }
 
 interface AfterPitSummaryCellProps {

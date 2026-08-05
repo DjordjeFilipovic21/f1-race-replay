@@ -1,5 +1,5 @@
 export { sha256Hex } from './digest'
-export { parseLapSectorSidecar, parsePenaltySidecar, parsePenaltySidecarReference, parsePitLossModel, parseStintSummary } from './guards'
+export { parseLapSectorSidecar, parsePenaltySidecar, parsePenaltySidecarReference, parsePitLossEstimateSidecar, parsePitLossEstimateSidecarReference, parsePitLossModel, parseStintSummary } from './guards'
 export { loadReplayData, loadReplayIndex } from './loader'
 export { assertSafeRelativePath, createFetchSource, resolveRelativePath } from './source'
 export { loadCatalog } from '../catalog/loader'
