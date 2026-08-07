@@ -18,6 +18,7 @@ from f1_replay_pipeline.app.catalog_migration import (
 )
 from f1_replay_pipeline.app.catalog_v2_schema import CatalogV2Payload, CatalogV2RaceRecord, CatalogV2SessionRecord
 from f1_replay_pipeline.app.session_pointer_publication import (
+    deterministic_session_browser_pointer_bytes,
     write_session_browser_pointer,
     write_session_canonical_pointer,
 )
@@ -209,3 +210,51 @@ def test_recovery_rejects_journal_pointer_that_would_restore_v1(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="historical canonical pointer"):
         migration.recover_catalog_migration(tmp_path)
+
+
+def test_recovery_rejects_malformed_journal_before_touching_pointers(tmp_path: Path) -> None:
+    (tmp_path / "catalog.json").write_text(json.dumps({"year": 2026, "races": []}), encoding="utf-8")
+    journal_path = tmp_path / ".catalog-v2-migration-journal.json"
+    journal_path.write_text(json.dumps({"unexpected": []}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid shape"):
+        migration.recover_catalog_migration(tmp_path)
+
+    assert journal_path.is_file()
+    assert not (tmp_path / "canonical").exists()
+    assert not (tmp_path / "browser").exists()
+
+
+def test_recovery_restores_only_validated_v2_session_pointers(tmp_path: Path) -> None:
+    race_id = "2026-round-01"
+    session_code = "r"
+    generation_id = f"{race_id}-session-race-mode-race"
+    delivery_version = f"{generation_id}-browser-1"
+    (tmp_path / "canonical" / race_id).mkdir(parents=True)
+    (tmp_path / "browser" / race_id).mkdir(parents=True)
+    (tmp_path / "catalog.json").write_text(json.dumps({
+        "year": 2026,
+        "races": [{"race_id": race_id, "sessions": [{"session_code": session_code}]}],
+    }), encoding="utf-8")
+    canonical_previous = deterministic_pointer_bytes(
+        generation_id, "a" * 64, format_version="canonical-parquet-v2",
+    )
+    browser_previous = deterministic_session_browser_pointer_bytes(delivery_version, "b" * 64)
+    journal = {
+        "races": [{
+            "race_id": race_id,
+            "session_code": session_code,
+            "canonical_previous": base64.b64encode(canonical_previous).decode(),
+            "browser_previous": base64.b64encode(browser_previous).decode(),
+            "canonical_parent_existed": False,
+            "browser_parent_existed": False,
+        }],
+    }
+    journal_path = tmp_path / ".catalog-v2-migration-journal.json"
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    migration.recover_catalog_migration(tmp_path)
+
+    assert not journal_path.exists()
+    assert (tmp_path / "canonical" / race_id / "sessions" / session_code / "current.json").read_bytes() == canonical_previous
+    assert (tmp_path / "browser" / race_id / "sessions" / session_code / "browser-current.json").read_bytes() == browser_previous

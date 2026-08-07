@@ -119,7 +119,7 @@ CANONICAL_TABLE_METADATA: Mapping[str, CanonicalTableMetadata] = MappingProxyTyp
 
 
 def validate_canonical_table(
-    table_name: str, frame: pl.DataFrame, *, version: ContractVersion | str = "v1",
+    table_name: str, frame: pl.DataFrame, *, version: ContractVersion | str = "v2",
 ) -> None:
     """Raise an actionable error unless ``frame`` satisfies its selected contract."""
     try:
@@ -184,7 +184,7 @@ def _validate_v2_table_semantics(table_name: str, frame: pl.DataFrame) -> None:
 
 
 def validate_canonical_frames(
-    frames: Mapping[str, pl.DataFrame], *, version: ContractVersion | str = "v1",
+    frames: Mapping[str, pl.DataFrame], *, version: ContractVersion | str = "v2",
 ) -> None:
     """Validate a complete canonical generation, including v2 relationships.
 

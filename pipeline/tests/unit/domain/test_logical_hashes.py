@@ -10,7 +10,7 @@ from f1_replay_pipeline.domain.validators import CanonicalValidationError
 
 
 def _frame(table_name: str, rows: list[dict[str, object]]) -> pl.DataFrame:
-    return pl.DataFrame(rows, schema=get_canonical_schema(table_name))
+    return pl.DataFrame(rows, schema=get_canonical_schema(table_name, "v1"))
 
 
 def _drivers(**changes: object) -> pl.DataFrame:
@@ -58,11 +58,11 @@ def _v2_metadata(**changes: object) -> pl.DataFrame:
     ],
 )
 def test_logical_hash_v1_golden_vectors_are_exact(label, table_name, frame, digest):
-    assert logical_table_sha256(table_name, frame) == digest, label
+    assert logical_table_sha256(table_name, frame, version="v1") == digest, label
 
 
 def test_negative_zero_has_the_same_logical_hash_as_positive_zero():
-    assert logical_table_sha256("car_telemetry", _car(speed_kph=-0.0)) == logical_table_sha256("car_telemetry", _car(speed_kph=0.0))
+    assert logical_table_sha256("car_telemetry", _car(speed_kph=-0.0), version="v1") == logical_table_sha256("car_telemetry", _car(speed_kph=0.0), version="v1")
 
 
 def test_canonical_normalization_restores_permuted_input_hash_stability():
@@ -70,7 +70,7 @@ def test_canonical_normalization_restores_permuted_input_hash_stability():
     normalized = _frame("drivers", rows)
     permuted_normalized = _frame("drivers", list(reversed(rows))).sort(["session_id", "driver_id"])
 
-    assert logical_table_sha256("drivers", normalized) == logical_table_sha256("drivers", permuted_normalized)
+    assert logical_table_sha256("drivers", normalized, version="v1") == logical_table_sha256("drivers", permuted_normalized, version="v1")
 
 
 def test_logical_hash_changes_for_valid_ordered_value_schema_and_declared_type_changes():
@@ -81,8 +81,8 @@ def test_logical_hash_changes_for_valid_ordered_value_schema_and_declared_type_c
         "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None,
     }])
 
-    assert logical_table_sha256("drivers", _drivers()) != logical_table_sha256("drivers", changed_value)
-    assert logical_table_sha256("drivers", _drivers()) != logical_table_sha256("results", schema_changed)
+    assert logical_table_sha256("drivers", _drivers(), version="v1") != logical_table_sha256("drivers", changed_value, version="v1")
+    assert logical_table_sha256("drivers", _drivers(), version="v1") != logical_table_sha256("results", schema_changed, version="v1")
 
 
 def test_public_hash_validates_named_frame_before_encoding():
@@ -90,15 +90,15 @@ def test_public_hash_validates_named_frame_before_encoding():
     invalid_row_order = _frame("drivers", [_drivers(driver_id="VER", source_driver_key="1", driver_number=1).to_dicts()[0], _drivers().to_dicts()[0]])
 
     with pytest.raises(CanonicalValidationError, match="dtype mismatches"):
-        logical_table_sha256("drivers", invalid_schema)
+        logical_table_sha256("drivers", invalid_schema, version="v1")
     with pytest.raises(CanonicalValidationError, match="must be sorted ascending"):
-        logical_table_sha256("drivers", invalid_row_order)
+        logical_table_sha256("drivers", invalid_row_order, version="v1")
 
 
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
 def test_nonfinite_float_values_are_rejected_before_encoding(value):
     with pytest.raises(CanonicalValidationError, match="NaN or infinity"):
-        encode_logical_table("car_telemetry", _car(speed_kph=value))
+        encode_logical_table("car_telemetry", _car(speed_kph=value), version="v1")
 
 
 def test_v2_logical_hash_is_explicitly_distinct_from_the_frozen_v1_hash():
@@ -113,12 +113,12 @@ def test_v2_logical_hash_is_explicitly_distinct_from_the_frozen_v1_hash():
     )
 
     # Act: encode the same session under explicit contract versions.
-    v1_bytes = encode_logical_table("session_metadata", v1)
+    v1_bytes = encode_logical_table("session_metadata", v1, version="v1")
     v2_bytes = encode_logical_table("session_metadata", v2, version="v2")
 
     # Assert: both the wire identity and digest are version-separated.
     assert v1_bytes != v2_bytes
-    assert logical_table_sha256("session_metadata", v1) != logical_table_sha256(
+    assert logical_table_sha256("session_metadata", v1, version="v1") != logical_table_sha256(
         "session_metadata", v2, version="v2"
     )
 

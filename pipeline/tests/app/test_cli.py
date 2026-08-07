@@ -68,15 +68,15 @@ def test_browser_command_builds_request_and_prints_delivery_version(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=browser_service)
 
     assert status == 0
     assert received == [BrowserPublishRequest(
-        Path("artifacts/canonical"), Path("artifacts/browser"), "bahrain-v1",
-        Path("contracts/replay-data/v1/schemas"),
+        Path("artifacts/canonical"), Path("artifacts/browser"), "bahrain-v2",
+        Path("contracts/replay-data/v2/schemas"),
     )]
-    assert capsys.readouterr().out == "delivery_version=bahrain-v1\n"
+    assert capsys.readouterr().out == "delivery_version=bahrain-v2\n"
 
 
 def test_browser_command_flushes_granular_progress_to_stderr(
@@ -95,7 +95,7 @@ def test_browser_command_flushes_granular_progress_to_stderr(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=GranularBrowserService())
 
     captured = capsys.readouterr()
@@ -125,7 +125,7 @@ def test_browser_keyboard_interrupt_closes_progress_without_traceback(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=InterruptedBrowserService())
 
     captured = capsys.readouterr()

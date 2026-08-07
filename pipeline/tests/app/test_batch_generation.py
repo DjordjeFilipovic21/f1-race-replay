@@ -186,7 +186,10 @@ def test_fail_fast_and_continue_on_error_have_truthful_final_outcomes(tmp_path: 
 
 def test_resume_skips_only_validated_outputs_and_force_regenerates(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
-    canonical = SimpleNamespace(generation_path=tmp_path / "generation", manifest_sha256="a" * 64)
+    canonical = SimpleNamespace(
+        generation_path=tmp_path / "2024-round-01-session-race-mode-race",
+        manifest_sha256="a" * 64,
+    )
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: True)
     monkeypatch.setattr(
@@ -641,7 +644,8 @@ def test_browser_resume_validation_requires_current_canonical_source_identity(tm
 
 def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
-    canonical = SimpleNamespace(generation_path=tmp_path / "existing", manifest_sha256="a" * 64)
+    generation_id = "2024-round-01-session-race-mode-race"
+    canonical = SimpleNamespace(generation_path=tmp_path / generation_id, manifest_sha256="a" * 64)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: False)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation.promote_session_canonical_pointer", lambda *_paths: None)
@@ -654,16 +658,20 @@ def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_p
     )
 
     assert calls == []
-    assert result.races[0].generation_id == "existing"
+    assert result.races[0].generation_id == generation_id
     assert result.races[0].session_code == "r"
 
 
 def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_successor(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    canonical = SimpleNamespace(generation_path=tmp_path / "canonical" / "existing", manifest_sha256="a" * 64)
+    generation_id = "2024-round-01-session-race-mode-race"
+    canonical = SimpleNamespace(
+        generation_path=tmp_path / "canonical" / generation_id,
+        manifest_sha256="a" * 64,
+    )
     browser_root = tmp_path / "browser" / "2024-round-01-one"
-    occupied = browser_root / "generations" / "existing"
+    occupied = browser_root / "generations" / generation_id
     occupied.mkdir(parents=True)
     (occupied / "partial.json").write_text("invalid", encoding="utf-8")
     browser_calls = []
@@ -684,10 +692,10 @@ def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_succes
     )
 
     assert (browser_calls[0].canonical_parent, browser_calls[0].delivery_version) == (
-        tmp_path / "canonical" / "2024-round-01-one", "existing-browser-1",
+        tmp_path / "canonical" / "2024-round-01-one", f"{generation_id}-browser-1",
     )
     assert (occupied / "partial.json").read_text(encoding="utf-8") == "invalid"
-    assert result.races[0].delivery_version == "existing-browser-1"
+    assert result.races[0].delivery_version == f"{generation_id}-browser-1"
 
 
 def test_canonical_durability_warning_continues_browser_and_preserves_outcome(
@@ -967,7 +975,7 @@ def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monk
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
     publish_catalog(BatchResult(request, (
         BatchRaceResult(
-            race_id, 1, "generated", "2024-round-01-r-good", "delivery-good",
+            race_id, 1, "generated", "2024-round-01-session-race-mode-race", "delivery-good",
             session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
         ),
     )))
@@ -976,13 +984,13 @@ def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monk
 
     publish_catalog(BatchResult(request, (
         BatchRaceResult(
-            race_id, 1, "failed", "2024-round-01-r-failed", detail="offline failure",
+            race_id, 1, "failed", "2024-round-01-session-race-mode-race-force-1", detail="offline failure",
             session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
         ),
     )))
 
     session = json.loads((tmp_path / "catalog.json").read_bytes())["races"][0]["sessions"][0]
-    assert session["generation_id"] == "2024-round-01-r-good"
+    assert session["generation_id"] == "2024-round-01-session-race-mode-race"
     assert session["delivery_version"] == "delivery-good"
     assert session["outcome"] == "generated"
     assert session["validated"] is True

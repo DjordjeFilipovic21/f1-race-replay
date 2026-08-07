@@ -532,7 +532,7 @@ def test_malformed_catalog_is_rejected_at_the_resolver_boundary() -> None:
     with pytest.raises(ValueError, match="at least one entry"):
         resolve_pit_loss_baseline(
             AUSTRALIA_FIXTURE_ID, AUSTRALIA_TRACK_ID, 1,
-            catalog={"catalogVersion": "v1", "entries": []},
+            catalog={"catalogVersion": "v2", "entries": []},
         )
 
 

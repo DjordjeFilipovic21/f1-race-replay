@@ -89,13 +89,17 @@ CANONICAL_TABLE_SCHEMA_TOKENS_V1 = CANONICAL_CONTRACT_V1.table_schema_tokens
 CANONICAL_TABLE_SCHEMA_TOKENS_V2 = CANONICAL_CONTRACT_V2.table_schema_tokens
 
 
-def get_canonical_contract(version: ContractVersion | str = "v1") -> CanonicalContract:
-    """Return the immutable contract selected by ``v1``/``v2`` identity."""
+def get_canonical_contract(version: ContractVersion | str = "v2") -> CanonicalContract:
+    """Return the immutable active contract selected by ``v1``/``v2`` identity.
+
+    V1 remains addressable only when a historical caller opts in explicitly;
+    all unqualified helpers target the active V2 contract.
+    """
     normalized = _normalize_version(version)
     return CONTRACTS[normalized]
 
 
-def schema_dtype_token(dtype_token: str, version: ContractVersion | str = "v1") -> str:
+def schema_dtype_token(dtype_token: str, version: ContractVersion | str = "v2") -> str:
     """Return a versioned manifest dtype token without changing its Polars type."""
     contract = get_canonical_contract(version)
     return f"{contract.dtype_prefix}{dtype_token}"

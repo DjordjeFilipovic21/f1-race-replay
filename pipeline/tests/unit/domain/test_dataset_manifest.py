@@ -21,7 +21,9 @@ from f1_replay_pipeline.domain.dataset_manifest import (
     serialize_current_pointer,
     serialize_deterministic_json,
     serialize_manifest,
+    FORMAT_VERSION_V1,
     FORMAT_VERSION_V2,
+    MANIFEST_VERSION_V1,
     MANIFEST_VERSION_V2,
     schema_tokens_for_version,
 )
@@ -37,7 +39,7 @@ def _entry(name: str) -> TableManifestEntry:
         name=name,
         path=f"tables/{name}.parquet",
         row_count=0,
-        schema=schema_tokens_for(name),
+        schema=schema_tokens_for(name, "v1"),
         logical_sha256=_DIGEST,
         byte_sha256="b" * 64,
     )
@@ -48,6 +50,8 @@ def _manifest(tables=None) -> DatasetManifest:
         generation_id="2026-07-15T120000Z-abc",
         tables={name: _entry(name) for name in CANONICAL_MANIFEST_TABLE_NAMES} if tables is None else tables,
         writer_settings=DEFAULT_WRITER_SETTINGS,
+        format_version=FORMAT_VERSION_V1,
+        manifest_version=MANIFEST_VERSION_V1,
     )
 
 
@@ -90,7 +94,10 @@ def test_deterministic_json_thaws_immutable_mappings_nested_inside_lists():
 def test_manifest_writer_settings_preserve_nested_metadata_deterministically():
     settings = {"writer": {"page": {"size": 1048576}}, **dict(DEFAULT_WRITER_SETTINGS)}
 
-    manifest = DatasetManifest("safe", {name: _entry(name) for name in CANONICAL_MANIFEST_TABLE_NAMES}, settings)
+    manifest = DatasetManifest(
+        "safe", {name: _entry(name) for name in CANONICAL_MANIFEST_TABLE_NAMES}, settings,
+        format_version=FORMAT_VERSION_V1, manifest_version=MANIFEST_VERSION_V1,
+    )
 
     assert b'"writer":{"page":{"size":1048576}}' in serialize_manifest(manifest)
 
@@ -117,7 +124,7 @@ def test_manifest_rejects_table_schema_that_does_not_preserve_canonical_tokens()
     with pytest.raises(ManifestValidationError):
         TableManifestEntry(
             "drivers", "tables/drivers.parquet", 0,
-            tuple(reversed(schema_tokens_for("drivers"))), _DIGEST, "b" * 64,
+            tuple(reversed(schema_tokens_for("drivers", "v1"))), _DIGEST, "b" * 64,
         )
 
 
@@ -150,7 +157,7 @@ def test_v2_manifest_rejects_v1_table_schema_tokens():
             name=name,
             path=f"tables/{name}.parquet",
             row_count=0,
-            schema=schema_tokens_for(name),
+            schema=schema_tokens_for(name, "v1"),
             logical_sha256=_DIGEST,
             byte_sha256="b" * 64,
         ) for name in CANONICAL_MANIFEST_TABLE_NAMES
@@ -167,7 +174,7 @@ def test_manifest_rejects_an_explicit_unknown_table_schema_version():
     with pytest.raises(ManifestValidationError, match="schema_version must be v1 or v2"):
         TableManifestEntry(
             name="drivers", path="tables/drivers.parquet", row_count=0,
-            schema=schema_tokens_for("drivers"), logical_sha256=_DIGEST,
+            schema=schema_tokens_for("drivers", "v1"), logical_sha256=_DIGEST,
             byte_sha256="b" * 64, schema_version="",  # type: ignore[arg-type]
         )
 
@@ -185,7 +192,7 @@ def test_manifest_versions_cannot_be_mixed():
 
 def test_current_pointer_bytes_are_exact_and_manifest_digest_is_not_self_referential():
     manifest = _manifest()
-    pointer = CurrentPointer(manifest.generation_id, manifest_sha256(manifest))
+    pointer = CurrentPointer(manifest.generation_id, manifest_sha256(manifest), format_version=FORMAT_VERSION_V1)
 
     payload = serialize_current_pointer(pointer)
 
@@ -199,7 +206,7 @@ def test_current_pointer_bytes_are_exact_and_manifest_digest_is_not_self_referen
 
 def test_parsers_reject_missing_versions_and_preserve_valid_models():
     manifest = _manifest()
-    pointer = CurrentPointer(manifest.generation_id, manifest_sha256(manifest))
+    pointer = CurrentPointer(manifest.generation_id, manifest_sha256(manifest), format_version=FORMAT_VERSION_V1)
 
     assert parse_manifest(serialize_manifest(manifest)) == manifest
     assert parse_current_pointer(serialize_current_pointer(pointer)) == pointer

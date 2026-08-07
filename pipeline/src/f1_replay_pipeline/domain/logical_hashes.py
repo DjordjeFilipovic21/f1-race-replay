@@ -37,7 +37,7 @@ def logical_table_sha256(
     table_name: str,
     frame: pl.DataFrame,
     *,
-    version: ContractVersion | str = "v1",
+    version: ContractVersion | str = "v2",
 ) -> str:
     """Validate and hash one named canonical frame using an explicit wire version."""
     return hashlib.sha256(encode_logical_table(table_name, frame, version=version)).hexdigest()
@@ -47,12 +47,12 @@ def encode_logical_table(
     table_name: str,
     frame: pl.DataFrame,
     *,
-    version: ContractVersion | str = "v1",
+    version: ContractVersion | str = "v2",
 ) -> bytes:
     """Validate and return version-specific logical-table wire bytes.
 
-    The default deliberately remains v1 so historical hashes and fixtures do
-    not change.  V2 hashes include the complete v2 schema, including
+    The unqualified helper targets the active v2 contract; historical hashes
+    must opt into v1 explicitly. V2 hashes include the complete v2 schema, including
     ``session_id`` and ``session_mode`` in metadata, rather than projecting
     those fields away.
     """

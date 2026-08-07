@@ -296,7 +296,7 @@ def test_default_catalog_contains_the_full_26_circuit_union() -> None:
 
 
 def test_catalog_constants_are_stable() -> None:
-    assert CATALOG_VERSION == "v1"
+    assert CATALOG_VERSION == "v2"
     assert CATALOG_SCHEMA_ID == (
         "urn:f1-cache-replay:schema:replay-data:v2:pit-loss-baseline-catalog"
     )
@@ -411,7 +411,7 @@ def test_catalog_as_dict_round_trips_and_is_deterministic() -> None:
     # Assert: repeated calls are identical and the exact wire mapping validates
     # back into an equal immutable catalog.
     assert payload == catalog.as_dict()
-    assert payload["catalogVersion"] == "v1"
+    assert payload["catalogVersion"] == "v2"
     assert len(cast(list[object], payload["entries"])) == 26
     assert validate_catalog(payload) == catalog
 
@@ -885,7 +885,7 @@ def test_fixtureless_entry_matches_any_fixture() -> None:
 
 def test_catalog_accepts_unique_entry_identities() -> None:
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (_entry(track_id="alpha", fixture_id=None), _entry(track_id="bravo", fixture_id="fixture-y")),
     )
 
@@ -894,22 +894,22 @@ def test_catalog_accepts_unique_entry_identities() -> None:
 
 def test_catalog_rejects_duplicate_track_and_fixture_identities() -> None:
     with pytest.raises(ValueError, match="unique track and fixture identities"):
-        PitLossBaselineCatalog("v1", (AUSTRALIA_BASELINE, AUSTRALIA_BASELINE))
+        PitLossBaselineCatalog("v2", (AUSTRALIA_BASELINE, AUSTRALIA_BASELINE))
 
 
 def test_catalog_rejects_duplicate_fixtureless_track_identities() -> None:
     with pytest.raises(ValueError, match="unique track and fixture identities"):
-        PitLossBaselineCatalog("v1", (_entry(track_id="alpha"), _entry(track_id="alpha")))
+        PitLossBaselineCatalog("v2", (_entry(track_id="alpha"), _entry(track_id="alpha")))
 
 
 def test_catalog_rejects_empty_entries() -> None:
     with pytest.raises(ValueError, match="at least one entry"):
-        PitLossBaselineCatalog("v1", ())
+        PitLossBaselineCatalog("v2", ())
 
 
 def test_catalog_rejects_wrong_version() -> None:
-    with pytest.raises(ValueError, match="catalog_version must be v1"):
-        PitLossBaselineCatalog("v2", (AUSTRALIA_BASELINE,))
+    with pytest.raises(ValueError, match="catalog_version must be v2"):
+        PitLossBaselineCatalog("v1", (AUSTRALIA_BASELINE,))
 
 
 def test_validate_catalog_returns_catalog_instance_unchanged() -> None:
@@ -971,7 +971,7 @@ def test_entry_for_returns_none_for_unbound_fixture_or_track(
 
 
 def test_entry_for_resolves_fixtureless_entry_by_track_only() -> None:
-    catalog = PitLossBaselineCatalog("v1", (_entry(track_id="alpha"),))
+    catalog = PitLossBaselineCatalog("v2", (_entry(track_id="alpha"),))
 
     assert catalog.entry_for(None, "alpha") is not None
     assert catalog.entry_for("any-fixture", "alpha") is not None
@@ -979,7 +979,7 @@ def test_entry_for_resolves_fixtureless_entry_by_track_only() -> None:
 
 def test_entry_for_raises_on_ambiguous_binding() -> None:
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (
             _entry(track_id="alpha", fixture_id=None),
             _entry(track_id="alpha", fixture_id="fixture-x"),
@@ -1174,7 +1174,7 @@ def test_entry_for_matches_fixture_bound_entry_by_resolved_identity() -> None:
 def test_entry_for_keeps_raw_matching_for_synthetic_catalog_with_track_name() -> None:
     # Arrange: a synthetic catalog whose track id is not a registered physical
     # circuit, so identity resolution is unavailable for its entries.
-    catalog = PitLossBaselineCatalog("v1", (_entry(track_id="alpha"),))
+    catalog = PitLossBaselineCatalog("v2", (_entry(track_id="alpha"),))
 
     # Act: match with a track name supplied.
     entry = catalog.entry_for("any-fixture", "alpha", track_name="Australian Grand Prix")
@@ -1185,7 +1185,7 @@ def test_entry_for_keeps_raw_matching_for_synthetic_catalog_with_track_name() ->
 
 
 def test_validate_catalog_identities_rejects_unknown_track() -> None:
-    catalog = PitLossBaselineCatalog("v1", (_entry(track_id="pau"),))
+    catalog = PitLossBaselineCatalog("v2", (_entry(track_id="pau"),))
 
     # Plain validation accepts the well-formed entry; the opt-in identity
     # boundary rejects a track that is not a registered physical circuit.
@@ -1198,7 +1198,7 @@ def test_validate_catalog_identities_rejects_conflicting_fixture_track_binding()
     # Arrange: the fixture binding resolves to Australia while the track
     # binding resolves to Monza — an internally inconsistent catalog entry.
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (_entry(track_id="monza", fixture_id=AUSTRALIA_FIXTURE_ID),),
     )
 
@@ -1212,7 +1212,7 @@ def test_validate_catalog_identities_rejects_asset_binding_conflict() -> None:
     # Arrange: the track asset resolves to Australia while the track id
     # resolves to Monza — a malformed asset binding.
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (
             _entry(
                 track_id="monza",
@@ -1232,7 +1232,7 @@ def test_validate_catalog_identities_rejects_season_outside_resolved_identity() 
     # season for it is physically inconsistent even though the track id
     # resolves.
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (_entry(track_id="madring", season=2024),),
     )
 
@@ -1249,7 +1249,7 @@ def test_validate_catalog_identities_accepts_season_inside_resolved_identity() -
     # Arrange: Australia raced in 2024/2025/2026, so a 2024 season entry for
     # the same physical circuit is consistent with the identity.
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (_entry(track_id="australia", season=2024),),
     )
 

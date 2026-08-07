@@ -60,7 +60,7 @@ AUSTRALIA_SOURCE_URL = (
     "facts-stats-and-trivia-ahead-of-the-2026.7gyyqNLcwuCPZdXvgGwhCM"
 )
 AUSTRALIA_METHOD = "curated-track-baseline-v1"
-AUSTRALIA_CATALOG_VERSION = "v1"
+AUSTRALIA_CATALOG_VERSION = "v2"
 
 # Identity used by the delivery builders and asserted against the catalog.
 AUSTRALIA_FIXTURE_ID = "2026-round-01-australian-grand-prix"

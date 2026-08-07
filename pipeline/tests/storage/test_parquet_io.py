@@ -154,12 +154,13 @@ def _row(table_name: str) -> dict[str, object]:
     values = {
         "session_metadata": {
             "year": 2026, "round_number": 1, "event_name": "Example Grand Prix",
-            "session_name": "Race", "session_type": "R", "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "session_name": "Race", "session_type": "R", "session_mode": "race",
+            "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
         },
         "drivers": {"source_driver_key": "44", "driver_number": 44, "full_name": "Lewis Hamilton"},
         "car_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "car"},
         "position_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "position"},
-        "laps": {"lap_number": 1, "lap_start_time_ms": 0},
+        "laps": {"lap_number": 1, "lap_start_time_ms": 0, "qualifying_phase": None},
         "stints": {"stint_number": 1, "start_lap_number": 1},
         "weather": {"session_time_ms": 0},
         "track_status_intervals": {"start_time_ms": 0, "status": "1"},

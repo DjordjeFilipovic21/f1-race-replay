@@ -31,7 +31,7 @@ def test_canonical_table_names_are_exact_and_ordered():
 
 
 def test_car_telemetry_schema_has_exact_column_order_and_dtypes():
-    assert list(get_canonical_schema("car_telemetry").items()) == [
+    assert list(get_canonical_schema("car_telemetry", "v1").items()) == [
         ("session_id", pl.String),
         ("driver_id", pl.String),
         ("source_driver_key", pl.String),
@@ -47,7 +47,7 @@ def test_car_telemetry_schema_has_exact_column_order_and_dtypes():
 
 
 def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
-    assert list(get_canonical_schema("position_telemetry").items()) == [
+    assert list(get_canonical_schema("position_telemetry", "v1").items()) == [
         ("session_id", pl.String),
         ("driver_id", pl.String),
         ("source_driver_key", pl.String),
@@ -115,12 +115,12 @@ def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
     ],
 )
 def test_remaining_schemas_have_exact_column_order_and_dtypes(table_name, expected_schema):
-    assert list(get_canonical_schema(table_name).items()) == expected_schema
+    assert list(get_canonical_schema(table_name, "v1").items()) == expected_schema
 
 
 @pytest.mark.parametrize("table_name", CANONICAL_TABLE_NAMES)
 def test_canonical_schemas_construct_typed_empty_frames(table_name):
-    expected_schema = get_canonical_schema(table_name)
+    expected_schema = get_canonical_schema(table_name, "v1")
 
     frame = pl.DataFrame(schema=expected_schema)
 
@@ -129,14 +129,14 @@ def test_canonical_schemas_construct_typed_empty_frames(table_name):
 
 
 def test_schema_lookup_is_immutable():
-    schema = get_canonical_schema("car_telemetry")
+    schema = get_canonical_schema("car_telemetry", "v2")
 
     with pytest.raises(TypeError):
         schema["new_column"] = pl.String  # type: ignore[index]
 
 
 def test_v2_schema_adds_required_session_mode_without_mutating_v1():
-    assert list(get_canonical_schema("session_metadata").items()) == [
+    assert list(get_canonical_schema("session_metadata", "v1").items()) == [
         ("session_id", pl.String), ("year", pl.Int16), ("round_number", pl.Int16),
         ("event_name", pl.String), ("session_name", pl.String), ("session_type", pl.String),
         ("session_start_time_utc", pl.Datetime("ms", "UTC")),

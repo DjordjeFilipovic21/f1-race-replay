@@ -26,10 +26,10 @@ FORMAT_VERSION_V1 = CANONICAL_PARQUET_V1
 MANIFEST_VERSION_V1 = 1
 FORMAT_VERSION_V2 = CANONICAL_PARQUET_V2
 MANIFEST_VERSION_V2 = 2
-# Unversioned names remain v1 for existing readers and the committed golden
-# manifest. New writers must opt into v2 explicitly.
-FORMAT_VERSION = FORMAT_VERSION_V1
-MANIFEST_VERSION = MANIFEST_VERSION_V1
+# Unversioned names are the active V2 contract. Historical V1 manifests must
+# opt into the frozen format explicitly when they are parsed or inspected.
+FORMAT_VERSION = FORMAT_VERSION_V2
+MANIFEST_VERSION = MANIFEST_VERSION_V2
 CANONICAL_MANIFEST_TABLE_NAMES = (
     "session_metadata", "drivers", "car_telemetry", "position_telemetry", "laps",
     "stints", "weather", "track_status_intervals", "race_control_messages", "results",
@@ -105,7 +105,7 @@ class TableManifestEntry:
     @property
     def schema_token(self) -> str:
         """Return the versioned table identity represented by this entry."""
-        return get_canonical_contract(self.schema_version or "v1").table_schema_tokens[self.name]
+        return get_canonical_contract(self.schema_version or "v2").table_schema_tokens[self.name]
 
 
 @dataclass(frozen=True)
@@ -188,14 +188,14 @@ class CurrentPointer:
 
 
 def schema_tokens_for(
-    table_name: str, version: ContractVersion | str = "v1",
+    table_name: str, version: ContractVersion | str = "v2",
 ) -> tuple[SchemaToken, ...]:
     """Return versioned schema tokens in declared canonical column order."""
     return schema_tokens_for_version(table_name, version)
 
 
 def schema_tokens_for_version(
-    table_name: str, version: ContractVersion | str = "v1",
+    table_name: str, version: ContractVersion | str = "v2",
 ) -> tuple[SchemaToken, ...]:
     """Return exact, versioned dtype tokens in canonical column order."""
     _validate_table_name(table_name)
@@ -208,7 +208,7 @@ def schema_tokens_for_version(
 
 
 def serialize_deterministic_json(value: object) -> bytes:
-    """Encode JSON metadata with the exact v1 deterministic byte contract."""
+    """Encode JSON metadata with the exact deterministic byte contract."""
     _validate_json_value(value, "value")
     return json.dumps(_thaw_json_value(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
 
@@ -255,7 +255,7 @@ def parse_manifest(payload: bytes) -> DatasetManifest:
 
 
 def parse_current_pointer(payload: bytes) -> CurrentPointer:
-    """Parse and fully validate a v1 current-pointer JSON payload."""
+    """Parse and fully validate a versioned current-pointer JSON payload."""
     value = _parse_json_object(payload, "current pointer")
     required = {"format_version", "generation_id", "manifest_path", "manifest_sha256"}
     _require_keys(value, required, "current pointer", exact=False)
@@ -288,7 +288,7 @@ def _normalize_tables(
     return ordered
 
 
-def _table_entry_from_dict(value: object, version: ContractVersion = "v1") -> TableManifestEntry:
+def _table_entry_from_dict(value: object, version: ContractVersion = "v2") -> TableManifestEntry:
     if not isinstance(value, Mapping):
         raise ManifestValidationError("manifest table entry must be an object")
     _require_keys(value, {"name", "path", "row_count", "schema", "logical_sha256", "byte_sha256"}, "manifest table entry")
@@ -341,7 +341,7 @@ def _require_canonical_payload(payload: bytes, expected: bytes, label: str) -> N
 
 
 def _validate_schema(
-    table_name: str, schema: tuple[SchemaToken, ...], version: ContractVersion = "v1",
+    table_name: str, schema: tuple[SchemaToken, ...], version: ContractVersion = "v2",
 ) -> None:
     if not isinstance(schema, tuple) or schema != schema_tokens_for_version(table_name, version):
         raise ManifestValidationError(f"{table_name} schema must match the declared canonical schema")
@@ -350,9 +350,9 @@ def _validate_schema(
 def _validate_writer_settings(settings: object) -> None:
     actual = _thaw_json_value(settings)
     if not isinstance(actual, dict) or not set(_DEFAULT_WRITER_SETTINGS) <= set(actual):
-        raise ManifestValidationError("writer_settings must match the canonical Parquet v1 settings")
+        raise ManifestValidationError("writer_settings must match the canonical Parquet settings")
     if any(type(actual[key]) is not type(expected) or actual[key] != expected for key, expected in _DEFAULT_WRITER_SETTINGS.items()):
-        raise ManifestValidationError("writer_settings must match the canonical Parquet v1 settings")
+        raise ManifestValidationError("writer_settings must match the canonical Parquet settings")
 
 
 def _validate_format_versions(format_version: object, manifest_version: object) -> None:

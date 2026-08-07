@@ -188,12 +188,33 @@ def _race_from_dict(value: object) -> "CatalogV2RaceRecord":
     visual_values = visual if isinstance(visual, Mapping) else {}
     if visual is not None and not isinstance(visual, Mapping):
         raise ValueError("active catalog race visual metadata is malformed")
-    return CatalogV2RaceRecord(
+    race = CatalogV2RaceRecord(
         cast(str, value.get("race_id")), cast(int, value.get("round_number")), cast(str, value.get("event_name")),
         tuple(_session_from_dict(item) for item in raw_sessions),
         value.get("country"), value.get("location"), value.get("event_date"),
         visual_values.get("latitude"), visual_values.get("longitude"), visual_values.get("circuitPreview"),
     )
+    for session in race.sessions:
+        if session.validated:
+            expected_browser_suffix = f"/sessions/{session.session_code}/browser-current.json"
+            if (
+                session.browser_pointer is None
+                or not session.browser_pointer.startswith("browser/")
+                or not session.browser_pointer.endswith(expected_browser_suffix)
+            ):
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} has a non-v2 browser pointer"
+                )
+            if session.canonical_pointer is not None:
+                expected_canonical_suffix = f"/sessions/{session.session_code}/current.json"
+                if (
+                    not session.canonical_pointer.startswith("canonical/")
+                    or not session.canonical_pointer.endswith(expected_canonical_suffix)
+                ):
+                    raise ValueError(
+                        f"active catalog session {race.race_id}/{session.session_code} has a non-v2 canonical pointer"
+                    )
+    return race
 
 
 def _session_from_dict(value: object) -> "CatalogV2SessionRecord":

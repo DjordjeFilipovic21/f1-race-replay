@@ -865,6 +865,10 @@ def publish_catalog(
         result.request.year,
         tuple(_race_model(record) for record in records.values()),
     ).to_dict()
+    # Validate the complete merged payload before it becomes the active
+    # discovery boundary. Retained records must not smuggle historical or
+    # malformed pointers into a schemaVersion 2 catalog.
+    validate_active_catalog(payload)
     emit = progress or (lambda _phase: None)
     emit("catalog_publishing")
     path = root / "catalog.json"

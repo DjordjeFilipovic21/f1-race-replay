@@ -941,8 +941,10 @@ def write_generation(
     checkpoint = checkpoint or _noop
     pointer_temp_name = pointer_temp_name or (lambda: f"{STAGING_PREFIX}pointer-{uuid.uuid4().hex}")
     validate_manifest = _require_manifest_validator(validate_manifest)
-    if format_version not in {FORMAT_VERSION_V1, FORMAT_VERSION_V2}:
-        raise GenerationPublicationError("unsupported publication format_version")
+    if format_version != FORMAT_VERSION_V2:
+        raise GenerationPublicationError(
+            "active generation publication requires canonical-parquet-v2"
+        )
     generation_id = _safe_generation_id(generation_id)
     directory_fsyncs: list[DirectoryFsyncStatus] = []
     target_parent = _absolute_path(target_parent)

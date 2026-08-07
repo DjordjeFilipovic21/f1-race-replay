@@ -361,7 +361,7 @@ def test_track_asset_id_binding_resolves_to_entry() -> None:
 def test_ambiguous_catalog_binding_fails_closed() -> None:
     # Arrange: a catalog whose fixture-bound entry overlaps a fixtureless entry.
     catalog = PitLossBaselineCatalog(
-        "v1",
+        "v2",
         (
             _entry(track_id="alpha", fixture_id=None),
             _entry(track_id="alpha", fixture_id="fixture-x"),
@@ -438,7 +438,7 @@ def test_default_catalog_mapping_form_fails_closed_for_bogus_fixture() -> None:
 def test_custom_synthetic_catalog_accepts_arbitrary_fixture_ids() -> None:
     # Arrange: a custom synthetic catalog is not the production default, so its
     # fixture-less entries intentionally match arbitrary fixture identifiers.
-    catalog = PitLossBaselineCatalog("v1", (_entry(track_id="alpha"),))
+    catalog = PitLossBaselineCatalog("v2", (_entry(track_id="alpha"),))
 
     # Act
     resolution = resolve_pit_loss_baseline("arbitrary-fixture", "alpha", 1, catalog=catalog)
@@ -561,7 +561,7 @@ def test_generator_fixture_with_track_name_establishing_other_circuit_resolves()
 def test_synthetic_catalog_keeps_raw_matching_with_track_name() -> None:
     # Arrange: a custom synthetic catalog is exempt from identity binding even
     # when a track name is supplied because its entries cannot resolve.
-    catalog = PitLossBaselineCatalog("v1", (_entry(track_id="alpha"),))
+    catalog = PitLossBaselineCatalog("v2", (_entry(track_id="alpha"),))
 
     # Act
     resolution = resolve_pit_loss_baseline(
@@ -685,12 +685,12 @@ def test_empty_track_id_raises() -> None:
 
 
 def test_resolver_validates_catalog_and_propagates_catalog_errors() -> None:
-    with pytest.raises(ValueError, match="catalog_version must be v1"):
+    with pytest.raises(ValueError, match="catalog_version must be v2"):
         resolve_pit_loss_baseline(
             AUSTRALIA_FIXTURE_ID,
             AUSTRALIA_TRACK_ID,
             1,
-            catalog={"catalogVersion": "v2", "entries": []},
+            catalog={"catalogVersion": "v1", "entries": []},
         )
 
 
@@ -792,7 +792,7 @@ def test_available_resolution_as_dict_uses_wire_names() -> None:
         "status": "green",
         "available": True,
         "estimatedLossMs": AUSTRALIA_BASELINE.green_ms,
-        "catalogVersion": "v1",
+        "catalogVersion": "v2",
         "provenance": cast(PitLossBaselineProvenance, green.provenance).as_dict(),
         "evidenceCount": 1,
         "confidence": "high",

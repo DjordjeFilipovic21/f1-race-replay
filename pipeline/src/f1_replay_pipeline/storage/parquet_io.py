@@ -66,7 +66,7 @@ def ensure_native_parquet_compatibility() -> None:
 
 
 def validate_canonical_frames(
-    frames: Mapping[str, pl.DataFrame], version: ContractVersion | str = "v1",
+    frames: Mapping[str, pl.DataFrame], version: ContractVersion | str = "v2",
 ) -> None:
     """Require exactly the ten validated canonical frames at the write boundary."""
     if not isinstance(frames, Mapping):
@@ -90,7 +90,7 @@ def validate_canonical_frames(
 
 def write_canonical_parquet_tables(
     frames: Mapping[str, pl.DataFrame], target_directory: Path,
-    version: ContractVersion | str = "v1",
+    version: ContractVersion | str = "v2",
 ) -> dict[str, Path]:
     """Write exactly one native Parquet file for every canonical table."""
     validate_canonical_frames(frames, version)
@@ -109,7 +109,7 @@ def write_canonical_parquet(
     frame: pl.DataFrame,
     destination: Path,
     *,
-    version: ContractVersion | str = "v1",
+    version: ContractVersion | str = "v2",
 ) -> str:
     """Validate, natively serialize, and return the final-file SHA-256 digest."""
     _validate_destination(table_name, destination)
@@ -131,7 +131,7 @@ def verify_canonical_parquet_round_trip(
     expected: pl.DataFrame,
     source: Path | bytes,
     *,
-    version: ContractVersion | str = "v1",
+    version: ContractVersion | str = "v2",
     use_statistics: bool = True,
 ) -> None:
     """Verify schema, order, nulls, rows, and values without normalization.
@@ -202,7 +202,7 @@ def _validate_canonical_table(
     if contract.version == "v2":
         validate_canonical_table(table_name, frame, version="v2")
         return
-    validate_canonical_table(table_name, frame)
+    validate_canonical_table(table_name, frame, version=contract.version)
 
 
 __all__ = [

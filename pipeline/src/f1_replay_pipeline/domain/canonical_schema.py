@@ -223,15 +223,15 @@ WEATHER_SCHEMA_V2 = WEATHER_SCHEMA
 TRACK_STATUS_INTERVALS_SCHEMA_V2 = TRACK_STATUS_INTERVALS_SCHEMA
 RACE_CONTROL_MESSAGES_SCHEMA_V2 = RACE_CONTROL_MESSAGES_SCHEMA
 
-# The unversioned names are deliberately the v1 read contract.  Existing
-# adapters, readers, and committed fixtures therefore keep their behavior.
-SESSION_METADATA_SCHEMA = SESSION_METADATA_SCHEMA_V1
-RESULTS_SCHEMA = RESULTS_SCHEMA_V1
-CANONICAL_TABLE_SCHEMAS = CANONICAL_TABLE_SCHEMAS_V1
+# Unversioned names are the active V2 contract. Historical V1 schemas remain
+# available only through their explicitly versioned names and accessor.
+SESSION_METADATA_SCHEMA = SESSION_METADATA_SCHEMA_V2
+RESULTS_SCHEMA = RESULTS_SCHEMA_V2
+CANONICAL_TABLE_SCHEMAS = CANONICAL_TABLE_SCHEMAS_V2
 CANONICAL_TABLE_NAMES = CANONICAL_TABLE_NAMES_V1
 
 
-def get_canonical_schema(table_name: str, version: ContractVersion | str = "v1") -> Schema:
+def get_canonical_schema(table_name: str, version: ContractVersion | str = "v2") -> Schema:
     """Return the ordered immutable schema for a table and contract version."""
     schemas = CANONICAL_TABLE_SCHEMAS_V1 if get_canonical_contract(version).version == "v1" else CANONICAL_TABLE_SCHEMAS_V2
     return schemas[table_name]

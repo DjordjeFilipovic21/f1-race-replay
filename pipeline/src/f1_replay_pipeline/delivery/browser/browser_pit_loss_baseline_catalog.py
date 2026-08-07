@@ -58,7 +58,7 @@ DEFAULT_VSC_DISCOUNT_MS = 7_000
 DEFAULT_SAFETY_CAR_DISCOUNT_MS = 10_000
 # ``SC`` is the wire/status abbreviation used by downstream delivery code.
 DEFAULT_SC_DISCOUNT_MS = DEFAULT_SAFETY_CAR_DISCOUNT_MS
-CATALOG_VERSION = "v1"
+CATALOG_VERSION = "v2"
 CATALOG_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:pit-loss-baseline-catalog"
 CURATED_BASELINE_METHOD = "curated-track-baseline-v1"
 DERIVE_GREEN_DISCOUNT_METHOD = "green-minus-discount-v1"
