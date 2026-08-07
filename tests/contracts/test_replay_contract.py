@@ -1826,6 +1826,33 @@ def test_v2_qualifying_timeline_payload_validates(v2_schema_registry):
     assert_qualifying_timeline_semantics(empty)
 
 
+def test_v2_qualifying_timeline_accepts_red_flag_position_freeze_source(
+    v2_schema_registry,
+):
+    # Arrange: a schema-valid marker using the inferred freeze source.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "VER", "timeMs": 40_000, "source": "red-flag-position-freeze",
+         "rawMessage": "RED FLAG"},
+    ])
+
+    # Act / Assert: the new frozen source validates and passes semantics.
+    validate_instance(schema, payload, v2_schema_registry)
+    assert_qualifying_timeline_semantics(payload)
+
+
+def test_v2_qualifying_timeline_rejects_unknown_marker_source(v2_schema_registry):
+    # Arrange: a marker whose source is neither frozen value.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "HAM", "timeMs": 15_000, "source": "dnf", "rawMessage": "CAR 44 CRASH"},
+    ])
+
+    # Act / Assert: unknown sources fail closed at the schema boundary.
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)
+
+
 def test_v2_manifest_accepts_manifest_without_optional_qualifying_timeline(
     v2_schema_registry,
 ):

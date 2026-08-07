@@ -278,13 +278,22 @@ export interface QualifyingTimelineInterval {
 }
 
 /**
+ * Qualifying incident marker source. `race-control-car-event` comes from
+ * canonical CarEvent terminal evidence; `red-flag-position-freeze` is a
+ * visibility-only inference from position telemetry when a driver with valid
+ * pre-red evidence froze through a finite red interval. Unknown sources are
+ * rejected by the guard.
+ */
+export type QualifyingIncidentMarkerSource = 'race-control-car-event' | 'red-flag-position-freeze'
+
+/**
  * Qualifying incident marker for track-map marker hiding (visibility only).
  * Effective when `timeMs <= replayTimeMs`; never carries race DNF semantics.
  */
 export interface QualifyingIncidentMarker {
   readonly driverId: string
   readonly timeMs: number
-  readonly source: 'race-control-car-event'
+  readonly source: QualifyingIncidentMarkerSource
   readonly rawMessage: string
   readonly lapNumber?: number
 }

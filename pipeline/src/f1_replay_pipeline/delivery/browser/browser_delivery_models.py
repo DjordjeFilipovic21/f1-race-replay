@@ -60,6 +60,11 @@ QualifyingLapStatusEventKind = Literal["deleted", "reinstated"]
 QualifyingLapStatus = Literal["valid", "deleted"]
 LapKind = Literal["flying", "outlap", "inlap", "unknown"]
 QualifyingTimelineIntervalKind = Literal["yellow", "red"]
+# Source-supported qualifying incident markers. `race-control-car-event` comes
+# from canonical CarEvent terminal forms; `red-flag-position-freeze` is inferred
+# from position telemetry when a driver with valid pre-red evidence froze
+# through a finite red interval. Unknown sources remain rejected.
+QUALIFYING_INCIDENT_MARKER_SOURCES = frozenset({"race-control-car-event", "red-flag-position-freeze"})
 
 
 def _validate_contract_version(value: object) -> ContractVersion:
@@ -871,6 +876,11 @@ class BrowserQualifyingIncidentMarker:
     The marker is a visibility decision only: it never rewrites status to
     ``OUT``, never sets ``isFinished``, and never fabricates DNF semantics.
     The driver remains available to classification.
+
+    ``source`` is one of ``race-control-car-event`` (canonical CarEvent
+    terminal evidence) or ``red-flag-position-freeze`` (inferred from position
+    telemetry when a driver with valid pre-red evidence froze through a finite
+    red interval); unknown sources are rejected.
     """
 
     driver_id: str
@@ -886,7 +896,7 @@ class BrowserQualifyingIncidentMarker:
             raise ValueError("qualifying incident marker time_ms must be a non-negative signed Int64 integer")
         if not isinstance(self.raw_message, str) or not self.raw_message.strip():
             raise ValueError("qualifying incident marker raw_message must be a non-empty string")
-        if self.source != "race-control-car-event":
+        if self.source not in QUALIFYING_INCIDENT_MARKER_SOURCES:
             raise ValueError("qualifying incident marker source is invalid")
         if self.lap_number is not None and (type(self.lap_number) is not int or self.lap_number < 1):
             raise ValueError("qualifying incident marker lap_number must be a positive integer or null")
@@ -1773,6 +1783,7 @@ __all__ = [
     "BrowserStintSummary", "BrowserStintSummaryReference",
     "CanonicalGenerationSnapshot",
     "BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "FASTF1_POSITION_UNITS_PER_METER", "MAX_INT64",
+    "QUALIFYING_INCIDENT_MARKER_SOURCES",
     "V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID", "V2_CHUNK_SCHEMA_ID", "V2_MANIFEST_SCHEMA_ID",
     "BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID", "QUALIFYING_LAP_STATUS_SCHEMA_ID",
     "V2_BROWSER_QUALIFYING_LAP_STATUS_SCHEMA_ID", "V2_QUALIFYING_LAP_STATUS_SCHEMA_ID",

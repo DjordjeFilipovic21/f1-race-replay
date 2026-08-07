@@ -247,6 +247,12 @@ never presented as race gaps or finish order.
   classification, does not fabricate `OUT`/DNF, and is not derived from
   `PositionData` `OffTrack` (FastF1 backfills that value for missing samples
   and it is not a retirement signal).
+- A marker `source` is either `race-control-car-event` (canonical CarEvent
+  terminal evidence) or `red-flag-position-freeze` (visibility-only inference
+  from position telemetry at the exclusive end of a finite red interval when a
+  driver had valid pre-red x/y evidence but no meaningful post-red movement).
+  Both sources hide the track-map marker identically; the source only records
+  how the marker was derived. Unknown sources are rejected at parse time.
 - When the artifact is absent, no intervals render and no markers hide
   (fail-closed); absence never means "no incident occurred".
 

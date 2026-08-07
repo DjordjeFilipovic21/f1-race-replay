@@ -26,6 +26,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     MAX_INT64,
     PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
     PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+    QUALIFYING_INCIDENT_MARKER_SOURCES,
     V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     V2_CHUNK_SCHEMA_ID,
     V2_MANIFEST_SCHEMA_ID,
@@ -1901,7 +1902,7 @@ def _validate_qualifying_timeline_contract(
             or driver_id not in driver_ids
             or type(time_ms) is not int
             or not start_ms <= time_ms < end_ms
-            or marker.get("source") != "race-control-car-event"
+            or marker.get("source") not in QUALIFYING_INCIDENT_MARKER_SOURCES
             or not isinstance(marker.get("rawMessage"), str)
             or not marker["rawMessage"].strip()
         ):

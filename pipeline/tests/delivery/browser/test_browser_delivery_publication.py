@@ -666,6 +666,40 @@ def test_v2_qualifying_timeline_incident_keeps_classification_without_dnf_semant
     assert "dnfMarkers" not in manifest
 
 
+def test_v2_qualifying_timeline_publishes_red_flag_position_freeze_marker(
+    tmp_path: Path,
+) -> None:
+    # Arrange: a timeline carrying an inferred red-flag position-freeze marker.
+    timeline = BrowserQualifyingTimeline(
+        "race-one", 0, 2_000,
+        (BrowserQualifyingTimelineInterval("red", 100, 1_500),),
+        (BrowserQualifyingIncidentMarker(
+            "HAM", 1_500, "RED FLAG", source="red-flag-position-freeze",
+        ),),
+    )
+
+    # Act
+    result = publish_browser_delivery(
+        browser_parent=tmp_path / "browser", delivery_version="delivery-v2",
+        delivery=_v2_qualifying_timeline_delivery(timeline=timeline),
+        schema_root=SCHEMA_ROOT_V2, contract_version="v2",
+    )
+
+    # Assert: the inferred marker serializes with its frozen source and the
+    # complete delivery (schema, digest, and semantic contract) validates.
+    timeline_path = result.qualifying_timeline_path
+    assert timeline_path is not None
+    published = json.loads(timeline_path.read_bytes())
+    assert published["incidentMarkers"] == [{
+        "driverId": "HAM", "timeMs": 1_500,
+        "source": "red-flag-position-freeze", "rawMessage": "RED FLAG",
+    }]
+    validate_complete_browser_delivery(
+        tmp_path / "browser", expected_generation_id="canonical-one",
+        expected_manifest_sha256="a" * 64, schema_root=SCHEMA_ROOT_V2,
+    )
+
+
 def _v2_sprint_timeline_summary_delivery() -> BrowserDeliveryBuild:
     """A v2 sprint delivery carrying the race-shaped timeline summary."""
     delivery = _v2_delivery()

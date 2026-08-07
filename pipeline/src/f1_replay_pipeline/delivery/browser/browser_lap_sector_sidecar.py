@@ -7,6 +7,7 @@ evidence.  Both derivations are additive and never mutate canonical Parquet.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import cast
@@ -24,6 +25,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserQualifyingTimeline,
     BrowserQualifyingTimelineInterval,
     CanonicalGenerationSnapshot,
+    FASTF1_POSITION_UNITS_PER_METER,
     LapKind,
     QualifyingTimelineIntervalKind,
 )
@@ -74,6 +76,17 @@ _QUALIFYING_MODES = frozenset({"qualifying", "sprint-qualifying", "sprint-shooto
 # Qualifying-safe timeline kinds are restricted to yellow/red in this revision;
 # SC/VSC codes are intentionally not exposed as intervals.
 _QUALIFYING_STATUS_KINDS = {2: "yellow", 5: "red"}
+# Canonical raw race-control text carried by inferred red-flag freeze markers.
+_RED_FLAG_RAW_MESSAGE = "RED FLAG"
+# Small documented positional epsilon (metres) for the red-flag position-freeze
+# inference: a driver is frozen when every valid post-red pair stays within this
+# distance of the last valid pre-red pair. Canonical position telemetry is
+# FastF1 native decimetres, so the comparison converts both to delivery metres.
+_POSITION_FREEZE_EPSILON_METERS = 1.0
+# A global red flag freezes every active car's telemetry.  Require the driver's
+# last meaningful movement to predate the flag by this margin so a normal
+# red-flag pause is not mistaken for a driver incident.
+_POSITION_FREEZE_MIN_PRE_RED_GAP_MS = 5_000
 
 
 def build_lap_sector_sidecar(snapshot: CanonicalGenerationSnapshot) -> BrowserLapSectorSidecar:
@@ -129,18 +142,20 @@ def build_qualifying_timeline(
     within the replay window.  Intervals come from canonical
     ``track_status_intervals`` rows restricted to yellow (2) and red (5) status
     codes, clipped to the half-open ``[replay_start_ms, replay_end_ms)`` window
-    and merged when adjacent and same-kind.  Incident markers come from
-    canonical ``race_control_messages`` rows through the fail-closed CarEvent
-    terminal-form parser; they carry canonical driver identity, causal time, and
-    raw evidence and never fabricate race ``OUT``/DNF semantics.  When the
-    artifact is absent, consumers render no intervals and hide no markers.
+    and merged when adjacent and same-kind.  Incident markers combine the
+    fail-closed CarEvent terminal-form markers parsed from canonical
+    ``race_control_messages`` with visibility-only ``red-flag-position-freeze``
+    markers inferred from canonical ``position_telemetry`` when a driver with
+    valid pre-red x/y evidence froze through a finite red interval; markers
+    never fabricate race ``OUT``/DNF semantics.  When the artifact is absent,
+    consumers render no intervals and hide no markers.
     """
     if _session_mode(snapshot) not in _QUALIFYING_MODES:
         return None
     fixture_id = cast(str, snapshot.frames["session_metadata"].row(0, named=True)["session_id"])
     _validate_qualifying_timeline_bounds(replay_start_ms, replay_end_ms)
     intervals = _qualifying_timeline_intervals(snapshot, replay_start_ms, replay_end_ms)
-    markers = _qualifying_incident_markers(snapshot, replay_start_ms, replay_end_ms)
+    markers = _qualifying_incident_markers(snapshot, replay_start_ms, replay_end_ms, intervals)
     if not intervals and not markers:
         return None
     return BrowserQualifyingTimeline(fixture_id, replay_start_ms, replay_end_ms, intervals, markers)
@@ -409,23 +424,169 @@ def _qualifying_status_kind(value: object) -> QualifyingTimelineIntervalKind | N
 
 def _qualifying_incident_markers(
     snapshot: CanonicalGenerationSnapshot, replay_start_ms: int, replay_end_ms: int,
+    red_intervals: tuple[BrowserQualifyingTimelineInterval, ...],
 ) -> tuple[BrowserQualifyingIncidentMarker, ...]:
-    """Derive qualifying incident markers within the replay window."""
+    """Derive qualifying incident markers within the replay window.
+
+    Combines the fail-closed race-control ``CarEvent`` terminal markers with
+    visibility-only ``red-flag-position-freeze`` markers inferred from position
+    telemetry when a driver with valid pre-red x/y evidence froze through a
+    finite red interval.  The combined markers are ordered by the deterministic
+    ``(time_ms, driver_id, raw_message)`` key the timeline model validates.
+    """
     try:
         messages = snapshot.frames["race_control_messages"]
         drivers = snapshot.frames["drivers"]
     except KeyError:
+        messages = None
+        drivers = None
+    markers = []
+    if messages is not None and drivers is not None:
+        for marker in parse_qualifying_incident_markers(messages, drivers):
+            if replay_start_ms <= marker.time_ms < replay_end_ms:
+                markers.append(BrowserQualifyingIncidentMarker(
+                    driver_id=marker.driver_id,
+                    time_ms=marker.time_ms,
+                    raw_message=marker.raw_message,
+                    lap_number=marker.lap_number,
+                ))
+    markers.extend(_qualifying_red_flag_freeze_markers(snapshot, red_intervals, replay_end_ms))
+    deduplicated: dict[tuple[int, str, str], BrowserQualifyingIncidentMarker] = {}
+    for marker in markers:
+        deduplicated.setdefault((marker.time_ms, marker.driver_id, marker.raw_message), marker)
+    return tuple(sorted(
+        deduplicated.values(),
+        key=lambda marker: (marker.time_ms, marker.driver_id, marker.raw_message),
+    ))
+
+
+def _qualifying_red_flag_freeze_markers(
+    snapshot: CanonicalGenerationSnapshot,
+    red_intervals: tuple[BrowserQualifyingTimelineInterval, ...],
+    replay_end_ms: int,
+) -> tuple[BrowserQualifyingIncidentMarker, ...]:
+    """Infer visibility-only freeze markers at finite red interval ends.
+
+    A driver receives one ``red-flag-position-freeze`` marker at the exclusive
+    end of a red interval when they had at least one valid (non-null x/y) pair
+    before the interval and every valid pair at or after the interval end stays
+    within ``_POSITION_FREEZE_EPSILON_METERS`` of the last pre-red pair (the
+    incident site).  Drivers with no pre-red position evidence (for example
+    SAI/STR, who did not start) and drivers that move after restart produce no
+    marker; missing post-red data alone is never incident evidence.  Open-ended
+    red intervals whose effective end equals ``replay_end_ms`` are skipped
+    because a marker at the exclusive artifact end would be invalid.
+    """
+    position_telemetry = snapshot.frames.get("position_telemetry")
+    laps = snapshot.frames.get("laps")
+    if position_telemetry is None or laps is None:
         return ()
     markers = []
-    for marker in parse_qualifying_incident_markers(messages, drivers):
-        if replay_start_ms <= marker.time_ms < replay_end_ms:
-            markers.append(BrowserQualifyingIncidentMarker(
-                driver_id=marker.driver_id,
-                time_ms=marker.time_ms,
-                raw_message=marker.raw_message,
-                lap_number=marker.lap_number,
-            ))
-    return tuple(sorted(markers, key=lambda marker: (marker.time_ms, marker.driver_id, marker.raw_message)))
+    for interval in red_intervals:
+        if interval.kind != "red" or interval.end_ms == replay_end_ms:
+            continue
+        markers.extend(
+            _frozen_red_flag_markers_for_interval(
+                position_telemetry, laps, interval.start_ms, interval.end_ms,
+            )
+        )
+    return tuple(markers)
+
+
+def _frozen_red_flag_markers_for_interval(
+    position_telemetry: pl.DataFrame, laps: pl.DataFrame,
+    red_start_ms: int, red_end_ms: int,
+) -> tuple[BrowserQualifyingIncidentMarker, ...]:
+    """Return freeze markers backed by an incomplete lap across the red flag."""
+    markers = []
+    for driver_id in sorted(position_telemetry.get_column("driver_id").unique().to_list()):
+        pairs = position_telemetry.filter(
+            (pl.col("driver_id") == driver_id)
+            & pl.col("x").is_not_null()
+            & pl.col("y").is_not_null()
+            # FastF1 emits (0, 0) for drivers without a position stream.  It is
+            # a missing-position sentinel here, not a track coordinate.
+            & ~((pl.col("x") == 0) & (pl.col("y") == 0))
+        ).sort("session_time_ms")
+        if pairs.is_empty():
+            continue
+        pre = pairs.filter(pl.col("session_time_ms") < red_start_ms)
+        if pre.is_empty():
+            continue  # no valid pre-red position evidence
+        reference = pre.row(-1, named=True)
+        if red_start_ms - _last_meaningful_position_time(pre) < _POSITION_FREEZE_MIN_PRE_RED_GAP_MS:
+            continue  # the red flag itself, not an incident, froze this driver
+        if not _has_incomplete_red_lap(laps, driver_id, red_start_ms, red_end_ms):
+            continue  # a stale position alone is not incident evidence
+        post = pairs.filter(pl.col("session_time_ms") >= red_end_ms)
+        if post.is_empty():
+            continue  # missing data alone is never incident evidence
+        if _moved_after_red_flag(post, reference):
+            continue  # meaningful movement after restart
+        markers.append(BrowserQualifyingIncidentMarker(
+            driver_id=driver_id,
+            time_ms=red_end_ms,
+            raw_message=_RED_FLAG_RAW_MESSAGE,
+            source="red-flag-position-freeze",
+        ))
+    return tuple(markers)
+
+
+def _has_incomplete_red_lap(
+    laps: pl.DataFrame, driver_id: str, red_start_ms: int, red_end_ms: int,
+) -> bool:
+    """Return whether a driver's incomplete lap spans the finite red interval."""
+    return not laps.filter(
+        (pl.col("driver_id") == driver_id)
+        & pl.col("lap_start_time_ms").is_not_null()
+        & pl.col("lap_end_time_ms").is_not_null()
+        & (pl.col("lap_start_time_ms") <= red_start_ms)
+        & (pl.col("lap_end_time_ms") >= red_end_ms)
+        & pl.col("lap_duration_ms").is_null()
+        & (pl.col("is_accurate") == False)  # noqa: E712 - explicit canonical false
+        & (pl.col("deleted") == False)  # noqa: E712 - explicit canonical false
+        & pl.col("track_status").is_not_null()
+        & ~pl.col("track_status").is_in(_GREEN_YELLOW_TRACK_STATUS)
+    ).is_empty()
+
+
+def _last_meaningful_position_time(position_rows: pl.DataFrame) -> int:
+    """Return the timestamp of the last meaningful pre-red movement."""
+    rows = position_rows.select(["session_time_ms", "x", "y"]).to_dicts()
+    previous = rows[0]
+    last_motion_ms = cast(int, previous["session_time_ms"])
+    for current in rows[1:]:
+        previous_point = (
+            cast(float, previous["x"]) / FASTF1_POSITION_UNITS_PER_METER,
+            cast(float, previous["y"]) / FASTF1_POSITION_UNITS_PER_METER,
+        )
+        current_point = (
+            cast(float, current["x"]) / FASTF1_POSITION_UNITS_PER_METER,
+            cast(float, current["y"]) / FASTF1_POSITION_UNITS_PER_METER,
+        )
+        if math.dist(previous_point, current_point) > _POSITION_FREEZE_EPSILON_METERS:
+            last_motion_ms = cast(int, current["session_time_ms"])
+        previous = current
+    return last_motion_ms
+
+
+def _moved_after_red_flag(
+    post_rows: pl.DataFrame, reference: Mapping[str, object],
+) -> bool:
+    """Return whether any post-red valid pair moved beyond the freeze epsilon.
+
+    Canonical position telemetry is FastF1 native decimetres; both the
+    reference and the post-red pairs are converted to delivery metres so the
+    comparison uses the documented metre epsilon.
+    """
+    reference_x = cast(float, reference["x"]) / FASTF1_POSITION_UNITS_PER_METER
+    reference_y = cast(float, reference["y"]) / FASTF1_POSITION_UNITS_PER_METER
+    for row in post_rows.to_dicts():
+        x = cast(float, row["x"]) / FASTF1_POSITION_UNITS_PER_METER
+        y = cast(float, row["y"]) / FASTF1_POSITION_UNITS_PER_METER
+        if math.dist((x, y), (reference_x, reference_y)) > _POSITION_FREEZE_EPSILON_METERS:
+            return True
+    return False
 
 
 def _validate_qualifying_timeline_bounds(replay_start_ms: int, replay_end_ms: int) -> None:

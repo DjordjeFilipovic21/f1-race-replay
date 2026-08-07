@@ -467,8 +467,13 @@ manifest reference (`path`, `schemaId`, `sha256`) pointing to
 - `intervals` and `incidentMarkers` are both required keys and each may be
   empty; the artifact is omitted entirely when there is nothing to publish.
 - Incident markers are visibility-only records for track-map marker hiding:
-  `driverId`, `timeMs`, `source` (`race-control-car-event`), `rawMessage`, and
-  optional `lapNumber`. They are not race `OUT`/DNF markers and never change
+  `driverId`, `timeMs`, `source`, `rawMessage`, and optional `lapNumber`.
+  `source` is either `race-control-car-event` (canonical CarEvent terminal
+  evidence) or `red-flag-position-freeze` (visibility-only inference from
+  position telemetry at the exclusive end of a finite red interval when a
+  driver with valid pre-red x/y evidence froze through the red flag; the
+  marker carries the canonical `rawMessage` `RED FLAG`). Unknown sources are
+  rejected. Markers are not race `OUT`/DNF markers and never change
   classification; they are distinct from `PositionData` `OffTrack`, which
   FastF1 backfills for missing samples and is not a retirement signal.
 - Intervals are deterministically ordered by `startMs`, `endMs`, `kind`;

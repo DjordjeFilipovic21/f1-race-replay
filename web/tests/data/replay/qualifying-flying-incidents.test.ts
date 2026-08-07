@@ -171,6 +171,27 @@ describe('qualifying timeline parser', () => {
     expect(parsed.incidentMarkers).toEqual([])
   })
 
+  test('accepts an inferred red-flag-position-freeze marker and preserves the source', () => {
+    const parsed = parseQualifyingTimeline(qualifyingTimelinePayload({
+      incidentMarkers: [
+        { driverId: 'HAM', timeMs: 700, source: 'race-control-car-event', rawMessage: 'CAR 44 STOPS', lapNumber: 2 },
+        { driverId: 'VER', timeMs: 1_500, source: 'red-flag-position-freeze', rawMessage: 'RED FLAG' },
+      ],
+    }))
+
+    expect(parsed.incidentMarkers.map(({ source }) => source)).toEqual(['race-control-car-event', 'red-flag-position-freeze'])
+    expect(parsed.incidentMarkers[1]).toEqual({ driverId: 'VER', timeMs: 1_500, source: 'red-flag-position-freeze', rawMessage: 'RED FLAG' })
+    expect(Object.isFrozen(parsed.incidentMarkers[1])).toBe(true)
+  })
+
+  test('keeps rejecting unknown marker sources', () => {
+    expect(() => parseQualifyingTimeline(qualifyingTimelinePayload({
+      incidentMarkers: [
+        { driverId: 'HAM', timeMs: 100, source: 'dnf', rawMessage: 'CAR 44 CRASH' },
+      ],
+    }))).toThrow('source is unsupported')
+  })
+
   test('does not expose race DNF or OUT semantics', () => {
     const parsed = parseQualifyingTimeline(qualifyingTimelinePayload())
 
@@ -290,6 +311,30 @@ describe('qualifying timeline loader integration', () => {
     expect(index.qualifyingTimeline?.fixtureId).toBe(fixtureId)
     expect(index.qualifyingTimeline?.intervals.map(({ kind }) => kind)).toEqual(['yellow', 'red'])
     expect(Object.isFrozen(index.qualifyingTimeline)).toBe(true)
+  })
+
+  test('loads a qualifyingTimeline containing an inferred freeze marker', async () => {
+    const encoder = new TextEncoder()
+    const timelineBytes = encoder.encode(JSON.stringify(qualifyingTimelinePayload({
+      incidentMarkers: [
+        { driverId: 'HAM', timeMs: 1_500, source: 'red-flag-position-freeze', rawMessage: 'RED FLAG' },
+      ],
+    })))
+    const trackBytes = encoder.encode(JSON.stringify(minimalTrack()))
+    const chunkBytes = encoder.encode(JSON.stringify(minimalChunk()))
+    const manifest = minimalManifest(await sha256Hex(timelineBytes), await sha256Hex(trackBytes), await sha256Hex(chunkBytes))
+    const files = new Map<string, Uint8Array>([
+      ['manifest.json', encoder.encode(JSON.stringify(manifest))],
+      ['track-assets.json', trackBytes],
+      ['chunks/chunk-001.json', chunkBytes],
+      ['qualifying-timeline.json', timelineBytes],
+    ])
+
+    const index = await loadReplayIndex({ source: { read: async (path) => files.get(path) ?? new Uint8Array() } })
+
+    expect(index.qualifyingTimeline?.incidentMarkers).toEqual([
+      { driverId: 'HAM', timeMs: 1_500, source: 'red-flag-position-freeze', rawMessage: 'RED FLAG' },
+    ])
   })
 
   test('rejects a corrupt qualifyingTimeline digest', async () => {

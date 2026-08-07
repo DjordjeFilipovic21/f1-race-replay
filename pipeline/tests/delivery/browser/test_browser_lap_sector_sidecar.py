@@ -795,6 +795,21 @@ class TestQualifyingTimelineModels:
         with pytest.raises(ValueError, match="source is invalid"):
             BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH", source="dnf")  # type: ignore[arg-type]
 
+    def test_accepts_red_flag_position_freeze_source(self) -> None:
+        """✅ Positive: the inferred red-flag freeze source is a valid marker."""
+        # Arrange & Act
+        marker = BrowserQualifyingIncidentMarker(
+            "HAM", 30_000, "RED FLAG", source="red-flag-position-freeze",
+        )
+
+        # Assert — the source round-trips through serialization unchanged.
+        assert marker.source == "red-flag-position-freeze"
+        assert marker.raw_message == "RED FLAG"
+        assert marker.as_dict() == {
+            "driverId": "HAM", "timeMs": 30_000,
+            "source": "red-flag-position-freeze", "rawMessage": "RED FLAG",
+        }
+
     def test_rejects_non_v2_contract(self) -> None:
         """❌ Negative: the qualifying timeline is available only as v2."""
         with pytest.raises(ValueError, match="contract version v2"):
@@ -896,6 +911,7 @@ class TestBuildLapSectorSidecar:
         session_mode: SessionMode = "race",
         track_status_data: list[dict[str, object]] | None = None,
         messages_data: list[dict[str, object]] | None = None,
+        position_data: list[dict[str, object]] | None = None,
     ) -> CanonicalGenerationSnapshot:
         """Build a minimal CanonicalGenerationSnapshot for sidecar tests."""
         session_row: dict[str, object] = {
@@ -946,6 +962,12 @@ class TestBuildLapSectorSidecar:
             frames["race_control_messages"] = pl.DataFrame(
                 messages_data,
                 schema=dict(CANONICAL_TABLE_SCHEMAS_V2["race_control_messages"]),
+                strict=True,
+            )
+        if position_data:
+            frames["position_telemetry"] = pl.DataFrame(
+                position_data,
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["position_telemetry"]),
                 strict=True,
             )
         return CanonicalGenerationSnapshot("generation", "a" * 64, frames)
@@ -1981,6 +2003,382 @@ class TestBuildQualifyingTimeline:
         # Act & Assert
         with pytest.raises(ValueError, match="non-empty interval"):
             build_qualifying_timeline(snapshot, 400_000, 400_000)
+
+
+# ===========================================================================
+# Red-flag position-freeze incident marker tests
+# ===========================================================================
+
+
+class TestQualifyingRedFlagFreezeMarkers:
+    """Visibility-only freeze markers inferred from canonical position pairs.
+
+    Canonical position telemetry stores FastF1 native decimetres; the browser
+    delivery converts to metres (``FASTF1_POSITION_UNITS_PER_METER = 10.0``).
+    The documented freeze epsilon is 1 metre, so a driver whose post-red pairs
+    stay within that distance of the last pre-red pair is frozen.
+    """
+
+    # Red interval [10_000, 20_000) inside the [0, 400_000) replay window.
+    RED_START_MS = 10_000
+    RED_END_MS = 20_000
+
+    @staticmethod
+    def _position_row(
+        driver_id: str, time_ms: int, x: object, y: object,
+    ) -> dict[str, object]:
+        return {
+            "session_id": "test-race",
+            "driver_id": driver_id,
+            "source_driver_key": driver_id,
+            "session_time_ms": time_ms,
+            "x": x,
+            "y": y,
+            "z": None,
+            "status": "OnTrack",
+            "source": "pos",
+        }
+
+    def _snapshot(
+        self,
+        *,
+        position_rows: list[dict[str, object]],
+        message_rows: list[dict[str, object]] | None = None,
+        red_end_ms: object = 20_000,
+    ) -> CanonicalGenerationSnapshot:
+        driver_ids = tuple(sorted({cast(str, row["driver_id"]) for row in position_rows}))
+        lap_end_ms = red_end_ms if type(red_end_ms) is int else 30_000
+        laps_data = [
+            TestBuildLapSectorSidecar._lap_row(
+                driver_id,
+                1,
+                lap_start_time_ms=5_000,
+                lap_end_time_ms=lap_end_ms,
+                lap_duration_ms=None,
+                track_status="125",
+                is_accurate=False,
+                deleted=False,
+            )
+            for driver_id in driver_ids
+        ]
+        return TestBuildLapSectorSidecar._snapshot_with_laps(
+            laps_data,
+            driver_ids=driver_ids or ("HAM",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": red_end_ms,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            messages_data=message_rows,
+            position_data=position_rows,
+        )
+
+    def test_frozen_driver_gets_marker_at_red_end(self) -> None:
+        """✅ Positive: VER-like frozen coordinates produce a marker at red end."""
+        # Arrange — VER has a valid pre-red pair and frozen post-red pairs at
+        # the canonical decimetre form of the artifact's (-3665, 1243) metres.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 9_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 30_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — one visibility-only marker at the red interval end.
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+        assert timeline.incident_markers[0].source == "red-flag-position-freeze"
+        assert timeline.incident_markers[0].raw_message == "RED FLAG"
+        assert timeline.incident_markers[0].lap_number is None
+
+    def test_moving_driver_is_omitted(self) -> None:
+        """❌ Negative: a driver that moves after restart produces no marker."""
+        # Arrange — VER's post-red pair is ~100 m away from the pre-red site.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 13_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval renders but no freeze marker is inferred.
+        assert timeline is not None
+        assert [interval.kind for interval in timeline.intervals] == ["red"]
+        assert timeline.incident_markers == ()
+
+    def test_driver_without_pre_red_position_is_omitted(self) -> None:
+        """❌ Negative: SAI/STR-like drivers with no pre-red position get no marker."""
+        # Arrange — SAI has only post-red pairs because it never started.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("SAI", 25_000, -36_650.0, 12_430.0),
+            self._position_row("SAI", 30_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_driver_without_post_red_data_is_omitted(self) -> None:
+        """❌ Negative: missing post-red data alone is never incident evidence."""
+        # Arrange — VER has a pre-red pair but no valid pair after the red end.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_open_ended_red_interval_produces_no_marker(self) -> None:
+        """❌ Negative: a red interval open to the replay end is skipped."""
+        # Arrange — the canonical red interval never ends, so its effective end
+        # is clipped to the artifact end (400_000); a marker there is invalid.
+        snapshot = self._snapshot(
+            position_rows=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 410_000, -36_650.0, 12_430.0),
+            ],
+            red_end_ms=None,
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval is clipped to the window end and yields no marker.
+        assert timeline is not None
+        assert timeline.intervals == (
+            BrowserQualifyingTimelineInterval("red", 10_000, 400_000),
+        )
+        assert timeline.incident_markers == ()
+
+    def test_small_jitter_within_epsilon_is_still_frozen(self) -> None:
+        """✅ Positive: sub-metre jitter stays within the documented epsilon."""
+        # Arrange — the post-red pair drifts ~0.22 m from the pre-red site.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 9_500, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_652.0, 12_431.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_normal_red_flag_pause_does_not_create_freeze_marker(self) -> None:
+        """❌ Negative: movement immediately before red is a session pause."""
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("HAM", 5_000, 1_000.0, 2_000.0),
+            self._position_row("HAM", 9_500, 1_100.0, 2_000.0),
+            self._position_row("HAM", 25_000, 1_100.0, 2_000.0),
+        ])
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_zero_position_sentinel_does_not_count_as_pre_red_evidence(self) -> None:
+        """❌ Negative: a FastF1 (0, 0) sentinel means the driver did not start."""
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("SAI", 5_000, 0.0, 0.0),
+            self._position_row("SAI", 25_000, 0.0, 0.0),
+        ])
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_freeze_marker_combines_with_race_control_marker(self) -> None:
+        """✅ Positive: existing CarEvent markers are preserved and ordered."""
+        # Arrange — HAM crashes (CarEvent at 15_000) and VER freezes through red.
+        snapshot = self._snapshot(
+            position_rows=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+            message_rows=[
+                {
+                    "session_id": "test-race",
+                    "session_time_ms": 15_000,
+                    "message_index": 0,
+                    "category": "CarEvent",
+                    "flag": None,
+                    "scope": None,
+                    "message": "CAR 44 CRASH",
+                    "driver_id": "HAM",
+                    "lap_number": 7,
+                },
+                {
+                    "session_id": "test-race",
+                    "session_time_ms": 15_000,
+                    "message_index": 1,
+                    "category": "CarEvent",
+                    "flag": None,
+                    "scope": None,
+                    "message": "CAR 44 CRASH",
+                    "driver_id": "HAM",
+                    "lap_number": 7,
+                },
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — ordered by timeMs, then driverId, then rawMessage.
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker("HAM", 15_000, "CAR 44 CRASH", lap_number=7),
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_partial_red_lap_overlap_does_not_create_freeze_marker(self) -> None:
+        """❌ Negative: incomplete evidence must span the complete red interval."""
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [
+                TestBuildLapSectorSidecar._lap_row(
+                    "VER",
+                    1,
+                    lap_start_time_ms=15_000,
+                    lap_end_time_ms=25_000,
+                    lap_duration_ms=None,
+                    track_status="125",
+                    is_accurate=False,
+                    deleted=False,
+                ),
+            ],
+            driver_ids=("VER",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": self.RED_END_MS,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            position_data=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+        )
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_lap_start_and_end_on_red_boundaries_are_inclusive(self) -> None:
+        """✅ Positive: a lap exactly matching the red interval is sufficient."""
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [
+                TestBuildLapSectorSidecar._lap_row(
+                    "VER",
+                    1,
+                    lap_start_time_ms=self.RED_START_MS,
+                    lap_end_time_ms=self.RED_END_MS,
+                    lap_duration_ms=None,
+                    track_status="125",
+                    is_accurate=False,
+                    deleted=False,
+                ),
+            ],
+            driver_ids=("VER",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": self.RED_END_MS,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            position_data=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+        )
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_deterministic_ordering_across_frozen_drivers(self) -> None:
+        """✅ Positive: same-time freeze markers order deterministically by driver."""
+        # Arrange — both drivers freeze at the same red end.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            self._position_row("SAI", 5_000, 1_000.0, 2_000.0),
+            self._position_row("SAI", 25_000, 1_000.0, 2_000.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — SAI sorts before VER at the same timeMs.
+        assert timeline is not None
+        assert [(marker.driver_id, marker.time_ms) for marker in timeline.incident_markers] == [
+            ("SAI", self.RED_END_MS),
+            ("VER", self.RED_END_MS),
+        ]
+
+    def test_no_position_telemetry_frame_yields_no_marker(self) -> None:
+        """✅ Positive: missing position telemetry fails closed to no marker."""
+        # Arrange — a qualifying session with a red interval but no position frame.
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                {"session_id": "test-race", "start_time_ms": 10_000, "end_time_ms": 20_000, "status": "5", "message": "RED FLAG"},
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval renders, markers remain empty.
+        assert timeline is not None
+        assert timeline.intervals == (
+            BrowserQualifyingTimelineInterval("red", 10_000, 20_000),
+        )
+        assert timeline.incident_markers == ()
 
 
 # ===========================================================================

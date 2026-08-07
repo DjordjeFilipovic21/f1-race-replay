@@ -939,6 +939,12 @@ markers:
       "source": "race-control-car-event",
       "rawMessage": "CAR 11 STOPS",
       "lapNumber": 4
+    },
+    {
+      "driverId": "VER",
+      "timeMs": 720000,
+      "source": "red-flag-position-freeze",
+      "rawMessage": "RED FLAG"
     }
   ]
 }
@@ -952,15 +958,39 @@ markers:
   SC/VSC equivalents are intentionally not exposed.
 - Incident markers are visibility-only records: `driverId` is a canonical
   driver code, `timeMs` is an absolute marker time inside the artifact bounds,
-  `source` is always `race-control-car-event`, `rawMessage` is the original
-  race-control text (for example `CAR 16 CRASH` or `CAR 44 STOPS`), and
-  `lapNumber` is optional.
+  `rawMessage` is the original race-control text (for example `CAR 16 CRASH`
+  or `CAR 44 STOPS`), and `lapNumber` is optional. `source` is one of two
+  frozen values:
+  - `race-control-car-event` — canonical CarEvent terminal evidence from the
+    race-control stream;
+  - `red-flag-position-freeze` — a qualifying-only, visibility-only inference
+    from canonical position telemetry when a driver had valid pre-red x/y
+    evidence but no meaningful position movement after the red interval. The
+    marker time is the exclusive end of a finite red interval, so it becomes
+    effective after the red flag, and `rawMessage` is the canonical `RED FLAG`
+    message. Unknown sources are rejected by the schema and the loader guard.
 - An incident marker records an on-track incident/terminal event for track-map
   marker hiding. It is **not** a race `OUT`/DNF marker and does **not** change
   the driver's qualifying classification: the driver remains in the
   classification table unless the existing qualifying elimination rules hide
   the row. It is also distinct from `PositionData` `OffTrack`, which FastF1
   backfills for missing samples and is not a retirement signal.
+- `red-flag-position-freeze` derivation is deterministic and fail-closed. It
+  works from canonical snapshot position pairs (non-null `x` and `y` grouped by
+  driver and sorted by `session_time_ms`): a driver must have at least one valid
+  pair before the red interval, the driver's last meaningful movement must be
+  at least 5 seconds before the red start, and an incomplete non-green/yellow
+  lap must span the full red interval. Every valid pair at or after the
+  interval end must stay within a small documented positional epsilon (1 metre)
+  of the last pre-red pair. Canonical `(0, 0)` pairs are treated as the
+  no-position sentinel. Drivers with no pre-red position (for example drivers
+  that did not start), drivers that move after restart, drivers with only a
+  partial lap overlap, and drivers with no post-red data at all produce no
+  marker (missing data alone is never incident evidence). Open-ended red
+  intervals whose effective end equals the replay end are skipped because a
+  marker at the exclusive artifact end would be invalid.
+  The inference never changes classification, status, `OUT`, DNF, finish, or
+  canonical Parquet; it only controls track-map marker visibility.
 - Causal UI interpretation: a marker is effective when `timeMs <= replayTimeMs`
   and an interval is active while the cursor is inside `[startMs, endMs)`.
   Playback and arbitrary seeks use the same comparisons.

@@ -3,7 +3,7 @@ import type {
   LapKind, LapSectorDriverColumns, LapSectorSidecar, LapSectorSidecarReference,
   PitLossEstimateSidecar, PitLossEstimateSidecarReference,
   PitLossEstimateStatus, PitLossEstimateTimeline, PitLossModel, PitLossModelReference,
-  PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, QualifyingIncidentMarker, QualifyingTimeline,
+  PenaltyIssuance, PenaltySidecar, PenaltySidecarReference, QualifyingIncidentMarker, QualifyingIncidentMarkerSource, QualifyingTimeline,
   QualifyingTimelineInterval, QualifyingTimelineIntervalKind, QualifyingTimelineReference, ReplayChunk, ReplayEvent, ReplayManifest, ReplayOverlap,
   SeasonMetadata, StintDriverColumns, StintSummary, StintSummaryReference, TelemetryCapabilities, TelemetryCapabilityState,
   TimelineInterval, TimelineIntervalKind, TimelineSummary,
@@ -37,6 +37,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 const TIMELINE_INTERVAL_KINDS = ['yellow', 'sc', 'red', 'vsc'] as const
 const QUALIFYING_TIMELINE_INTERVAL_KINDS = ['yellow', 'red'] as const
+const QUALIFYING_INCIDENT_MARKER_SOURCES = ['race-control-car-event', 'red-flag-position-freeze'] as const
 const LAP_KINDS = ['flying', 'outlap', 'inlap', 'unknown'] as const
 const TELEMETRY_CAPABILITY_STATES = ['available', 'not-published'] as const
 const SESSION_MODES = ['race', 'practice', 'qualifying', 'sprint', 'sprint-qualifying', 'sprint-shootout', 'testing'] as const
@@ -833,14 +834,14 @@ function parseQualifyingIncidentMarker(value: unknown, index: number, timelineSt
   const label = `qualifying timeline incidentMarkers[${index}]`
   const item = object(value, label)
   exact(item, ['driverId', 'timeMs', 'source', 'rawMessage'], ['lapNumber'], label)
-  if (item.source !== 'race-control-car-event') throw new Error(`${label}.source is unsupported`)
+  if (!QUALIFYING_INCIDENT_MARKER_SOURCES.includes(item.source as QualifyingIncidentMarkerSource)) throw new Error(`${label}.source is unsupported`)
   const driverId = parseDriverId(item.driverId, `${label}.driverId`)
   const timeMs = integer(item.timeMs, `${label}.timeMs`)
   if (timeMs < timelineStartMs || timeMs >= timelineEndMs) throw new Error(`${label} is outside timeline bounds`)
   const rawMessage = string(item.rawMessage, `${label}.rawMessage`)
   if (!rawMessage.trim()) throw new Error(`${label}.rawMessage must be non-blank`)
   const lapNumber = item.lapNumber === undefined ? undefined : integer(item.lapNumber, `${label}.lapNumber`, 1)
-  return freeze({ driverId, timeMs, source: 'race-control-car-event', rawMessage, ...(lapNumber === undefined ? {} : { lapNumber }) })
+  return freeze({ driverId, timeMs, source: item.source as QualifyingIncidentMarkerSource, rawMessage, ...(lapNumber === undefined ? {} : { lapNumber }) })
 }
 
 function parseLapStart(value: unknown, index: number) {
