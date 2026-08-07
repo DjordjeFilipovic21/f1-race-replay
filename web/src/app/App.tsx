@@ -8,8 +8,8 @@ import { useUrlSelection } from '../url/useUrlSelection'
 import type { UrlSelection } from '../url/adapter'
 import { runPageTransition } from './page-transition'
 
-const DEFAULT_YEAR = 2024
-const DEFAULT_AVAILABLE_YEARS = [DEFAULT_YEAR, 2026] as const
+const DEFAULT_YEAR = 2026
+const DEFAULT_AVAILABLE_YEARS = [DEFAULT_YEAR] as const
 const DEFAULT_SEASONS_BASE_URL = '/replay-data/seasons/'
 const INVALID_SELECTION_MESSAGE = 'Choose a listed race and a session marked “Ready to replay”.'
 
