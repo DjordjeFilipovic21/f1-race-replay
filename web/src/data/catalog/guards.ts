@@ -3,6 +3,13 @@ import { array, exact, finite, freeze, integer, nullable, object, string, type O
 import type { BrowserPointerResolution, CatalogSelection, CatalogV2, CatalogV2Race, CatalogV2RaceVisual, CatalogV2Session } from './types'
 
 const SAFE_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const V2_GENERATION = /^(\d{4})-round-(\d+)-session-(practice-[123]|qualifying|race|sprint|sprint-qualifying|sprint-shootout|testing)-mode-(practice|qualifying|race|sprint|sprint-qualifying|sprint-shootout|testing)$/
+const GENERATION_SUFFIX = /-(?:force|browser)-\d+$/
+const RACE_ID = /^(\d{4})-round-(\d+)(?:-[A-Za-z0-9._-]+)?$/
+const SESSION_CODES: Readonly<Record<string, string>> = {
+  'practice-1': 'fp1', 'practice-2': 'fp2', 'practice-3': 'fp3', qualifying: 'q', race: 'r',
+  sprint: 's', 'sprint-qualifying': 'sq', 'sprint-shootout': 'ss', testing: 'testing',
+}
 
 export function parseCatalogV2(value: unknown): CatalogV2 {
   const item = object(value, 'catalog')
@@ -13,6 +20,7 @@ export function parseCatalogV2(value: unknown): CatalogV2 {
   const races = array(item.races, 'catalog.races').map((race, index) => parseCatalogV2Race(race, index))
   const raceIds = races.map(({ race_id }) => race_id)
   if (new Set(raceIds).size !== raceIds.length) throw new Error('catalog races must not contain duplicate race_id values')
+  validateCatalogIdentities(races, year)
 
   return freeze({
     schemaVersion: 2,
@@ -79,6 +87,9 @@ export function parseCatalogV2Session(value: unknown, raceLabel = 'race', index?
     browser_pointer: nullable(item.browser_pointer, (entry) => safePointer(entry, `${label}.browser_pointer`)),
   })
 
+  if (session.generation_id !== null && !isV2GenerationValue(session.generation_id)) {
+    throw new Error(`${label} generation_id is not a v2 identity`)
+  }
   validateSessionReferences(session, label)
   return session
 }
@@ -86,7 +97,7 @@ export function parseCatalogV2Session(value: unknown, raceLabel = 'race', index?
 export function isSessionReplayReady(value: unknown): value is CatalogV2Session {
   if (!isObject(value)) return false
   return value.validated === true
-    && isSafeComponentValue(value.generation_id)
+    && isV2GenerationValue(value.generation_id)
     && isSafeComponentValue(value.delivery_version)
     && isSafePointerValue(value.browser_pointer)
 }
@@ -152,6 +163,30 @@ function validateSessionReferences(session: CatalogV2Session, label: string): vo
   }
 }
 
+function validateCatalogIdentities(races: readonly CatalogV2Race[], year: number): void {
+  for (const race of races) {
+    const raceMatch = RACE_ID.exec(race.race_id)
+    if (raceMatch === null || Number(raceMatch[1]) !== year || Number(raceMatch[2]) !== race.round_number) {
+      throw new Error(`catalog race ${race.race_id} has a mixed-version identity`)
+    }
+    for (const session of race.sessions) {
+      if (session.generation_id === null) continue
+      const match = V2_GENERATION.exec(stripGenerationSuffix(session.generation_id))
+      if (match === null || Number(match[1]) !== year || Number(match[2]) !== race.round_number) {
+        throw new Error(`active catalog session ${race.race_id}/${session.session_code} has mixed-version identity`)
+      }
+      const identity = match[3]
+      const mode = match[4]
+      if (mode !== identity && !(identity === 'practice-1' && mode === 'practice') && !(identity === 'practice-2' && mode === 'practice') && !(identity === 'practice-3' && mode === 'practice')) {
+        throw new Error(`active catalog session ${race.race_id}/${session.session_code} has mixed-version identity`)
+      }
+      if (SESSION_CODES[identity] !== session.session_code) {
+        throw new Error(`active catalog session ${race.race_id}/${session.session_code} disagrees with generation_id`)
+      }
+    }
+  }
+}
+
 function optionalText(item: ObjectValue, field: string, label: string): Partial<Record<string, string | null>> {
   if (!(field in item)) return {}
   if (item[field] === null) return { [field]: null }
@@ -191,6 +226,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isSafeComponentValue(value: unknown): value is string {
   return typeof value === 'string' && SAFE_COMPONENT.test(value)
+}
+
+function isV2GenerationValue(value: unknown): value is string {
+  return typeof value === 'string' && V2_GENERATION.test(stripGenerationSuffix(value))
+}
+
+function stripGenerationSuffix(value: string): string {
+  let current = value
+  while (GENERATION_SUFFIX.test(current)) current = current.replace(GENERATION_SUFFIX, '')
+  return current
 }
 
 function isSafePointerValue(value: unknown): value is string {

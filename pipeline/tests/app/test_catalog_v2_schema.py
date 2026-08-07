@@ -7,13 +7,23 @@ import json
 import pytest
 
 from f1_replay_pipeline.app.catalog_v2_schema import (
+    BROWSER_POINTER_FORMAT,
+    CANONICAL_POINTER_FORMAT,
     CATALOG_SCHEMA_VERSION,
     CatalogV2Payload,
     CatalogV2RaceRecord,
     CatalogV2SessionRecord,
+    DeprecatedV1Reference,
+    HISTORICAL_BROWSER_POINTER_FORMAT,
+    HISTORICAL_CANONICAL_POINTER_FORMAT,
+    HISTORICAL_V1_ARTIFACT_METADATA,
+    V1_DEPRECATION_METADATA,
     session_code_from_generation_id,
     strip_generation_suffix,
+    validate_active_catalog,
+    validate_v2_cutover_contract,
 )
+from f1_replay_pipeline.domain.generation_identity import build_v2_generation_id
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +83,26 @@ def test_session_identity_helpers_handle_force_and_browser_successors() -> None:
         session_code_from_generation_id("2023-round-08-r", "2024-round-08-monaco-grand-prix")
 
 
+@pytest.mark.parametrize(
+    ("alias", "expected_code"),
+    [
+        ("Practice 1", "fp1"),
+        ("FP1", "fp1"),
+        ("Sprint Qualifying", "sq"),
+        ("SQ", "sq"),
+        ("Sprint Shootout", "ss"),
+        ("SS", "ss"),
+    ],
+)
+def test_session_identity_helpers_parse_v2_generation_ids_for_aliases(
+    alias: str, expected_code: str,
+) -> None:
+    generation_id = build_v2_generation_id(2026, 1, alias)
+
+    assert session_code_from_generation_id(generation_id, "2026-round-01") == expected_code
+    assert session_code_from_generation_id(f"{generation_id}-force-2", "2026-round-01") == expected_code
+
+
 def test_catalog_models_reject_malformed_boundaries_and_duplicate_sessions() -> None:
     with pytest.raises(ValueError):
         CatalogV2Payload(2024, (), schema_version=1)
@@ -86,6 +116,51 @@ def test_catalog_models_reject_malformed_boundaries_and_duplicate_sessions() -> 
             "r", "Race", "2024-round-05-r", "2024-round-05-r",
             "generated", True, "canonical/x", None,
         )
+
+
+def test_v1_contract_metadata_is_explicitly_inactive_and_replaced_by_v2() -> None:
+    assert CANONICAL_POINTER_FORMAT == "canonical-parquet-v2"
+    assert BROWSER_POINTER_FORMAT == "browser-delivery-v2"
+    assert HISTORICAL_CANONICAL_POINTER_FORMAT == "canonical-parquet-v1"
+    assert HISTORICAL_BROWSER_POINTER_FORMAT == "browser-delivery-v1"
+    assert all(reference["active"] is False and reference["deprecated"] is True for reference in V1_DEPRECATION_METADATA.values())
+    assert HISTORICAL_V1_ARTIFACT_METADATA["historical_fixtures"]["count"] == 4
+    assert all(reference["active"] is False for reference in HISTORICAL_V1_ARTIFACT_METADATA.values())
+    assert DeprecatedV1Reference("canonical manifest", "historical/canonical-manifest.json").to_dict()["active"] is False
+
+
+def test_active_catalog_rejects_v1_schema_and_deprecated_fields() -> None:
+    session = CatalogV2SessionRecord(
+        "r", "Race", "2026-round-01-r", "2026-round-01-r", "generated", True,
+        None, "browser/2026-round-01/sessions/r/browser-current.json",
+    )
+    payload = CatalogV2Payload(2026, (CatalogV2RaceRecord("2026-round-01", 1, "Race", (session,)),)).to_dict()
+
+    assert validate_active_catalog(payload).to_dict() == payload
+    with pytest.raises(ValueError, match="schemaVersion 2"):
+        validate_active_catalog({**payload, "schemaVersion": 1})
+    with pytest.raises(ValueError, match="deprecated"):
+        validate_active_catalog({**payload, "deprecated": {"active": False}})
+
+
+def test_v2_cutover_requires_all_four_republished_races() -> None:
+    races = tuple(
+        CatalogV2RaceRecord(
+            f"2026-round-{number:02d}", number, "Race", (
+                CatalogV2SessionRecord(
+                    "r", "Race", f"2026-round-{number:02d}-r", f"2026-round-{number:02d}-r",
+                    "generated", True, None,
+                    f"browser/2026-round-{number:02d}/sessions/r/browser-current.json",
+                ),
+            ),
+        )
+        for number in range(1, 5)
+    )
+    payload = CatalogV2Payload(2026, races).to_dict()
+
+    assert validate_v2_cutover_contract(payload, tuple(race.race_id for race in races)).schema_version == 2
+    with pytest.raises(ValueError, match="exactly four"):
+        validate_v2_cutover_contract(payload, ("2026-round-01",))
 
 
 # ---------------------------------------------------------------------------

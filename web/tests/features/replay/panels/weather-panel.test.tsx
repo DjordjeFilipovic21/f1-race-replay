@@ -9,7 +9,7 @@ import { compassPoint, WeatherPanel } from '../../../../src/features/replay/pane
 
 /** Three-row sidecar whose final observation is complete and recent enough to stay fresh. */
 const sidecar = (overrides: Partial<WeatherSidecar> = {}): WeatherSidecar => ({
-  contractVersion: 'v1',
+  contractVersion: 'v2',
   fixtureId: 'weather-fixture',
   timeMs: [1_000, 2_000, 3_000],
   airTempC: [19.5, 21.4, 22.0],
@@ -24,7 +24,7 @@ const sidecar = (overrides: Partial<WeatherSidecar> = {}): WeatherSidecar => ({
 
 /** Single-row sidecar used to probe age/status formatting without extra observations. */
 const singleObservation = (overrides: Partial<WeatherSidecar> = {}): WeatherSidecar => ({
-  contractVersion: 'v1',
+  contractVersion: 'v2',
   fixtureId: 'weather-fixture',
   timeMs: [0],
   airTempC: [21.0],

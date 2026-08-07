@@ -1,15 +1,16 @@
 import { memo, type CSSProperties } from 'react'
-import type { DriverMetadata } from '../../../data/replay/types'
+import type { DriverMetadata, SessionMode } from '../../../data/replay/types'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
 
 export interface DriverInfoPanelProps {
   readonly drivers: readonly DriverMetadata[]
   readonly selectedDriverId: string | null
   readonly snapshot: ReplaySnapshot | null
+  readonly sessionMode?: SessionMode
 }
 
 /** Displays concise metadata and sampled race state for the shared selection. */
-export const DriverInfoPanel = memo(function DriverInfoPanel({ drivers, selectedDriverId, snapshot }: DriverInfoPanelProps) {
+export const DriverInfoPanel = memo(function DriverInfoPanel({ drivers, selectedDriverId, snapshot, sessionMode = 'race' }: DriverInfoPanelProps) {
   const driver = selectedDriverId === null ? null : drivers.find(({ id }) => id === selectedDriverId) ?? null
   const sampled = driver === null || snapshot === null ? null : snapshot.drivers[driver.id] ?? null
 
@@ -17,17 +18,22 @@ export const DriverInfoPanel = memo(function DriverInfoPanel({ drivers, selected
     return <div className="driver-info-panel"><p className="driver-info-panel__empty" role="status">Driver information is unavailable.</p></div>
   }
 
+  const isRaceLike = sessionMode === 'race' || sessionMode === 'sprint'
+  const positionUnavailable = sampled !== null
+    && (sampled.x === null || sampled.y === null)
+    && sampled.isInPitLane !== true
+    && normalizeStatus(sampled.status) !== 'OUT'
   return (
     <article className="driver-info-panel" style={teamAccentStyle(driver.colorHex)}>
       <header className="driver-info-panel__top">
-        <span className="driver-info-panel__position" aria-label={`Current position ${formatPosition(sampled?.position ?? null, sampled?.status ?? null)}`}>{formatPosition(sampled?.position ?? null, sampled?.status ?? null)}</span>
+        <span className="driver-info-panel__position" aria-label={isRaceLike ? `Current position ${formatPosition(sampled?.position ?? null, sampled?.status ?? null)}` : `Current lap ${formatLap(sampled?.lap ?? null)}`}>{isRaceLike ? formatPosition(sampled?.position ?? null, sampled?.status ?? null) : formatLap(sampled?.lap ?? null)}</span>
         <span className="driver-info-panel__accent" aria-hidden="true" />
         <h2 className="driver-info-panel__name">{driver.displayName}</h2>
         <span className="driver-info-panel__number">#{driver.carNumber}</span>
       </header>
       <dl className="driver-info-panel__bottom">
         <div className="driver-info-panel__segment"><dt>Team</dt><dd>{driver.teamName}</dd></div>
-        <div className="driver-info-panel__segment"><dt>Status</dt><dd>{formatStatus(sampled?.status ?? null, sampled?.isInPitLane ?? null)}</dd></div>
+        <div className="driver-info-panel__segment"><dt>Status</dt><dd>{positionUnavailable ? 'POSITION DATA UNAVAILABLE' : isRaceLike ? formatStatus(sampled?.status ?? null, sampled?.isInPitLane ?? null) : formatNonRaceStatus(sampled?.status ?? null, sampled?.isInPitLane ?? null)}</dd></div>
         <div className="driver-info-panel__segment"><dt>Tyre</dt><dd>{formatTyre(sampled?.tyreCompound ?? null)}</dd></div>
       </dl>
     </article>
@@ -51,8 +57,19 @@ function formatStatus(status: string | null, isInPitLane: boolean | null): strin
   return status?.trim() || '—'
 }
 
+function formatNonRaceStatus(status: string | null, isInPitLane: boolean | null): string {
+  if (isInPitLane === true) return 'PIT'
+  const normalized = normalizeStatus(status)
+  if (normalized === 'OUT' || normalized === 'DNF' || normalized === 'FINISHED' || normalized === 'RETIRED' || normalized === 'DISQUALIFIED') return 'Unavailable'
+  return status?.trim() || '—'
+}
+
 function formatTyre(tyreCompound: string | null): string {
   return tyreCompound?.trim().toUpperCase() || '—'
+}
+
+function formatLap(lap: number | null): string {
+  return lap === null || !Number.isInteger(lap) || lap < 1 ? '—' : String(lap)
 }
 
 function normalizeStatus(status: string | null): string {

@@ -4,17 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-import math
-import re
 import polars as pl
 
-from ...domain.canonical_schema import DRIVERS_SCHEMA, SESSION_METADATA_SCHEMA
+from ...domain.canonical_schema import DRIVERS_SCHEMA_V2, SESSION_METADATA_SCHEMA_V2
 from ...domain.normalizers import NormalizationError, normalize_driver_id, normalize_nullable_scalar
+from ...domain.session_modes import normalize_session_identity, normalize_session_mode
 from ...domain.validators import validate_canonical_table
 
 
 _INT16_MAX = 32_767
-_SESSION_TYPE_TOKEN = re.compile(r"[^a-z0-9]+")
 
 
 def adapt_session_metadata(session: object) -> pl.DataFrame:
@@ -28,21 +26,26 @@ def adapt_session_metadata(session: object) -> pl.DataFrame:
     )
     session_info = _field(session, "session_info")
     session_name = _nullable_text(_first_value(session, session_info, "name", "session_name"))
-    session_type = _session_type(_first_value(session, session_info, "session_type", "type", "name"))
-    session_id = f"{year:04d}-{round_number:02d}-{session_type}"
+    session_label = _first_value(session, session_info, "session_type", "type", "name")
+    session_mode = normalize_session_mode(session_label)
+    identity_label = session_name or session_label
+    session_id = f"{year:04d}-{round_number:02d}-{normalize_session_identity(identity_label)}"
     row = {
         "session_id": session_id,
         "year": year,
         "round_number": round_number,
         "event_name": _nullable_text(_first_value(None, event, "EventName", "OfficialEventName")),
         "session_name": session_name,
-        "session_type": session_type,
+        # Keep the historical session_type value while making the v2 mode
+        # explicit for consumers that must distinguish FP/Q/S variants.
+        "session_type": session_mode,
+        "session_mode": session_mode,
         "session_start_time_utc": _nullable_datetime(
             _first_value(session, event, "date", "SessionDateUtc", "SessionDate")
         ),
     }
-    frame = pl.DataFrame([row], schema=SESSION_METADATA_SCHEMA).sort("session_id")
-    validate_canonical_table("session_metadata", frame)
+    frame = pl.DataFrame([row], schema=SESSION_METADATA_SCHEMA_V2).sort("session_id")
+    validate_canonical_table("session_metadata", frame, version="v2")
     return frame
 
 
@@ -71,8 +74,8 @@ def adapt_drivers(session: object, session_id: str | None = None) -> pl.DataFram
                 "team_colour": _nullable_text(_first_field(driver, "TeamColor", "TeamColour")),
             }
         )
-    frame = pl.DataFrame(rows, schema=DRIVERS_SCHEMA).sort("session_id", "driver_id")
-    validate_canonical_table("drivers", frame)
+    frame = pl.DataFrame(rows, schema=DRIVERS_SCHEMA_V2).sort("session_id", "driver_id")
+    validate_canonical_table("drivers", frame, version="v2")
     return frame
 
 
@@ -182,16 +185,6 @@ def _nullable_datetime(value: object | None) -> datetime | None:
     if converted.tzinfo is None:
         return converted.replace(tzinfo=timezone.utc)
     return converted.astimezone(timezone.utc)
-
-
-def _session_type(value: object | None) -> str:
-    name = _nullable_text(value)
-    if name is None:
-        raise NormalizationError("session type is required to build session_id")
-    token = _SESSION_TYPE_TOKEN.sub("-", name.strip().lower()).strip("-")
-    if not token:
-        raise NormalizationError("session type is required to build session_id")
-    return token
 
 
 def _source_key(value: object) -> str:

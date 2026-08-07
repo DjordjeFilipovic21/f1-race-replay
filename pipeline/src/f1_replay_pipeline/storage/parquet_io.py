@@ -12,8 +12,16 @@ from types import MappingProxyType
 import polars as pl
 from polars.testing import assert_frame_equal
 
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
-from f1_replay_pipeline.domain.validators import CanonicalValidationError, validate_canonical_table
+from f1_replay_pipeline.domain.canonical_contract import ContractVersion, get_canonical_contract
+from f1_replay_pipeline.domain.canonical_schema import (
+    CANONICAL_TABLE_SCHEMAS_V1,
+    get_canonical_schema,
+)
+from f1_replay_pipeline.domain.validators import (
+    CanonicalValidationError,
+    validate_canonical_frames as validate_canonical_frame_set,
+    validate_canonical_table,
+)
 
 
 CANONICAL_PARQUET_TABLE_NAMES = (
@@ -33,7 +41,7 @@ PARQUET_WRITE_SETTINGS: Mapping[str, object] = MappingProxyType(
 
 
 class ParquetCompatibilityError(RuntimeError):
-    """Raised when the installed Polars cannot honor the v1 writer contract."""
+    """Raised when Polars cannot honor the canonical writer contract."""
 
 
 class ParquetRoundTripError(ValueError):
@@ -57,7 +65,9 @@ def ensure_native_parquet_compatibility() -> None:
         )
 
 
-def validate_canonical_frames(frames: Mapping[str, pl.DataFrame]) -> None:
+def validate_canonical_frames(
+    frames: Mapping[str, pl.DataFrame], version: ContractVersion | str = "v2",
+) -> None:
     """Require exactly the ten validated canonical frames at the write boundary."""
     if not isinstance(frames, Mapping):
         raise CanonicalValidationError("canonical Parquet frames must be a mapping")
@@ -73,28 +83,37 @@ def validate_canonical_frames(frames: Mapping[str, pl.DataFrame]) -> None:
         frame = frames[table_name]
         if not isinstance(frame, pl.DataFrame):
             raise CanonicalValidationError(f"{table_name} must be a Polars DataFrame")
-        validate_canonical_table(table_name, frame)
+        _validate_canonical_table(table_name, frame, version)
+    if get_canonical_contract(version).version == "v2":
+        validate_canonical_frame_set(frames, version=version)
 
 
 def write_canonical_parquet_tables(
     frames: Mapping[str, pl.DataFrame], target_directory: Path,
+    version: ContractVersion | str = "v2",
 ) -> dict[str, Path]:
     """Write exactly one native Parquet file for every canonical table."""
-    validate_canonical_frames(frames)
+    validate_canonical_frames(frames, version)
     ensure_native_parquet_compatibility()
     target_directory.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
     for table_name in CANONICAL_PARQUET_TABLE_NAMES:
         destination = target_directory / f"{table_name}.parquet"
-        write_canonical_parquet(table_name, frames[table_name], destination)
+        write_canonical_parquet(table_name, frames[table_name], destination, version=version)
         paths[table_name] = destination
     return paths
 
 
-def write_canonical_parquet(table_name: str, frame: pl.DataFrame, destination: Path) -> str:
+def write_canonical_parquet(
+    table_name: str,
+    frame: pl.DataFrame,
+    destination: Path,
+    *,
+    version: ContractVersion | str = "v2",
+) -> str:
     """Validate, natively serialize, and return the final-file SHA-256 digest."""
     _validate_destination(table_name, destination)
-    validate_canonical_table(table_name, frame)
+    _validate_canonical_table(table_name, frame, version)
     ensure_native_parquet_compatibility()
     try:
         frame.write_parquet(destination, **PARQUET_WRITE_SETTINGS)
@@ -103,12 +122,17 @@ def write_canonical_parquet(table_name: str, frame: pl.DataFrame, destination: P
             "installed Polars rejected canonical native Parquet settings; install a "
             "compatible Polars >=1.40,<2 release"
         ) from error
-    verify_canonical_parquet_round_trip(table_name, frame, destination)
+    verify_canonical_parquet_round_trip(table_name, frame, destination, version=version)
     return parquet_byte_sha256(destination)
 
 
 def verify_canonical_parquet_round_trip(
-    table_name: str, expected: pl.DataFrame, source: Path | bytes, *, use_statistics: bool = True,
+    table_name: str,
+    expected: pl.DataFrame,
+    source: Path | bytes,
+    *,
+    version: ContractVersion | str = "v2",
+    use_statistics: bool = True,
 ) -> None:
     """Verify schema, order, nulls, rows, and values without normalization.
 
@@ -124,8 +148,8 @@ def verify_canonical_parquet_round_trip(
         data_source = BytesIO(source)
     else:
         raise ValueError("canonical Parquet source must be a pathlib.Path or bytes")
-    validate_canonical_table(table_name, expected)
-    expected_schema = CANONICAL_TABLE_SCHEMAS[table_name]
+    _validate_canonical_table(table_name, expected, version)
+    expected_schema = get_canonical_schema(table_name, version)
     actual_schema = pl.read_parquet_schema(schema_source)
     if list(actual_schema.items()) != list(expected_schema.items()):
         raise ParquetRoundTripError(f"{table_name} Parquet schema or column order differs from contract")
@@ -157,12 +181,28 @@ def parquet_byte_sha256(path: Path) -> str:
 
 
 def _validate_destination(table_name: str, destination: Path) -> None:
-    if table_name not in CANONICAL_TABLE_SCHEMAS:
+    if table_name not in CANONICAL_TABLE_SCHEMAS_V1:
         raise CanonicalValidationError(f"unknown canonical table: {table_name}")
     if not isinstance(destination, Path) or destination.suffix != ".parquet":
         raise ValueError("canonical Parquet destination must be a .parquet pathlib.Path")
     if destination.exists() and destination.is_dir():
         raise ValueError("canonical Parquet destination must be a file, not a directory")
+
+
+def _validate_canonical_table(
+    table_name: str, frame: pl.DataFrame, version: ContractVersion | str,
+) -> None:
+    """Apply the shared semantic validator with the selected physical schema."""
+    contract = get_canonical_contract(version)
+    expected = get_canonical_schema(table_name, contract.version)
+    if frame.schema != expected:
+        raise CanonicalValidationError(
+            f"{table_name} schema mismatch: frame does not match canonical {contract.version} schema"
+        )
+    if contract.version == "v2":
+        validate_canonical_table(table_name, frame, version="v2")
+        return
+    validate_canonical_table(table_name, frame, version=contract.version)
 
 
 __all__ = [

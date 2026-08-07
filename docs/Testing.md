@@ -52,6 +52,34 @@ Run the legacy desktop tests separately from the repository root with:
 
 Alternatively, change into `legacy/` and run `../.venv/bin/python -m pytest`.
 
+Run the focused browser-sidecar web checks from the repository root with:
+
+    cd web
+    npm run typecheck
+    npm run test -- --run tests/data/replay/sidecar-loading.test.ts tests/features/replay/selectors/pit-loss-selectors.test.ts tests/features/replay/panels/pit-loss-position-panel.test.tsx
+
+Run the complete web validation with:
+
+    cd web
+    npm run ci
+
+Run the curated pit-loss baseline catalog and resolver tests with:
+
+    .venv/bin/python -m pytest pipeline/tests/delivery/browser/test_browser_pit_loss_baseline_catalog.py pipeline/tests/delivery/browser/test_browser_pit_loss_baseline_resolver.py
+
+Run the curated sidecar publication, Australia fixture, and legacy-compatibility
+tests with:
+
+    .venv/bin/python -m pytest pipeline/tests/delivery/browser/test_browser_pit_loss_baseline_publication.py pipeline/tests/delivery/browser/test_browser_pit_loss_australia_fixture.py pipeline/tests/delivery/browser/test_browser_pit_loss_legacy_compatibility.py
+
+The complete lightweight CI-equivalent command
+`.venv/bin/python -m pytest tests/contracts pipeline/tests` covers all of the
+above. The curated catalog tests run fully offline: the resolver has no
+network-capable dependencies and resolution performs no network I/O, so no
+test downloads a circuit statistic. None of the validation commands modify
+`templates/` or publish to R2; the untracked `templates/` directory and R2
+publication behavior are unchanged.
+
 These contract tests validate the committed deterministic fixture in
 `contracts/replay-data/v1/fixtures/deterministic-race/` without FastF1 session
 loading or network access. The same fixture is intended for future TypeScript
@@ -74,6 +102,20 @@ The current suite includes:
 
 - contract tests for the deterministic browser replay fixture
 - canonical pipeline unit and integration tests
+- curated pit-loss baseline catalog and resolver tests covering the 26-circuit
+  2024-2026 physical-circuit union, stable per-circuit identity reuse
+  (Bahrain/Sakhir vs Sepang, Barcelona vs Madrid), per-status
+  direct/derived/proxy metadata, provenance/evidence/confidence, non-universal
+  discounts, the `SC <= VSC <= Green` invariant, and fully offline generation
+- curated sidecar publication, Australia fixture, and legacy-compatibility
+  tests, including fail-closed unknown-track behavior with no 22 s fallback
+- status-mapping and fail-closed tests for unsupported or mixed status
+  intervals, curated sidecars that must resolve all three status values, and
+  catalog-only `sourceStatus` that is never serialized
+- pit-loss estimate sidecar contract/publication tests, including absent and
+  unavailable Safety Car/VSC status semantics
+- web loader, status-aware causal selector, and panel status-label tests
+  (including no `Baseline` label for curated values)
 
 Legacy-only checks cover time formatting, tyre compound mapping, season
 detection, settings persistence, and desktop module import smoke tests.

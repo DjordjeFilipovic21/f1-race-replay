@@ -67,7 +67,7 @@ test('bounds playing table updates while publishing pause and explicit refresh i
 test('threads penaltySidecar through to the leaderboard and renders the penalty indicator causally', () => {
   vi.useFakeTimers()
   const penaltySidecar: PenaltySidecar = {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'test',
     penaltyIssuances: [
       { driverId: 'NOR', sessionTimeMs: 50, penaltyType: 'time', reason: 'Collision', rawMessage: '10s penalty' },

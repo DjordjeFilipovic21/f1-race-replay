@@ -204,10 +204,20 @@ def _batch_effective(frame, histories):
 
 def _batch_order(effective, previous_order):
     previous_index = {driver_id: index for index, driver_id in enumerate(previous_order)}
-    return tuple(item.driver_id for item, progress in sorted(
+    ordered = [item.driver_id for item, progress in sorted(
         ((item, progress) for item, progress in effective if progress is not None),
         key=lambda value: _order_key(value[0], value[1], previous_index),
-    ))
+    )]
+    held = sorted(
+        (item.driver_id for item, progress in effective if progress is not None and item.mode is ProgressMode.PRE_PIT),
+        key=lambda driver_id: previous_index.get(driver_id, len(previous_index)),
+    )
+    for driver_id in held:
+        if driver_id not in previous_index:
+            continue
+        ordered.remove(driver_id)
+        ordered.insert(min(previous_index[driver_id], len(ordered)), driver_id)
+    return tuple(ordered)
 
 
 def _batch_result(time_ms, effective, order, histories):
@@ -301,9 +311,19 @@ def _order_key(item, progress, previous_index):
 def _leaderboard_order(effective, previous_order):
     previous_index = {driver_id: index for index, driver_id in enumerate(previous_order)}
     known = [(item, point) for item, point in effective if point is not None]
-    return tuple(item.driver_id for item, point in sorted(
+    ordered = [item.driver_id for item, point in sorted(
         known, key=lambda value: _order_key(value[0], value[1][1], previous_index),
-    ))
+    )]
+    held = sorted(
+        (item.driver_id for item, point in known if item.mode is ProgressMode.PRE_PIT),
+        key=lambda driver_id: previous_index.get(driver_id, len(previous_index)),
+    )
+    for driver_id in held:
+        if driver_id not in previous_index:
+            continue
+        ordered.remove(driver_id)
+        ordered.insert(min(previous_index[driver_id], len(ordered)), driver_id)
+    return tuple(ordered)
 
 
 def _rankings(effective, order, histories, time_ms):

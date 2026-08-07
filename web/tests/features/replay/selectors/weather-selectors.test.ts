@@ -10,7 +10,7 @@ import {
 /** Sparse native-cadence rows (~1/min) with complete measurements at each timestamp. */
 function sparseSidecar(overrides: Partial<WeatherSidecar> = {}): WeatherSidecar {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'weather-fixture',
     timeMs: [10_000, 60_000, 120_000],
     airTempC: [20.0, 21.0, 22.0],
@@ -27,7 +27,7 @@ function sparseSidecar(overrides: Partial<WeatherSidecar> = {}): WeatherSidecar 
 /** Single observation at t=0 used to probe age/status boundaries without extra rows. */
 function singleObservation(overrides: Partial<WeatherSidecar> = {}): WeatherSidecar {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'weather-fixture',
     timeMs: [0],
     airTempC: [21.0],

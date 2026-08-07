@@ -19,8 +19,8 @@ function createReadySession(overrides: Partial<CatalogV2Session> = {}): CatalogV
   return {
     session_code: 'R',
     session_name: 'Race',
-    generation_id: 'gen-1',
-    delivery_version: 'v1',
+    generation_id: '2026-round-1-session-race-mode-race',
+    delivery_version: '2026-round-01-session-race-mode-race',
     outcome: 'classified',
     validated: true,
     canonical_pointer: 'canonical/race-1/sessions/r/manifest.json',
@@ -204,5 +204,54 @@ describe('SessionSelector', () => {
     )
 
     expect(screen.getByText('Ready to replay')).toBeTruthy()
+  })
+
+  test('renders sprint, qualifying, practice and race sessions with truthful ready labels', () => {
+    const sessions = [
+      createReadySession({ session_code: 'FP1', session_name: 'Practice 1' }),
+      createReadySession({ session_code: 'FP2', session_name: 'Practice 2' }),
+      createReadySession({ session_code: 'Q', session_name: 'Qualifying' }),
+      createReadySession({ session_code: 'S', session_name: 'Sprint' }),
+      createReadySession({ session_code: 'R', session_name: 'Race' }),
+    ]
+    render(
+      <SessionSelector
+        sessions={sessions}
+        selectedSessionCode={null}
+        onSelectSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByRole('radio')).toHaveLength(5)
+    expect(screen.getByRole('radio', { name: /Practice 1/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Practice 2/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Qualifying/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Sprint/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Race/ })).toBeTruthy()
+    expect(screen.getAllByText('Ready to replay')).toHaveLength(5)
+  })
+
+  test('explains validated sessions with incomplete replay data', () => {
+    const sessions = [{
+      ...createReadySession(),
+      session_code: 'FP1',
+      session_name: 'Practice 1',
+      validated: true,
+      canonical_pointer: null,
+      browser_pointer: null,
+    }]
+    render(
+      <SessionSelector
+        sessions={sessions}
+        selectedSessionCode={null}
+        onSelectSession={vi.fn()}
+      />
+    )
+
+    const sessionButton = screen.getByRole('radio', { name: /Practice 1.*not yet available/ })
+    expect((sessionButton as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Incomplete replay data')).toBeTruthy()
+    expect(screen.queryByText('Awaiting validation')).toBeNull()
+    expect(screen.getByText('Unavailable')).toBeTruthy()
   })
 })

@@ -3,12 +3,13 @@
  */
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import type { LapSectorSidecar, QualifyingSummary, QualifyingTimeline, SessionMode } from '../../../../src/data/replay/types'
 import { createPaddedViewBox, createTrackMapGeometry, LiveTrackMap, toMapPoint } from '../../../../src/features/replay/panels/LiveTrackMap'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
 import type { ReplaySnapshot } from '../../../../src/engine/replay/types'
 
 const trackAssets = {
-  contractVersion: 'v1', fixtureId: 'test-grand-prix', trackId: 'test-circuit', trackName: 'Test Circuit',
+  contractVersion: 'v2', fixtureId: 'test-grand-prix', trackId: 'test-circuit', trackName: 'Test Circuit',
   coordinateSpace: { units: 'meters', origin: 'test origin' }, circuitLengthMeters: 1000, rotationDegrees: 90,
   startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
   centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
@@ -114,6 +115,25 @@ test('renders labelled track geometry and only finite sampled driver markers', (
   expect(Number(markerLabel?.getAttribute('font-size'))).toBeCloseTo(11.6 * 0.021)
 })
 
+test('announces a neutral notice when every active driver lacks reliable position telemetry', () => {
+  const replay = snapshot()
+  const { controller, setReplay } = createController({
+    ...replay,
+    drivers: {
+      VER: { ...replay.drivers.VER, x: null, y: null },
+      NOR: { ...replay.drivers.NOR, x: null, y: null },
+    },
+  })
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} />)
+
+  const notice = screen.getByText('Reliable source telemetry is unavailable for this period.')
+  expect(notice.hidden).toBe(false)
+
+  setReplay(replay)
+
+  expect(notice.hidden).toBe(true)
+})
+
 test('keeps manifest marker nodes mounted while notifications update transforms and cleans up', () => {
   const replay = snapshot()
   const { controller, getUnsubscribeCalls, setReplay } = createController(replay)
@@ -203,4 +223,119 @@ test('renders the selected marker last with glow styling on its driver dot', () 
   expect(selected.getAttribute('color')).toBe('#3671c6')
   expect(selected.querySelectorAll('circle')).toHaveLength(1)
   expect(selected.querySelector('.live-track-map__driver-dot')).toBeTruthy()
+})
+
+test('exposes causal qualifying outlap and flying states without replacing selected marker semantics', () => {
+  const qualifyingSummary: QualifyingSummary = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    drivers: {
+      VER: { qualifyingPosition: [1], q1TimeMs: [90], q2TimeMs: [80], q3TimeMs: [70], bestLapNumber: [1], bestLapTimeMs: [70] },
+    },
+  }
+  const lapSectorSidecar: LapSectorSidecar = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    phaseBoundaries: [],
+    drivers: {
+      VER: {
+        lapNumber: [1, 2], lapStartMs: [0, 100], lapEndMs: [90, 190], lapDurationMs: [90, 90],
+        sector1DurationMs: [30, 30], sector2DurationMs: [30, 30], sector3DurationMs: [30, 30],
+        sector1SessionTimeMs: [40, null], sector2SessionTimeMs: [null, null], sector3SessionTimeMs: [null, null],
+        qualifyingPhase: [null, null],
+      },
+    },
+  }
+  const replay = { ...snapshot(), sessionTimeMs: 50, drivers: { ...snapshot().drivers, VER: { ...snapshot().drivers.VER, lap: 1 } } }
+  const { controller, setReplay } = createController(replay)
+  render(
+    <LiveTrackMap
+      trackAssets={trackAssets}
+      controller={controller}
+      drivers={drivers}
+      selectedDriverId="VER"
+      sessionMode="qualifying"
+      qualifyingSummary={qualifyingSummary}
+      lapSectorSidecar={lapSectorSidecar}
+    />,
+  )
+
+  const marker = screen.getByRole('img', { name: /Max Verstappen \(VER\)/ })
+  expect(marker.getAttribute('data-qualifying-lap-state')).toBe('flying')
+  expect(marker.getAttribute('aria-label')).toContain('qualifying lap state: Flying')
+  expect(marker.getAttribute('class')).toContain('live-track-map__marker--selected')
+
+  setReplay({
+    ...replay,
+    sessionTimeMs: 120,
+    drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, lap: 2, x: 6, y: 3 } },
+  })
+
+  expect(marker.getAttribute('data-qualifying-lap-state')).toBe('outlap')
+  expect(marker.getAttribute('aria-label')).toContain('qualifying lap state: Outlap')
+  expect(marker.getAttribute('class')).toContain('live-track-map__marker--selected')
+  expect(marker.querySelector('.live-track-map__driver-dot')).toBeTruthy()
+})
+
+test.each(['qualifying', 'sprint-qualifying', 'sprint-shootout'] as const)('renders the accessible lap-state legend for %s maps', (sessionMode: SessionMode) => {
+  const { controller } = createController(snapshot())
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} sessionMode={sessionMode} />)
+
+  const legend = screen.getByRole('group', { name: 'Qualifying lap state legend' })
+  expect(legend).toBeTruthy()
+  expect(legend.textContent).toContain('Outlap')
+  expect(legend.textContent).toContain('Flying')
+  expect(legend.querySelector('.live-track-map__legend-swatch--outlap')).toBeTruthy()
+  expect(legend.querySelector('.live-track-map__legend-swatch--flying')).toBeTruthy()
+})
+
+test.each(['race', 'sprint'] as const)('does not add qualifying legend or marker state to %s maps', (sessionMode: SessionMode) => {
+  const { controller } = createController(snapshot())
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} sessionMode={sessionMode} />)
+
+  expect(screen.queryByRole('group', { name: 'Qualifying lap state legend' })).toBeNull()
+  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('data-qualifying-lap-state')).toBeNull()
+})
+
+test('keeps the legend available while unavailable qualifying evidence leaves marker state unknown', () => {
+  const { controller } = createController(snapshot())
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} sessionMode="qualifying" />)
+
+  expect(screen.getByRole('group', { name: 'Qualifying lap state legend' })).toBeTruthy()
+  const marker = screen.getByRole('img', { name: 'Max Verstappen (VER)' })
+  expect(marker.getAttribute('data-qualifying-lap-state')).toBe('unknown')
+  expect(marker.getAttribute('aria-label')).toBe('Max Verstappen (VER)')
+})
+
+test('hides only the causal qualifying incident marker and restores it when seeking before the incident', () => {
+  const qualifyingTimeline: QualifyingTimeline = {
+    contractVersion: 'v2',
+    fixtureId: 'test-grand-prix',
+    startMs: 0,
+    endMs: 300,
+    intervals: [],
+    incidentMarkers: [{ driverId: 'VER', timeMs: 100, source: 'race-control-car-event', rawMessage: 'CAR 1 CRASH' }],
+  }
+  const replay = { ...snapshot(), sessionTimeMs: 99 }
+  const { controller, setReplay } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} sessionMode="qualifying" qualifyingTimeline={qualifyingTimeline} />)
+
+  const marker = screen.getByRole('img', { name: 'Max Verstappen (VER)' })
+  expect(marker.getAttribute('visibility')).toBe('visible')
+
+  setReplay({ ...replay, sessionTimeMs: 100 })
+  expect(marker.getAttribute('visibility')).toBe('hidden')
+  expect(marker.getAttribute('aria-label')).toBe('Max Verstappen (VER)')
+
+  setReplay({ ...replay, sessionTimeMs: 99, drivers: { ...replay.drivers, VER: { ...replay.drivers.VER, status: 'OffTrack' } } })
+  expect(marker.getAttribute('visibility')).toBe('visible')
+})
+
+test('fails closed for absent qualifying incident evidence and does not hide on a missing sample alone', () => {
+  const replay = { ...snapshot(), sessionTimeMs: 150, drivers: { ...snapshot().drivers, VER: { ...snapshot().drivers.VER, status: 'OffTrack' } } }
+  const { controller } = createController(replay)
+  render(<LiveTrackMap trackAssets={trackAssets} controller={controller} drivers={drivers} sessionMode="qualifying" />)
+
+  expect(screen.getByRole('img', { name: 'Max Verstappen (VER)' }).getAttribute('visibility')).toBe('visible')
+  expect(screen.getByRole('img', { name: 'Lando Norris (NOR)', hidden: true }).getAttribute('visibility')).toBe('hidden')
 })

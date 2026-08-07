@@ -85,6 +85,7 @@ def _publish_delivery(
             delivery_version=request.delivery_version,
             delivery=delivery,
             schema_root=request.schema_root,
+            contract_version=request.contract_version,
             progress=emit,
         )
     emit("browser_publishing")
@@ -93,6 +94,7 @@ def _publish_delivery(
         delivery_version=request.delivery_version,
         delivery=delivery,
         schema_root=request.schema_root,
+        contract_version=request.contract_version,
     )
 
 

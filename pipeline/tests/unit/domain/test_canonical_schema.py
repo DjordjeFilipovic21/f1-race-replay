@@ -5,6 +5,12 @@ from f1_replay_pipeline.domain.canonical_schema import (
     CANONICAL_TABLE_NAMES,
     CANONICAL_TABLE_SCHEMAS,
     get_canonical_schema,
+    get_canonical_schema_v2,
+)
+from f1_replay_pipeline.domain.canonical_contract import (
+    QUALIFYING_PHASE_COLUMN,
+    get_canonical_contract,
+    schema_dtype_token,
 )
 
 
@@ -25,7 +31,7 @@ def test_canonical_table_names_are_exact_and_ordered():
 
 
 def test_car_telemetry_schema_has_exact_column_order_and_dtypes():
-    assert list(get_canonical_schema("car_telemetry").items()) == [
+    assert list(get_canonical_schema("car_telemetry", "v1").items()) == [
         ("session_id", pl.String),
         ("driver_id", pl.String),
         ("source_driver_key", pl.String),
@@ -41,7 +47,7 @@ def test_car_telemetry_schema_has_exact_column_order_and_dtypes():
 
 
 def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
-    assert list(get_canonical_schema("position_telemetry").items()) == [
+    assert list(get_canonical_schema("position_telemetry", "v1").items()) == [
         ("session_id", pl.String),
         ("driver_id", pl.String),
         ("source_driver_key", pl.String),
@@ -102,19 +108,19 @@ def test_position_telemetry_schema_has_exact_column_order_and_dtypes():
             ("message", pl.String), ("driver_id", pl.String), ("lap_number", pl.Int16),
         ]),
         ("results", [
-                ("session_id", pl.String), ("driver_id", pl.String), ("classified_position", pl.String),
+            ("session_id", pl.String), ("driver_id", pl.String), ("classified_position", pl.String),
             ("grid_position", pl.Int16), ("status", pl.String), ("points", pl.Float64),
             ("laps_completed", pl.Int16), ("result_time_ms", pl.Int64),
         ]),
     ],
 )
 def test_remaining_schemas_have_exact_column_order_and_dtypes(table_name, expected_schema):
-    assert list(get_canonical_schema(table_name).items()) == expected_schema
+    assert list(get_canonical_schema(table_name, "v1").items()) == expected_schema
 
 
 @pytest.mark.parametrize("table_name", CANONICAL_TABLE_NAMES)
 def test_canonical_schemas_construct_typed_empty_frames(table_name):
-    expected_schema = get_canonical_schema(table_name)
+    expected_schema = get_canonical_schema(table_name, "v1")
 
     frame = pl.DataFrame(schema=expected_schema)
 
@@ -123,7 +129,75 @@ def test_canonical_schemas_construct_typed_empty_frames(table_name):
 
 
 def test_schema_lookup_is_immutable():
-    schema = get_canonical_schema("car_telemetry")
+    schema = get_canonical_schema("car_telemetry", "v2")
 
     with pytest.raises(TypeError):
         schema["new_column"] = pl.String  # type: ignore[index]
+
+
+def test_v2_schema_adds_required_session_mode_without_mutating_v1():
+    assert list(get_canonical_schema("session_metadata", "v1").items()) == [
+        ("session_id", pl.String), ("year", pl.Int16), ("round_number", pl.Int16),
+        ("event_name", pl.String), ("session_name", pl.String), ("session_type", pl.String),
+        ("session_start_time_utc", pl.Datetime("ms", "UTC")),
+    ]
+    assert list(get_canonical_schema_v2("session_metadata").items()) == [
+        ("session_id", pl.String), ("year", pl.Int16), ("round_number", pl.Int16),
+        ("event_name", pl.String), ("session_name", pl.String), ("session_type", pl.String),
+        ("session_mode", pl.String), ("session_start_time_utc", pl.Datetime("ms", "UTC")),
+    ]
+
+
+def test_v2_results_keep_nullable_q_segment_int64_columns():
+    schema = get_canonical_schema_v2("results")
+
+    assert list(schema)[-3:] == ["q1_time_ms", "q2_time_ms", "q3_time_ms"]
+    assert all(schema[name] == pl.Int64 for name in list(schema)[-3:])
+    frame = pl.DataFrame([{
+        "session_id": "2026-01-qualifying", "driver_id": "VER", "classified_position": None,
+        "grid_position": None, "status": "", "points": None, "laps_completed": None,
+        "result_time_ms": None, "q1_time_ms": None, "q2_time_ms": 90000, "q3_time_ms": None,
+    }], schema=schema)
+    assert frame.schema == schema
+    assert frame.null_count().row(0)[-3:] == (1, 0, 1)
+
+
+def test_v2_laps_append_nullable_qualifying_phase_without_mutating_v1():
+    v1_schema = get_canonical_schema("laps", "v1")
+    v2_schema = get_canonical_schema_v2("laps")
+
+    assert QUALIFYING_PHASE_COLUMN not in v1_schema
+    assert list(v2_schema)[-1] == QUALIFYING_PHASE_COLUMN
+    assert v2_schema[QUALIFYING_PHASE_COLUMN] == pl.String
+    assert list(v2_schema)[:-1] == list(v1_schema)
+
+    frame = pl.DataFrame([
+        {**{column: None for column in v1_schema}, QUALIFYING_PHASE_COLUMN: None},
+        {**{column: None for column in v1_schema}, QUALIFYING_PHASE_COLUMN: "Q2"},
+    ], schema=v2_schema)
+
+    assert frame.schema == v2_schema
+    assert frame.get_column(QUALIFYING_PHASE_COLUMN).to_list() == [None, "Q2"]
+
+
+def test_v2_schema_and_contract_are_immutable():
+    with pytest.raises(TypeError):
+        get_canonical_schema_v2("laps")[QUALIFYING_PHASE_COLUMN] = pl.String  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        get_canonical_contract("v2").table_schema_tokens["laps"] = "changed"  # type: ignore[index]
+
+
+def test_v2_contract_tokens_are_distinct_and_require_explicit_selection():
+    # Arrange: select one shared physical dtype under both contract versions.
+    v1_token = schema_dtype_token("String", "v1")
+    v2_token = schema_dtype_token("String", "v2")
+
+    # Act: inspect the explicit canonical schemas and tokens.
+    v1_schema = get_canonical_schema("drivers", "v1")
+    v2_schema = get_canonical_schema("drivers", "v2")
+
+    # Assert: v2 has its own token namespace without mutating v1.
+    assert v1_token == "String"
+    assert v2_token == "canonical-parquet-v2:String"
+    assert v1_schema == v2_schema

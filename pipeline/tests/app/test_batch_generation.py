@@ -20,9 +20,12 @@ from f1_replay_pipeline.app.batch_generation import (
     ScheduledRace,
     _atomic_write_json,
     _browser_output_valid,
+    _generation_id,
     _retained_catalog_records,
     _run_race,
+    _session_code,
     _shallow_browser_output_valid,
+    deterministic_generation_id,
     publish_catalog,
     run_batch,
     verify_catalog,
@@ -48,6 +51,7 @@ from f1_replay_pipeline.storage.generation_publication import (
     GenerationPublicationResult,
     PublicationCommittedError,
     PublicationDurabilityUncertainError,
+    validate_generation_id,
 )
 from f1_replay_pipeline.app.orchestration import PipelineResult, PublicationError
 
@@ -86,9 +90,72 @@ def test_single_and_multiple_selected_races_use_isolated_deterministic_ids(tmp_p
     )
 
     assert [(race.race_id, race.generation_id) for race in result.races] == [
-        ("2024-round-01-one", "2024-round-01-r"), ("2024-round-02-two", "2024-round-02-r"),
+        (
+            "2024-round-01-one",
+            "2024-round-01-session-race-mode-race",
+        ),
+        (
+            "2024-round-02-two",
+            "2024-round-02-session-race-mode-race",
+        ),
     ]
     assert calls == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("alias", "expected_identity", "expected_code"),
+    [
+        ("FP1", "practice-1", "fp1"),
+        ("Practice 1", "practice-1", "fp1"),
+        ("FP2", "practice-2", "fp2"),
+        ("Practice 2", "practice-2", "fp2"),
+        ("FP3", "practice-3", "fp3"),
+        ("Practice 3", "practice-3", "fp3"),
+        ("Q", "qualifying", "q"),
+        ("Qualifying", "qualifying", "q"),
+        ("R", "race", "r"),
+        ("Race", "race", "r"),
+        ("S", "sprint", "s"),
+        ("Sprint", "sprint", "s"),
+        ("SQ", "sprint-qualifying", "sq"),
+        ("Sprint Qualifying", "sprint-qualifying", "sq"),
+        ("SS", "sprint-shootout", "ss"),
+        ("Sprint Shootout", "sprint-shootout", "ss"),
+    ],
+)
+def test_batch_aliases_share_safe_v2_identity_and_session_code(
+    tmp_path: Path, alias: str, expected_identity: str, expected_code: str,
+) -> None:
+    # Arrange
+    request = _request(tmp_path, session=alias)
+
+    # Act
+    generation_id = deterministic_generation_id(2026, 1, alias)
+    session_code = _session_code(request)
+
+    # Assert
+    assert generation_id == (
+        f"2026-round-01-session-{expected_identity}-mode-"
+        f"{expected_identity if expected_identity != 'practice-1' and expected_identity != 'practice-2' and expected_identity != 'practice-3' else 'practice'}"
+    )
+    assert validate_generation_id(generation_id) == generation_id
+    assert session_code == expected_code
+
+
+def test_forced_batch_generation_id_validates_the_v2_suffix(tmp_path: Path) -> None:
+    # Arrange
+    request = _request(tmp_path, session="Sprint Shootout", force=True)
+    canonical = tmp_path / "canonical" / "race"
+    browser = tmp_path / "browser" / "race"
+    base = deterministic_generation_id(2024, 1, request.session)
+    (canonical / "generations" / f"{base}-force-1").mkdir(parents=True)
+
+    # Act
+    generation_id = _generation_id(request, canonical, browser, 1)
+
+    # Assert
+    assert generation_id == f"{base}-force-2"
+    assert validate_generation_id(generation_id) == generation_id
 
 
 def test_all_and_zero_race_selection_complete_without_network(tmp_path: Path) -> None:
@@ -119,7 +186,10 @@ def test_fail_fast_and_continue_on_error_have_truthful_final_outcomes(tmp_path: 
 
 def test_resume_skips_only_validated_outputs_and_force_regenerates(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
-    canonical = SimpleNamespace(generation_path=tmp_path / "generation", manifest_sha256="a" * 64)
+    canonical = SimpleNamespace(
+        generation_path=tmp_path / "2024-round-01-session-race-mode-race",
+        manifest_sha256="a" * 64,
+    )
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: True)
     monkeypatch.setattr(
@@ -151,7 +221,11 @@ def test_generate_keeps_results_on_stdout_and_progress_on_stderr(tmp_path: Path,
     captured = capsys.readouterr()
 
     assert status == 0
-    assert captured.out == "race_id=2024-round-01-one outcome=generated generation_id=2024-round-01-r delivery_version=2024-round-01-r\n"
+    assert captured.out == (
+        "race_id=2024-round-01-one outcome=generated "
+        "generation_id=2024-round-01-session-race-mode-race "
+        "delivery_version=2024-round-01-session-race-mode-race\n"
+    )
     assert "canonical_generating" in captured.err
 
 
@@ -570,7 +644,8 @@ def test_browser_resume_validation_requires_current_canonical_source_identity(tm
 
 def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_path: Path, monkeypatch) -> None:
     calls, pipeline, browser = _services()
-    canonical = SimpleNamespace(generation_path=tmp_path / "existing", manifest_sha256="a" * 64)
+    generation_id = "2024-round-01-session-race-mode-race"
+    canonical = SimpleNamespace(generation_path=tmp_path / generation_id, manifest_sha256="a" * 64)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_canonical_state", lambda *_paths: canonical)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_paths: False)
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation.promote_session_canonical_pointer", lambda *_paths: None)
@@ -583,16 +658,20 @@ def test_resume_reuses_valid_canonical_generation_when_browser_needs_retry(tmp_p
     )
 
     assert calls == []
-    assert result.races[0].generation_id == "existing"
+    assert result.races[0].generation_id == generation_id
     assert result.races[0].session_code == "r"
 
 
 def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_successor(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    canonical = SimpleNamespace(generation_path=tmp_path / "canonical" / "existing", manifest_sha256="a" * 64)
+    generation_id = "2024-round-01-session-race-mode-race"
+    canonical = SimpleNamespace(
+        generation_path=tmp_path / "canonical" / generation_id,
+        manifest_sha256="a" * 64,
+    )
     browser_root = tmp_path / "browser" / "2024-round-01-one"
-    occupied = browser_root / "generations" / "existing"
+    occupied = browser_root / "generations" / generation_id
     occupied.mkdir(parents=True)
     (occupied / "partial.json").write_text("invalid", encoding="utf-8")
     browser_calls = []
@@ -613,16 +692,16 @@ def test_resume_preserves_an_invalid_occupied_delivery_and_uses_a_browser_succes
     )
 
     assert (browser_calls[0].canonical_parent, browser_calls[0].delivery_version) == (
-        tmp_path / "canonical" / "2024-round-01-one", "existing-browser-1",
+        tmp_path / "canonical" / "2024-round-01-one", f"{generation_id}-browser-1",
     )
     assert (occupied / "partial.json").read_text(encoding="utf-8") == "invalid"
-    assert result.races[0].delivery_version == "existing-browser-1"
+    assert result.races[0].delivery_version == f"{generation_id}-browser-1"
 
 
 def test_canonical_durability_warning_continues_browser_and_preserves_outcome(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    generation_id = "2024-round-01-r"
+    generation_id = "2024-round-01-session-race-mode-race"
     committed = GenerationPublicationResult(
         tmp_path / "canonical" / generation_id,
         tmp_path / "canonical" / generation_id / "manifest.json",
@@ -656,7 +735,7 @@ def test_canonical_durability_warning_continues_browser_and_preserves_outcome(
 
 
 def test_canonical_committed_error_continues_browser_as_generated(tmp_path: Path, monkeypatch) -> None:
-    generation_id = "2024-round-01-r"
+    generation_id = "2024-round-01-session-race-mode-race"
     committed = GenerationPublicationResult(
         tmp_path / "canonical" / generation_id,
         tmp_path / "canonical" / generation_id / "manifest.json",
@@ -717,7 +796,7 @@ def test_browser_committed_errors_in_wrapped_chains_preserve_generated_result(
 
     race = result.races[0]
     assert race.outcome == expected_outcome
-    assert race.generation_id == "2024-round-01-r"
+    assert race.generation_id == "2024-round-01-session-race-mode-race"
     assert race.delivery_version == "delivery-committed"
     assert race.detail is not None
 
@@ -896,7 +975,7 @@ def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monk
     monkeypatch.setattr("f1_replay_pipeline.app.batch_generation._session_outputs_valid", lambda *_args: True)
     publish_catalog(BatchResult(request, (
         BatchRaceResult(
-            race_id, 1, "generated", "2024-round-01-r-good", "delivery-good",
+            race_id, 1, "generated", "2024-round-01-session-race-mode-race", "delivery-good",
             session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
         ),
     )))
@@ -905,13 +984,13 @@ def test_failed_rerun_keeps_last_known_good_catalog_session(tmp_path: Path, monk
 
     publish_catalog(BatchResult(request, (
         BatchRaceResult(
-            race_id, 1, "failed", "2024-round-01-r-failed", detail="offline failure",
+            race_id, 1, "failed", "2024-round-01-session-race-mode-race-force-1", detail="offline failure",
             session_code="r", session_name="Race", event_name="Bahrain Grand Prix",
         ),
     )))
 
     session = json.loads((tmp_path / "catalog.json").read_bytes())["races"][0]["sessions"][0]
-    assert session["generation_id"] == "2024-round-01-r-good"
+    assert session["generation_id"] == "2024-round-01-session-race-mode-race"
     assert session["delivery_version"] == "delivery-good"
     assert session["outcome"] == "generated"
     assert session["validated"] is True

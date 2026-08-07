@@ -7,15 +7,15 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import cast
+from typing import Any, cast
 
 import polars as pl
 import pytest
 
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.domain.dataset_manifest import (
     DEFAULT_WRITER_SETTINGS,
-    DatasetManifest,
+    DatasetManifest, FORMAT_VERSION_V2, MANIFEST_VERSION_V2,
     TableManifestEntry,
     schema_tokens_for,
     serialize_manifest,
@@ -24,7 +24,8 @@ from f1_replay_pipeline.storage.generation_publication import (
     CANONICAL_TABLE_NAMES, FORMAT_VERSION, GenerationPublicationError,
     LocalFilesystem, LocalRecoveryLock, STAGING_PREFIX, recover_stale_staging,
     PublicationCleanupError, PublicationDurabilityUncertainError,
-    RecoveryLock, RecoveryOwnershipError, resolve_current_generation, write_generation,
+    RecoveryLock, RecoveryOwnershipError, deterministic_pointer_bytes,
+    resolve_current_generation, write_generation,
 )
 from f1_replay_pipeline.domain.logical_hashes import logical_table_sha256
 from f1_replay_pipeline.storage.parquet_io import write_canonical_parquet
@@ -34,10 +35,13 @@ def _materialize(generation_id: str):
     def materialize(writer):
         tables = []
         for table_name in CANONICAL_TABLE_NAMES:
-            schema = dict(CANONICAL_TABLE_SCHEMAS[table_name])
+            schema = dict(CANONICAL_TABLE_SCHEMAS_V2[table_name])
+            row = {column: "test-session" if column == "session_id" else None for column in schema}
+            if table_name == "session_metadata":
+                row["session_mode"] = "race"
             frame = (
                 pl.DataFrame(
-                    [{column: "test-session" if column == "session_id" else None for column in schema}],
+                    [row],
                     schema=schema,
                 )
                 if table_name == "session_metadata"
@@ -45,19 +49,21 @@ def _materialize(generation_id: str):
             )
             with tempfile.TemporaryDirectory() as directory:
                 temporary = Path(directory) / f"{table_name}.parquet"
-                write_canonical_parquet(table_name, frame, temporary)
+                write_canonical_parquet(table_name, frame, temporary, version="v2")
                 payload = temporary.read_bytes()
             path = f"tables/{table_name}.parquet"
             writer.write_bytes(path, payload)
             tables.append(TableManifestEntry(
                 name=table_name, path=path, row_count=frame.height,
-                schema=schema_tokens_for(table_name),
-                logical_sha256=logical_table_sha256(table_name, frame),
+                schema=schema_tokens_for(table_name, "v2"),
+                logical_sha256=logical_table_sha256(table_name, frame, version="v2"),
                 byte_sha256=hashlib.sha256(payload).hexdigest(),
             ))
         return serialize_manifest(DatasetManifest(
             generation_id=generation_id, tables=tuple(tables),
             writer_settings=DEFAULT_WRITER_SETTINGS,
+            format_version=FORMAT_VERSION_V2,
+            manifest_version=MANIFEST_VERSION_V2,
         ))
     return materialize
 
@@ -65,11 +71,18 @@ def _materialize(generation_id: str):
 def _validate_test_manifest(manifest: DatasetManifest, generation_path: Path) -> None:
     """Test seam standing in for a complete domain-specific manifest validator."""
     del generation_path
+    assert manifest.format_version == FORMAT_VERSION_V2
+    assert manifest.manifest_version == MANIFEST_VERSION_V2
     assert [entry.name for entry in cast(tuple[TableManifestEntry, ...], manifest.tables)] == list(CANONICAL_TABLE_NAMES)
 
 
+def _write_generation(**kwargs: Any):
+    kwargs.setdefault("format_version", FORMAT_VERSION_V2)
+    return write_generation(**kwargs)
+
+
 def _publish(parent: Path, generation_id: str):
-    return write_generation(target_parent=parent, generation_id=generation_id, materialize=_materialize(generation_id), validate_manifest=_validate_test_manifest)
+    return _write_generation(target_parent=parent, generation_id=generation_id, materialize=_materialize(generation_id), validate_manifest=_validate_test_manifest)
 
 
 def test_publish_uses_same_parent_staging_and_replaces_current_last(tmp_path: Path) -> None:
@@ -77,6 +90,14 @@ def test_publish_uses_same_parent_staging_and_replaces_current_last(tmp_path: Pa
 
     assert result.pointer_path.is_file()
     assert not list(tmp_path.glob(f"{STAGING_PREFIX}*"))
+
+
+def test_unqualified_pointer_serialization_uses_active_v2_identity() -> None:
+    # Arrange / Act
+    pointer = json.loads(deterministic_pointer_bytes("safe", "a" * 64))
+
+    # Assert
+    assert pointer["format_version"] == "canonical-parquet-v2"
 
 
 @pytest.mark.parametrize("failure", ["before_write:tables/session_metadata.parquet", "after_file_fsync:tables/session_metadata.parquet", "after_generation_rename", "before_pointer_replace"])
@@ -89,7 +110,7 @@ def test_injected_failures_never_make_an_incomplete_generation_current(tmp_path:
             raise OSError(f"injected {event}")
 
     with pytest.raises(OSError, match="injected"):
-        write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), checkpoint=inject, validate_manifest=_validate_test_manifest)
+        _write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), checkpoint=inject, validate_manifest=_validate_test_manifest)
 
     assert previous.pointer_path.read_bytes() == previous_pointer
 
@@ -104,7 +125,7 @@ def test_directory_fsync_failure_preserves_the_prior_pointer(tmp_path: Path) -> 
     previous_pointer = previous.pointer_path.read_bytes()
 
     with pytest.raises(OSError, match="directory fsync"):
-        write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), filesystem=DirectoryFsyncFailure(), validate_manifest=_validate_test_manifest)
+        _write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), filesystem=DirectoryFsyncFailure(), validate_manifest=_validate_test_manifest)
 
     assert previous.pointer_path.read_bytes() == previous_pointer
 
@@ -115,7 +136,7 @@ def test_cleanup_failure_does_not_hide_the_publication_failure(tmp_path: Path) -
             raise OSError(event)
 
     with pytest.raises(OSError, match="before_write") as raised:
-        write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), checkpoint=inject, validate_manifest=_validate_test_manifest)
+        _write_generation(target_parent=tmp_path, generation_id="failed", materialize=_materialize("failed"), checkpoint=inject, validate_manifest=_validate_test_manifest)
 
     assert len(raised.value.cleanup_errors) == 1
 
@@ -171,7 +192,7 @@ def test_filesystem_operation_failures_before_commit_preserve_the_prior_pointer(
     pointer_before = previous.pointer_path.read_bytes()
 
     with pytest.raises(OSError, match=f"injected {operation}"):
-        write_generation(
+        _write_generation(
             target_parent=tmp_path,
             generation_id="failed",
             materialize=_materialize("failed"),
@@ -195,7 +216,7 @@ def test_cleanup_only_failure_is_observable(tmp_path: Path) -> None:
             raise OSError("injected pre-commit failure")
 
     with pytest.raises(OSError, match="pre-commit") as raised:
-        write_generation(
+        _write_generation(
             target_parent=tmp_path,
             generation_id="failed",
             materialize=_materialize("failed"),
@@ -225,7 +246,7 @@ def test_post_commit_directory_fsync_failure_reports_committed_durability_uncert
     _publish(tmp_path, "previous")
 
     with pytest.raises(PublicationDurabilityUncertainError, match="durability is uncertain") as raised:
-        write_generation(
+        _write_generation(
             target_parent=tmp_path,
             generation_id="next",
             materialize=_materialize("next"),
@@ -251,7 +272,7 @@ def test_ambiguous_pointer_replace_reports_the_observed_commit_as_uncertain(
     monkeypatch.setattr(os, "replace", replace_then_fail)
 
     with pytest.raises(PublicationDurabilityUncertainError) as raised:
-        write_generation(
+        _write_generation(
             target_parent=tmp_path,
             generation_id="next",
             materialize=_materialize("next"),
@@ -268,7 +289,7 @@ def test_successful_commit_reports_cleanup_failure(tmp_path: Path) -> None:
             raise OSError("injected successful-publication cleanup")
 
     with pytest.raises(PublicationCleanupError, match="cleanup failures") as raised:
-        write_generation(
+        _write_generation(
             target_parent=tmp_path,
             generation_id="next",
             materialize=_materialize("next"),
@@ -497,7 +518,7 @@ class UnsupportedDirectoryFsync(LocalFilesystem):
 
 
 def test_unsupported_directory_fsync_is_explicitly_degraded(tmp_path: Path) -> None:
-    result = write_generation(target_parent=tmp_path, generation_id="one", materialize=_materialize("one"), filesystem=UnsupportedDirectoryFsync(), validate_manifest=_validate_test_manifest)
+    result = _write_generation(target_parent=tmp_path, generation_id="one", materialize=_materialize("one"), filesystem=UnsupportedDirectoryFsync(), validate_manifest=_validate_test_manifest)
 
     assert result.pointer_path.is_file()
     assert result.directory_fsyncs
@@ -596,7 +617,7 @@ def test_pointer_temporary_retries_exclusive_creation_collision_and_preserves_cu
     names = iter((f"{STAGING_PREFIX}pointer-collision", f"{STAGING_PREFIX}pointer-retry"))
     (tmp_path / f"{STAGING_PREFIX}pointer-collision").write_bytes(b"collision")
 
-    result = write_generation(
+    result = _write_generation(
         target_parent=tmp_path,
         generation_id="next",
         materialize=_materialize("next"),
@@ -623,7 +644,7 @@ def test_staging_file_writes_remain_in_the_retained_directory_after_parent_swap(
             root.symlink_to(external, target_is_directory=True)
 
     with pytest.raises(GenerationPublicationError):
-        write_generation(
+        _write_generation(
             target_parent=root,
             generation_id="swapped",
             materialize=_materialize("swapped"),
@@ -659,7 +680,7 @@ def test_publication_cleanup_and_ambiguous_commit_reconciliation_stay_on_retaine
     monkeypatch.setattr(os, "replace", replace_then_swap)
 
     with pytest.raises(PublicationDurabilityUncertainError) as raised:
-        write_generation(
+        _write_generation(
             target_parent=root,
             generation_id="next",
             materialize=_materialize("next"),
@@ -697,7 +718,7 @@ def test_publication_cleanup_does_not_delete_matching_external_staging_or_pointe
             (external / pointer_name).write_bytes(b"pointer unchanged")
 
     with pytest.raises(OSError, match="pre-commit"):
-        write_generation(
+        _write_generation(
             target_parent=root,
             generation_id="next",
             materialize=_materialize("next"),

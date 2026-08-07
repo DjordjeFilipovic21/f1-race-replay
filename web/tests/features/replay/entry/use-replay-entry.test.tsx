@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { useReplayEntry } from '../../../../src/features/replay/entry/useReplayEntry'
+import { selectReplayStartMs, useReplayEntry } from '../../../../src/features/replay/entry/useReplayEntry'
 import { loadReplayIndex } from '../../../../src/data/replay/loader'
 import { createFetchSource } from '../../../../src/data/replay/source'
 import { createReplayController, type ReplayController, type ReplayControllerSnapshot } from '../../../../src/engine/replay'
@@ -16,7 +16,7 @@ vi.mock('../../../../src/engine/replay', () => ({ createReplayController: vi.fn(
 
 const source: ReplaySource = { read: vi.fn(async () => new Uint8Array()) }
 const trackAssets: TrackAssets = {
-  contractVersion: 'v1', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
+  contractVersion: 'v2', fixtureId: 'test-race', trackId: 'test-track', trackName: 'Test Track',
   coordinateSpace: { units: 'meters', origin: 'test origin' }, circuitLengthMeters: 1000, rotationDegrees: 0,
   startFinish: { center: { x: 0, y: 5 }, inner: { x: 0, y: 0 }, outer: { x: 0, y: 10 } },
   centerLine: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
@@ -40,6 +40,7 @@ function ReplayEntryProbe({ browserBaseUrl, browserPointerPath }: { readonly bro
       <output data-testid="state">{replay === null ? (error === null ? 'loading' : 'error') : 'ready'}</output>
       <output data-testid="season-metadata">{replay?.seasonMetadata?.year ?? 'absent'}</output>
       <output data-testid="telemetry-capabilities">{replay?.telemetryCapabilities?.drs ?? 'absent'}</output>
+      <output data-testid="qualifying-timeline">{replay?.qualifyingTimeline?.intervals.length ?? 'absent'}</output>
       <output data-testid="sidecar">{replay?.weatherSidecar?.fixtureId ?? 'none'}</output>
       <button type="button" onClick={retry}>Retry</button>
     </>
@@ -73,6 +74,7 @@ test('loads a nested browser pointer without creating a controller from stale St
   expect(screen.getByTestId('state').textContent).toBe('ready')
   expect(screen.getByTestId('season-metadata').textContent).toBe('absent')
   expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('absent')
+  expect(screen.getByTestId('qualifying-timeline').textContent).toBe('absent')
   expect(screen.getByTestId('sidecar').textContent).toBe('none')
 
   unmount()
@@ -95,6 +97,53 @@ test('retains optional season metadata and telemetry capabilities from a new man
 
   expect(screen.getByTestId('season-metadata').textContent).toBe('2026')
   expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('not-published')
+})
+
+test('retains the optional qualifying timeline artifact for qualifying replay controls', async () => {
+  const qualifyingTimeline = {
+    contractVersion: 'v2' as const,
+    fixtureId: 'test-race',
+    startMs: 0,
+    endMs: 3000,
+    intervals: [{ kind: 'yellow' as const, startMs: 600, endMs: 900 }],
+    incidentMarkers: [],
+  }
+  const qualifyingIndex = {
+    ...index,
+    manifest: { ...index.manifest, sessionMode: 'qualifying' },
+    qualifyingTimeline,
+  } as unknown as ReplayIndex
+  const controller = createController()
+  vi.mocked(createFetchSource).mockReturnValue(source)
+  vi.mocked(loadReplayIndex).mockResolvedValue(qualifyingIndex)
+  vi.mocked(createReplayController).mockReturnValue(controller)
+
+  render(<ReplayEntryProbe browserBaseUrl="/seasons/2026/" browserPointerPath="browser-current.json" />)
+  await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
+
+  expect(screen.getByTestId('qualifying-timeline').textContent).toBe('1')
+})
+
+test('clips qualifying presentation and controller initialization to the authoritative Q1 boundary', async () => {
+  const qualifyingIndex = {
+    ...index,
+    manifest: { ...index.manifest, sessionMode: 'qualifying' },
+    lapSectorSidecar: {
+      contractVersion: 'v2', fixtureId: 'test-race', phaseBoundaries: [
+        { phase: 'Q1', startMs: 600 }, { phase: 'Q2', startMs: 1_500 }, { phase: 'Q3', startMs: 2_300 },
+      ], drivers: {},
+    },
+  } as unknown as ReplayIndex
+  const controller = createController()
+  vi.mocked(createFetchSource).mockReturnValue(source)
+  vi.mocked(loadReplayIndex).mockResolvedValue(qualifyingIndex)
+  vi.mocked(createReplayController).mockReturnValue(controller)
+
+  expect(selectReplayStartMs(qualifyingIndex)).toBe(600)
+  render(<ReplayEntryProbe browserBaseUrl="/seasons/2026/" browserPointerPath="browser-current.json" />)
+  await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('ready'))
+
+  expect(createReplayController).toHaveBeenCalledWith({ index: qualifyingIndex, coordinateInterpolation: 'smooth', initialTimeMs: 600 })
 })
 
 test('retains season metadata while leaving telemetry capabilities absent for a season-only manifest', async () => {
@@ -128,7 +177,7 @@ test('returns an initialization error and retries the same race entry', async ()
 
 test('threads the optional weather sidecar from the index into the ready replay', async () => {
   const weatherSidecar = {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'test-race',
     timeMs: [0],
     airTempC: [21.0],

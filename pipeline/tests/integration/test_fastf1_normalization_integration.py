@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 import socket
+import sys
 import urllib.request
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -19,12 +21,23 @@ from fixtures.fake_fastf1_session import (
     build_complete_session,
     build_2026_session_with_default_drs,
     build_empty_session,
+    build_permuted_practice_session,
+    build_permuted_qualifying_session,
     build_permuted_session,
+    build_permuted_sprint_session,
+    build_practice_session,
+    build_qualifying_session,
+    build_qualifying_session_with_cancelled_q3,
+    build_qualifying_session_with_invalid_q1,
     build_session_factory,
+    build_session_with_empty_table,
     build_session_with_missing_table,
+    build_sprint_session,
     build_testing_event_schedule,
 )
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.domain.normalizers import NormalizationError
+from f1_replay_pipeline.app.orchestration import RaceSelection, normalize_session
 from f1_replay_pipeline.adapters.fastf1.car_telemetry import adapt_car_telemetry
 from f1_replay_pipeline.adapters.fastf1.laps_stints import adapt_laps, adapt_stints
 from f1_replay_pipeline.adapters.fastf1.messages_results import adapt_race_control_messages, adapt_results
@@ -63,6 +76,7 @@ def test_complete_session_normalizes_every_table_with_exact_schemas_and_native_s
     assert tables["session_metadata"].to_dicts() == [{
         "session_id": "2026-03-race", "year": 2026, "round_number": 3,
         "event_name": "Australian Grand Prix", "session_name": "Race", "session_type": "race",
+        "session_mode": "race",
         "session_start_time_utc": datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
     }]
     assert tables["drivers"].select("driver_id", "source_driver_key").to_dicts() == [
@@ -114,7 +128,7 @@ def test_permuted_complete_session_has_identical_deterministic_canonical_tables(
     permuted = _normalize_all(permuted_factory)
 
     # Assert: ordering and duplicate winner retention are independent of source ordering.
-    for name in CANONICAL_TABLE_SCHEMAS:
+    for name in CANONICAL_TABLE_SCHEMAS_V2:
         assert_frame_equal(permuted[name], complete[name])
 
 
@@ -129,9 +143,9 @@ def test_empty_session_emits_typed_empty_observation_tables_and_preserves_roster
     _assert_schemas(tables)
     assert tables["session_metadata"].height == 1
     assert tables["drivers"].height == 2
-    for name in set(CANONICAL_TABLE_SCHEMAS) - {"session_metadata", "drivers"}:
+    for name in set(CANONICAL_TABLE_SCHEMAS_V2) - {"session_metadata", "drivers"}:
         assert tables[name].is_empty()
-        assert tables[name].schema == CANONICAL_TABLE_SCHEMAS[name]
+        assert tables[name].schema == CANONICAL_TABLE_SCHEMAS_V2[name]
 
 
 @pytest.mark.parametrize("table_name", REQUIRED_SOURCE_TABLE_NAMES)
@@ -232,6 +246,262 @@ def test_offline_fixture_supports_testing_event_lookup_for_round_zero_event():
     assert event["RoundNumber"] == 0
 
 
+@pytest.mark.parametrize(
+    ("practice_index", "session_id", "session_name"),
+    [
+        (1, "2026-03-practice-1", "FP1"),
+        (2, "2026-03-practice-2", "FP2"),
+        (3, "2026-03-practice-3", "FP3"),
+    ],
+)
+def test_practice_fixtures_normalize_deterministic_canonical_frames(
+    practice_index: int, session_id: str, session_name: str
+):
+    # Arrange: each FP fixture is supplied only through the injected loader factory.
+    factory = build_session_factory(build_practice_session(practice_index))
+
+    # Act: load once and normalize every canonical table.
+    tables = _normalize_all(factory)
+
+    # Assert: metadata identity, valid laps, and nullable practice classification.
+    assert factory.calls == 1
+    _assert_schemas(tables)
+    assert tables["session_metadata"].item(0, "session_id") == session_id
+    assert tables["session_metadata"].item(0, "session_name") == session_name
+    assert tables["session_metadata"].item(0, "session_type") == "practice"
+    assert tables["session_metadata"].item(0, "session_mode") == "practice"
+    assert tables["laps"].select("driver_id", "lap_duration_ms", "compound").to_dicts() == [
+        {"driver_id": "HAM", "lap_duration_ms": 92_500, "compound": "SOFT"},
+        {"driver_id": "VER", "lap_duration_ms": 93_200, "compound": "MEDIUM"},
+    ]
+    assert tables["results"].select("driver_id", "classified_position").to_dicts() == [
+        {"driver_id": "HAM", "classified_position": "1"},
+        {"driver_id": "VER", "classified_position": None},
+    ]
+
+
+def test_qualifying_fixture_normalizes_populated_and_missing_q_results():
+    # Arrange: supply the deterministic qualifying fixture through the injected loader.
+    factory = build_session_factory(build_qualifying_session())
+
+    # Act: load once and normalize every canonical table.
+    tables = _normalize_all(factory)
+
+    # Assert: Q1/Q2/Q3 populate truthfully and missing segments stay null.
+    assert tables["session_metadata"].item(0, "session_id") == "2026-03-qualifying"
+    assert tables["session_metadata"].item(0, "session_type") == "qualifying"
+    assert tables["session_metadata"].item(0, "session_mode") == "qualifying"
+    assert tables["results"].select("driver_id", "q1_time_ms", "q2_time_ms", "q3_time_ms").to_dicts() == [
+        {"driver_id": "HAM", "q1_time_ms": 105_123, "q2_time_ms": 104_567, "q3_time_ms": 103_999},
+        {"driver_id": "VER", "q1_time_ms": 105_200, "q2_time_ms": None, "q3_time_ms": None},
+    ]
+
+
+def test_sprint_fixture_normalizes_race_shaped_canonical_frames():
+    # Arrange: supply the deterministic sprint fixture through the injected loader.
+    factory = build_session_factory(build_sprint_session())
+
+    # Act: load once and normalize every canonical table.
+    tables = _normalize_all(factory)
+
+    # Assert: sprint keeps race-shaped laps/results but stays mode-distinct metadata.
+    assert factory.calls == 1
+    _assert_schemas(tables)
+    assert tables["session_metadata"].item(0, "session_id") == "2026-03-sprint"
+    assert tables["session_metadata"].item(0, "session_name") == "Sprint"
+    assert tables["session_metadata"].item(0, "session_type") == "sprint"
+    assert tables["session_metadata"].item(0, "session_mode") == "sprint"
+    assert tables["results"].select("driver_id", "classified_position", "points").to_dicts() == [
+        {"driver_id": "HAM", "classified_position": "1", "points": 25.0},
+        {"driver_id": "VER", "classified_position": None, "points": None},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("alias", "expected_mode"),
+    [
+        ("FP1", "practice"),
+        ("FP2", "practice"),
+        ("FP3", "practice"),
+        ("Q", "qualifying"),
+        ("R", "race"),
+        ("S", "sprint"),
+        ("SQ", "sprint-qualifying"),
+        ("SS", "sprint-shootout"),
+    ],
+)
+def test_normalize_session_emits_explicit_v2_mode_for_supported_aliases(
+    alias: str, expected_mode: str,
+):
+    # Arrange: the injected session exposes the same alias as FastF1 metadata.
+    session = (
+        build_qualifying_session()
+        if expected_mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}
+        else build_complete_session()
+    )
+    session.name = alias
+    selection = RaceSelection(year=2026, round_number=3, session=alias)
+
+    # Act: normalize through the application orchestration boundary.
+    frames = normalize_session(session, selection)
+
+    # Assert: v2 metadata carries one stable mode without changing race-shaped tables.
+    metadata = cast(pl.DataFrame, frames["session_metadata"])
+    results = cast(pl.DataFrame, frames["results"])
+    assert list(metadata.schema) == list(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"])
+    assert metadata.item(0, "session_mode") == expected_mode
+    assert results.item(0, "classified_position") == "1"
+
+
+def test_cancelled_q3_qualifying_fixture_normalizes_null_q3_for_all():
+    # Arrange: a cancelled Q3 segment is modeled as NaT for every remaining driver.
+    factory = build_session_factory(build_qualifying_session_with_cancelled_q3())
+
+    # Act / Assert: end-to-end normalization keeps Q3 null without fabricating a time.
+    tables = _normalize_all(factory)
+    assert tables["results"].select("driver_id", "q3_time_ms").to_dicts() == [
+        {"driver_id": "HAM", "q3_time_ms": None},
+        {"driver_id": "VER", "q3_time_ms": None},
+    ]
+
+
+def test_qualifying_fixture_with_invalid_q1_fails_normalization_end_to_end():
+    # Arrange: an invalid Q1 value must not silently become null anywhere in the pipeline.
+    factory = build_session_factory(build_qualifying_session_with_invalid_q1())
+
+    # Act / Assert: the normalization stage fails explicitly with an actionable label.
+    with pytest.raises(NormalizationError, match="q1 time"):
+        _normalize_all(factory)
+
+
+@pytest.mark.parametrize("practice_index", [1, 2, 3])
+def test_permuted_practice_fixtures_are_deterministic(practice_index: int):
+    # Arrange: the same FP source data is presented in reversed row and key order.
+    complete = _normalize_all(build_session_factory(build_practice_session(practice_index)))
+    permuted = _normalize_all(build_session_factory(build_permuted_practice_session(practice_index)))
+
+    # Assert: every canonical table is identical regardless of source ordering.
+    for name in CANONICAL_TABLE_SCHEMAS_V2:
+        assert_frame_equal(permuted[name], complete[name])
+
+
+def test_permuted_qualifying_fixture_is_deterministic():
+    # Arrange: the same qualifying source data is presented in reversed order.
+    complete = _normalize_all(build_session_factory(build_qualifying_session()))
+    permuted = _normalize_all(build_session_factory(build_permuted_qualifying_session()))
+
+    # Assert: Q1/Q2/Q3 normalization is independent of source row and key order.
+    for name in CANONICAL_TABLE_SCHEMAS_V2:
+        assert_frame_equal(permuted[name], complete[name])
+
+
+def test_permuted_sprint_fixture_is_deterministic():
+    # Arrange: the same sprint source data is presented in reversed order.
+    complete = _normalize_all(build_session_factory(build_sprint_session()))
+    permuted = _normalize_all(build_session_factory(build_permuted_sprint_session()))
+
+    # Assert: sprint canonical frames are identical regardless of source ordering.
+    for name in CANONICAL_TABLE_SCHEMAS_V2:
+        assert_frame_equal(permuted[name], complete[name])
+
+
+def test_practice_fixture_models_unavailable_position_semantics_with_available_telemetry():
+    # Arrange: build the deterministic FP fixture without FastF1 or a network.
+    session = build_practice_session(1)
+
+    # Assert: per-lap live order is documented-unavailable NaN while lap timing
+    # and native telemetry streams remain fully available.
+    assert np.isnan(session.laps.loc[0, "Position"])
+    assert np.isnan(session.laps.loc[1, "Position"])
+    assert pd.isna(session.results.loc[1, "Position"])
+    assert pd.isna(session.results.loc[1, "ClassifiedPosition"])
+    assert session.car_data["44"].loc[0, "Speed"] == 280.0
+    assert session.pos_data["44"].loc[0, "X"] == 10.0
+
+
+def test_qualifying_fixture_models_q_shapes_without_importing_fastf1_or_using_network():
+    # Arrange: capture the module state before building the qualifying fixture.
+    before_modules = set(sys.modules)
+
+    # Act: build the fixture (network is rejected by the autouse fixture).
+    session = build_qualifying_session()
+
+    # Assert: the fixture models FastF1 Q columns as timedeltas and never imports FastF1.
+    assert "fastf1" not in set(sys.modules).difference(before_modules)
+    assert isinstance(session.results.loc[0, "Q1"], pd.Timedelta)
+    assert isinstance(session.results.loc[0, "Q2"], pd.Timedelta)
+    assert isinstance(session.results.loc[0, "Q3"], pd.Timedelta)
+    assert pd.isna(session.results.loc[1, "Q2"])
+    assert pd.isna(session.results.loc[1, "Q3"])
+
+
+def test_qualifying_fixture_models_documented_nan_position_and_nullable_results():
+    # Arrange / Act: build the deterministic qualifying fixture without FastF1.
+    session = build_qualifying_session()
+
+    # Assert: per-lap live order is documented-unavailable NaN while Q segments
+    # stay nullable timedeltas, mirroring FastF1's qualifying data model.
+    assert np.isnan(session.laps.loc[0, "Position"])
+    assert np.isnan(session.laps.loc[1, "Position"])
+    assert isinstance(session.results.loc[0, "Q3"], pd.Timedelta)
+    assert pd.isna(session.results.loc[1, "Q2"])
+    assert pd.isna(session.results.loc[1, "Q3"])
+
+
+def test_practice_session_with_incomplete_lap_timing_preserves_null_duration():
+    # Arrange: an FP session where one driver has no recorded timed lap.
+    session = build_practice_session(1)
+    session.laps = pd.DataFrame({
+        "DriverNumber": ["44", "1"],
+        "LapNumber": [1, 1],
+        "LapStartTime": [pd.Timedelta(0, unit="s"), pd.Timedelta(0, unit="s")],
+        "Time": [pd.Timedelta(92_500, unit="ms"), pd.NaT],
+        "LapTime": [pd.Timedelta(92_500, unit="ms"), pd.NaT],
+        "Compound": ["SOFT", "MEDIUM"],
+        "Position": [np.nan, np.nan],
+    })
+    factory = build_session_factory(session)
+
+    # Act: load once and normalize every canonical table.
+    tables = _normalize_all(factory)
+
+    # Assert: the timed lap survives while the incomplete lap keeps a null duration.
+    assert tables["laps"].select("driver_id", "lap_duration_ms").to_dicts() == [
+        {"driver_id": "HAM", "lap_duration_ms": 92_500},
+        {"driver_id": "VER", "lap_duration_ms": None},
+    ]
+    assert tables["stints"].is_empty()
+
+
+def test_normalize_session_rejects_unsupported_session_mode_end_to_end():
+    # Arrange: a loaded session whose label cannot be normalized to any mode.
+    session = build_complete_session()
+    session.name = "Warmup"
+    selection = RaceSelection(year=2026, round_number=3, session="R")
+
+    # Act / Assert: the orchestration boundary fails the metadata stage explicitly.
+    with pytest.raises(RuntimeError, match="normalization failed during session_metadata"):
+        normalize_session(session, selection)
+
+
+def test_qualifying_fixture_with_empty_results_table_emits_typed_empty_results():
+    # Arrange: a qualifying session whose timing/classification table is empty.
+    session = build_qualifying_session()
+    session.results = session.results.iloc[:0].copy()
+    session.name = "Qualifying"
+    factory = build_session_factory(session)
+
+    # Act: load once and normalize every canonical table.
+    tables = _normalize_all(factory)
+
+    # Assert: qualifying identity is preserved and results stay a typed empty table.
+    _assert_schemas(tables)
+    assert tables["session_metadata"].item(0, "session_id") == "2026-03-qualifying"
+    assert tables["session_metadata"].item(0, "session_mode") == "qualifying"
+    assert tables["results"].is_empty()
+    assert tables["results"].schema == CANONICAL_TABLE_SCHEMAS_V2["results"]
+
+
 def _normalize_all(factory: Callable[[], FakeFastF1Session]) -> Mapping[str, pl.DataFrame]:
     """Exercise the public loader seam followed by every Phase 1 table adapter."""
     loaded = load_session(session_factory=factory)
@@ -254,6 +524,6 @@ def _normalize_all(factory: Callable[[], FakeFastF1Session]) -> Mapping[str, pl.
 
 
 def _assert_schemas(tables: Mapping[str, pl.DataFrame]) -> None:
-    assert set(tables) == set(CANONICAL_TABLE_SCHEMAS)
-    for name, schema in CANONICAL_TABLE_SCHEMAS.items():
+    assert set(tables) == set(CANONICAL_TABLE_SCHEMAS_V2)
+    for name, schema in CANONICAL_TABLE_SCHEMAS_V2.items():
         assert tables[name].schema == schema

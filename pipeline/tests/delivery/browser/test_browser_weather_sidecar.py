@@ -530,7 +530,7 @@ class TestBrowserWeatherSidecarModel:
             "pressureMbar", "rainfall", "trackTempC", "windDirectionDeg",
             "windSpeedMps",
         )
-        assert payload["contractVersion"] == "v1"
+        assert payload["contractVersion"] == "v2"
         assert payload["fixtureId"] == "synthetic-race"
         assert payload["timeMs"] == [0, 1_000]
 
@@ -677,7 +677,7 @@ class TestWeatherSidecarReference:
         with pytest.raises(ValueError, match="schema_id is invalid"):
             BrowserWeatherSidecarReference(
                 path="weather-sidecar.json",
-                schema_id="urn:f1-cache-replay:schema:replay-data:v1:wrong",
+                schema_id="urn:f1-cache-replay:schema:replay-data:unsupported:weather-sidecar",
                 sha256="a" * 64,
             )
 

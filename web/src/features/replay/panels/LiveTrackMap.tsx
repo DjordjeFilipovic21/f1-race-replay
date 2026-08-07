@@ -1,7 +1,9 @@
 import { memo, useEffect, useMemo, useRef } from 'react'
-import type { DriverMetadata, TrackAssets, TrackPoint } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, SessionMode, TrackAssets, TrackPoint } from '../../../data/replay/types'
 import type { ReplayController } from '../../../engine/replay'
 import type { ReplaySnapshot } from '../../../engine/replay/types'
+import { isQualifyingSessionMode } from '../session-capabilities'
+import { selectQualifyingLiveState, type QualifyingLiveState } from '../selectors/qualifying-live-state-selectors'
 import { describeTrackStatus } from './track-status'
 
 export interface LiveTrackMapProps {
@@ -9,6 +11,11 @@ export interface LiveTrackMapProps {
   readonly controller: ReplayController
   readonly drivers: readonly DriverMetadata[]
   readonly selectedDriverId?: string | null
+  readonly sessionMode?: SessionMode
+  readonly lapSectorSidecar?: LapSectorSidecar | null
+  readonly qualifyingSummary?: QualifyingSummary | null
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar | null
+  readonly qualifyingTimeline?: QualifyingTimeline | null
 }
 
 export interface TrackMapViewBox {
@@ -40,19 +47,25 @@ interface TrackMapSegmentMetric {
 export const SAFETY_CAR_AHEAD_DISTANCE_METERS = 100
 
 /** Renders static geometry while updating mounted marker nodes from controller notifications. */
-export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller, drivers, selectedDriverId = null }: LiveTrackMapProps) {
+export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller, drivers, selectedDriverId = null, sessionMode = 'race', lapSectorSidecar, qualifyingSummary, qualifyingLapStatus, qualifyingTimeline }: LiveTrackMapProps) {
   const geometry = useMemo(() => createTrackMapGeometry(trackAssets), [trackAssets])
   const markerRefs = useRef(new Map<string, SVGGElement>())
   const boundaryRefs = useRef(new Map<number, SVGPathElement>())
   const safetyCarRef = useRef<SVGGElement | null>(null)
   const statusRef = useRef<HTMLParagraphElement | null>(null)
+  const positionNoticeRef = useRef<HTMLParagraphElement | null>(null)
   const initialStatus = describeTrackStatus(controller.getSnapshot().replay?.trackStatusCode ?? null)
+  const initialPositionNotice = allActiveDriversUnavailable(controller.getSnapshot().replay, drivers)
+  const qualifyingMarkerData = isQualifyingSessionMode(sessionMode)
+    ? { qualifyingSummary, lapSectorSidecar, qualifyingLapStatus, qualifyingTimeline }
+    : null
 
   useEffect(() => {
     const update = () => {
       const replay = controller.getSnapshot().replay
       updateTrackMapStatus(statusRef.current, boundaryRefs.current, replay?.trackStatusCode ?? null)
-      updateMarkerPositions(markerRefs.current, replay, trackAssets.rotationDegrees)
+      updateMarkerPositions(markerRefs.current, replay, trackAssets.rotationDegrees, drivers, qualifyingMarkerData)
+      updatePositionAvailability(positionNoticeRef.current, replay, drivers)
       const safetyCarPosition = replay?.trackStatusCode === 4
         ? deriveSafetyCarPosition(replay, geometry, trackAssets.circuitLengthMeters, trackAssets.rotationDegrees)
         : null
@@ -60,10 +73,25 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
     }
     update()
     return controller.subscribe(update)
-  }, [controller, geometry, trackAssets.circuitLengthMeters, trackAssets.rotationDegrees])
+  }, [controller, drivers, geometry, qualifyingMarkerData, trackAssets.circuitLengthMeters, trackAssets.rotationDegrees])
 
   return (
     <section className="live-track-map" aria-label={`${trackAssets.trackName} track map`}>
+      {isQualifyingSessionMode(sessionMode) && (
+        <aside className="live-track-map__legend" role="group" aria-label="Qualifying lap state legend">
+          <span className="live-track-map__legend-title">Lap state</span>
+          <ul className="live-track-map__legend-list">
+            <li className="live-track-map__legend-item">
+              <span className="live-track-map__legend-swatch live-track-map__legend-swatch--outlap" aria-hidden="true" />
+              <span>Outlap</span>
+            </li>
+            <li className="live-track-map__legend-item">
+              <span className="live-track-map__legend-swatch live-track-map__legend-swatch--flying" aria-hidden="true" />
+              <span>Flying</span>
+            </li>
+          </ul>
+        </aside>
+      )}
       <div className="live-track-map__canvas">
         <p
           ref={statusRef}
@@ -74,6 +102,9 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
           data-track-status={initialStatus.tone}
         >
           {initialStatus.label}
+        </p>
+        <p ref={positionNoticeRef} className="live-track-map__position-notice" role="status" aria-live="polite" hidden={!initialPositionNotice}>
+          Reliable source telemetry is unavailable for this period.
         </p>
         {geometry === null ? (
           <p className="live-track-map__empty" role="status">Track geometry is unavailable for this replay.</p>
@@ -95,8 +126,8 @@ export const LiveTrackMap = memo(function LiveTrackMap({ trackAssets, controller
               x2={geometry.startFinish[1].x}
               y2={geometry.startFinish[1].y}
             />
-            {orderMarkers(drivers, selectedDriverId).map((driver) => (
-              <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} color={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
+             {orderMarkers(drivers, selectedDriverId).map((driver) => (
+               <g key={driver.id} ref={(element) => setMarkerRef(markerRefs.current, driver.id, element)} className={`live-track-map__marker${driver.id === selectedDriverId ? ' live-track-map__marker--selected' : ''}`} color={isColorHex(driver.colorHex) ? driver.colorHex : 'var(--accent)'} role="img" aria-label={`${driver.displayName} (${driver.id})`} transform="translate(0 0)" visibility="hidden">
                 <circle className="live-track-map__driver-dot" cx="0" cy="0" r={geometry.markerRadius} fill="currentColor" />
                 <text x="0" y="0" fontSize={geometry.markerLabelSize} aria-hidden="true">{driver.id}</text>
               </g>
@@ -209,20 +240,87 @@ function setAttributeIfChanged(element: Element, name: string, value: string): v
   if (element.getAttribute(name) !== value) element.setAttribute(name, value)
 }
 
-function updateMarkerPositions(markers: ReadonlyMap<string, SVGGElement>, snapshot: ReplaySnapshot | null, rotationDegrees: number): void {
+interface QualifyingMarkerData {
+  readonly qualifyingSummary?: QualifyingSummary | null
+  readonly lapSectorSidecar?: LapSectorSidecar | null
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar | null
+  readonly qualifyingTimeline?: QualifyingTimeline | null
+}
+
+function updateMarkerPositions(
+  markers: ReadonlyMap<string, SVGGElement>,
+  snapshot: ReplaySnapshot | null,
+  rotationDegrees: number,
+  drivers: readonly DriverMetadata[],
+  qualifyingMarkerData: QualifyingMarkerData | null,
+): void {
   if (snapshot === null) return
   markers.forEach((element, id) => {
     const sampled = snapshot.drivers[id]
+    const driver = drivers.find((candidate) => candidate.id === id)
+    if (driver !== undefined) updateQualifyingMarkerState(element, driver, snapshot, qualifyingMarkerData)
+    const incidented = qualifyingMarkerData !== null && hasCausalQualifyingIncident(qualifyingMarkerData.qualifyingTimeline, id, snapshot.sessionTimeMs)
     const point = sampled === undefined || isTerminalStatus(sampled.status) || sampled.x === null || sampled.y === null
       ? null
       : toMapPoint({ x: sampled.x, y: sampled.y }, rotationDegrees)
-    if (point === null) {
+    if (point === null || incidented) {
       element.setAttribute('visibility', 'hidden')
       return
     }
     element.setAttribute('transform', `translate(${formatCoordinate(point.x)} ${formatCoordinate(point.y)})`)
     element.setAttribute('visibility', 'visible')
   })
+}
+
+function hasCausalQualifyingIncident(qualifyingTimeline: QualifyingTimeline | null | undefined, driverId: string, replayTimeMs: number): boolean {
+  return qualifyingTimeline?.incidentMarkers.some((marker) => marker.driverId === driverId && marker.timeMs <= replayTimeMs) ?? false
+}
+
+function updatePositionAvailability(
+  notice: HTMLParagraphElement | null,
+  snapshot: ReplaySnapshot | null,
+  drivers: readonly DriverMetadata[],
+): void {
+  if (notice === null) return
+  notice.hidden = !allActiveDriversUnavailable(snapshot, drivers)
+}
+
+function allActiveDriversUnavailable(snapshot: ReplaySnapshot | null, drivers: readonly DriverMetadata[]): boolean {
+  if (snapshot === null) return false
+  const active = drivers
+    .map(({ id }) => snapshot.drivers[id] ?? null)
+    .filter((driver) => driver === null || (!isTerminalStatus(driver.status) && driver.isInPitLane !== true))
+  return active.length > 0 && active.every((driver) => driver === null || driver.x === null || driver.y === null || !Number.isFinite(driver.x) || !Number.isFinite(driver.y))
+}
+
+function updateQualifyingMarkerState(
+  element: SVGGElement,
+  driver: DriverMetadata,
+  snapshot: ReplaySnapshot,
+  qualifyingMarkerData: QualifyingMarkerData | null,
+): void {
+  const baseLabel = `${driver.displayName} (${driver.id})`
+  if (qualifyingMarkerData === null) {
+    element.removeAttribute('data-qualifying-lap-state')
+    setAttributeIfChanged(element, 'aria-label', baseLabel)
+    return
+  }
+
+  const state = selectQualifyingLiveState(
+    snapshot,
+    driver.id,
+    qualifyingMarkerData.qualifyingSummary,
+    qualifyingMarkerData.lapSectorSidecar,
+    qualifyingMarkerData.qualifyingLapStatus,
+  )
+  setAttributeIfChanged(element, 'data-qualifying-lap-state', state.lapPhase)
+  setAttributeIfChanged(element, 'aria-label', qualifyingMarkerAriaLabel(baseLabel, state))
+}
+
+function qualifyingMarkerAriaLabel(baseLabel: string, state: QualifyingLiveState): string {
+  if (state.lapPhase === 'outlap') return `${baseLabel}, qualifying lap state: Outlap`
+  if (state.lapPhase === 'flying') return `${baseLabel}, qualifying lap state: Flying`
+  return baseLabel
 }
 
 function updateSafetyCarMarker(marker: SVGGElement | null, point: TrackPoint | null): void {

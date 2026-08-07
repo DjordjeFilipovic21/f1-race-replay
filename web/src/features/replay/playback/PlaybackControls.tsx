@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
-import type { DnfMarker, LapStart, TimelineInterval, TimelineSummary } from '../../../data/replay/types'
+import type { DnfMarker, LapStart, QualifyingIncidentMarker, QualifyingPhase, QualifyingPhaseBoundary, QualifyingTimeline as QualifyingTimelineArtifact, QualifyingTimelineInterval, SessionMode, TimelineInterval, TimelineSummary } from '../../../data/replay/types'
 import type { ReplayController, ReplayControllerSnapshot } from '../../../engine/replay'
+import { getSessionLabel, isQualifyingSessionMode } from '../session-capabilities'
 import { ExactLapNavigation } from './ExactLapNavigation'
 import { ExactTimeEditor } from './ExactTimeEditor'
 
@@ -21,10 +22,15 @@ export interface PlaybackControlsProps {
   readonly snapshot: ReplayControllerSnapshot
   readonly startMs: number
   readonly timelineSummary?: TimelineSummary
+  readonly qualifyingTimeline?: QualifyingTimelineArtifact
+  readonly sessionMode?: SessionMode
+  readonly qualifyingPhaseBoundaries?: readonly QualifyingPhaseBoundary[]
 }
 
 /** Renders playback actions and controller status while delegating seek preview state to the adapter. */
-export function PlaybackControls({ controller, currentLap, displayedTimeMs, durationMs, elapsedMs, endMs, isReady, lapStarts, onCommitSeek, onSeek, onSeekPreview, snapshot, startMs, timelineSummary }: PlaybackControlsProps) {
+export function PlaybackControls({ controller, currentLap, displayedTimeMs, durationMs, elapsedMs, endMs, isReady, lapStarts, onCommitSeek, onSeek, onSeekPreview, snapshot, startMs, timelineSummary, qualifyingTimeline, sessionMode = 'race', qualifyingPhaseBoundaries }: PlaybackControlsProps) {
+  const isQualifying = isQualifyingSessionMode(sessionMode)
+  const currentPhase = isQualifying ? selectCurrentQualifyingPhase(qualifyingPhaseBoundaries ?? [], displayedTimeMs) : null
   const handlePlaybackToggle = () => {
     if (snapshot.isPlaying) controller.pause()
     else controller.start()
@@ -37,17 +43,23 @@ export function PlaybackControls({ controller, currentLap, displayedTimeMs, dura
   const lapMarker = (offset: -1 | 1) => lapStarts?.find((entry) => entry.lap === (currentLap ?? 0) + offset)
   const previousLap = lapMarker(-1)
   const nextLap = lapMarker(1)
+  const previousPhase = selectQualifyingPhaseBoundary(qualifyingPhaseBoundaries, currentPhase, -1)
+  const nextPhase = selectQualifyingPhaseBoundary(qualifyingPhaseBoundaries, currentPhase, 1)
+
+  const seekToPhase = (boundary: QualifyingPhaseBoundary | undefined) => {
+    if (boundary !== undefined) onSeek(boundary.startMs)
+  }
 
   return (
     <div className="replay-control-area" aria-busy={snapshot.status === 'loading'}>
       <div className="replay-navigation">
         <ExactTimeEditor durationMs={durationMs} elapsedMs={elapsedMs} isReady={isReady} onSeek={onSeek} startMs={startMs} />
-        <ExactLapNavigation currentLap={currentLap} isReady={isReady} lapStarts={lapStarts} onSeek={onSeek} />
+        <ExactLapNavigation currentLap={currentLap} currentPhase={currentPhase} isReady={isReady} lapStarts={lapStarts} onSeek={onSeek} phaseBoundaries={isQualifying ? qualifyingPhaseBoundaries ?? [] : undefined} sessionLabel={getSessionLabel(sessionMode)} />
       </div>
       <div className="replay-controls">
         <div className="transport-controls" aria-label="Replay transport" role="group">
-          <button className="transport-button transport-button--jump" type="button" aria-label="Previous lap" disabled={!isReady || previousLap === undefined} onClick={() => previousLap && onSeek(previousLap.startMs)}>
-            <JumpIcon direction="back" label="1L" />
+          <button className="transport-button transport-button--jump" type="button" aria-label={isQualifying ? 'Previous qualifying phase' : 'Previous lap'} disabled={!isReady || (isQualifying ? previousPhase === undefined : previousLap === undefined)} onClick={() => isQualifying ? seekToPhase(previousPhase) : previousLap !== undefined && onSeek(previousLap.startMs)}>
+            <JumpIcon direction="back" label={isQualifying ? '1Q' : '1L'} />
           </button>
           <button className="transport-button" type="button" aria-label="Rewind 10 seconds" disabled={!isReady} onClick={() => seekBy(-10_000)}>
             <JumpIcon direction="back" label="10s" />
@@ -58,14 +70,16 @@ export function PlaybackControls({ controller, currentLap, displayedTimeMs, dura
           <button className="transport-button" type="button" aria-label="Forward 10 seconds" disabled={!isReady} onClick={() => seekBy(10_000)}>
             <JumpIcon direction="forward" label="10s" />
           </button>
-          <button className="transport-button transport-button--jump" type="button" aria-label="Next lap" disabled={!isReady || nextLap === undefined} onClick={() => nextLap && onSeek(nextLap.startMs)}>
-            <JumpIcon direction="forward" label="1L" />
+          <button className="transport-button transport-button--jump" type="button" aria-label={isQualifying ? 'Next qualifying phase' : 'Next lap'} disabled={!isReady || (isQualifying ? nextPhase === undefined : nextLap === undefined)} onClick={() => isQualifying ? seekToPhase(nextPhase) : nextLap !== undefined && onSeek(nextLap.startMs)}>
+            <JumpIcon direction="forward" label={isQualifying ? '1Q' : '1L'} />
           </button>
         </div>
 
         <div className="seek-control">
           <div className="seek-control__track">
-            {timelineSummary !== undefined && <RaceTimeline summary={timelineSummary} displayedTimeMs={displayedTimeMs} startMs={startMs} endMs={endMs} />}
+            {isQualifying && ((qualifyingPhaseBoundaries?.length ?? 0) > 0 || qualifyingTimeline !== undefined)
+              ? <QualifyingTimeline artifact={qualifyingTimeline} boundaries={qualifyingPhaseBoundaries ?? []} displayedTimeMs={displayedTimeMs} startMs={startMs} endMs={endMs} />
+              : timelineSummary !== undefined && <RaceTimeline summary={timelineSummary} displayedTimeMs={displayedTimeMs} startMs={startMs} endMs={endMs} sessionLabel={getSessionLabel(sessionMode)} />}
             <input type="range" min={startMs} max={endMs} step="1" value={displayedTimeMs} aria-label="Seek replay" aria-valuetext={formatTime(elapsedMs)} disabled={!isReady} onInput={onSeekPreview} onPointerUp={onCommitSeek} onKeyUp={onCommitSeek} onBlur={onCommitSeek} />
           </div>
         </div>
@@ -88,13 +102,14 @@ interface RaceTimelineProps {
   readonly summary: TimelineSummary
   readonly startMs: number
   readonly endMs: number
+  readonly sessionLabel: string
 }
 
 /** Visual context for the native seek control; it deliberately has no seek handlers. */
-function RaceTimeline({ displayedTimeMs, summary, startMs, endMs }: RaceTimelineProps) {
+function RaceTimeline({ displayedTimeMs, summary, startMs, endMs, sessionLabel }: RaceTimelineProps) {
   const elapsedWidth = `${timelinePercentage(displayedTimeMs, startMs, endMs)}%`
   return (
-    <div className="race-timeline" role="group" aria-label="Race status timeline">
+    <div className="race-timeline" role="group" aria-label={`${sessionLabel} status timeline`}>
       <span className="race-timeline__elapsed" style={{ width: elapsedWidth }} aria-hidden="true" />
       <span className="race-timeline__remaining" style={{ left: elapsedWidth }} aria-hidden="true" />
       {summary.intervals.map((interval) => <TimelineBand key={`${interval.kind}-${interval.startMs}-${interval.endMs}`} interval={interval} startMs={startMs} endMs={endMs} />)}
@@ -103,7 +118,7 @@ function RaceTimeline({ displayedTimeMs, summary, startMs, endMs }: RaceTimeline
   )
 }
 
-function TimelineBand({ interval, startMs, endMs }: { readonly interval: TimelineInterval; readonly startMs: number; readonly endMs: number }) {
+function TimelineBand({ interval, startMs, endMs }: { readonly interval: TimelineInterval | QualifyingTimelineInterval; readonly startMs: number; readonly endMs: number }) {
   const label = `${timelineKindLabel(interval.kind)} from ${formatTime(interval.startMs - startMs)} to ${formatTime(interval.endMs - startMs)}`
   return <span className={`race-timeline__band race-timeline__band--${interval.kind}`} role="img" style={timelineIntervalStyle(interval, startMs, endMs)} aria-label={label} title={label} />
 }
@@ -113,7 +128,40 @@ function DnfTimelineMarker({ marker, startMs, endMs }: { readonly marker: DnfMar
   return <span className="race-timeline__dnf-marker" role="img" style={{ left: `${timelinePercentage(marker.timeMs, startMs, endMs)}%` }} aria-label={label} title={label} />
 }
 
-function timelineIntervalStyle(interval: TimelineInterval, startMs: number, endMs: number) {
+function QualifyingTimeline({ artifact, boundaries, displayedTimeMs, startMs, endMs }: { readonly artifact: QualifyingTimelineArtifact | undefined; readonly boundaries: readonly QualifyingPhaseBoundary[]; readonly displayedTimeMs: number; readonly startMs: number; readonly endMs: number }) {
+  const elapsedWidth = `${timelinePercentage(displayedTimeMs, startMs, endMs)}%`
+  return (
+    <div className="race-timeline" role="group" aria-label="Qualifying phase timeline">
+      <span className="race-timeline__elapsed" style={{ width: elapsedWidth }} aria-hidden="true" />
+      <span className="race-timeline__remaining" style={{ left: elapsedWidth }} aria-hidden="true" />
+      {artifact?.intervals.map((interval) => <TimelineBand key={`${interval.kind}-${interval.startMs}-${interval.endMs}`} interval={interval} startMs={startMs} endMs={endMs} />)}
+      {boundaries.map((boundary) => {
+        const label = `${boundary.phase} boundary at ${formatTime(boundary.startMs - startMs)}`
+        return <span key={`${boundary.phase}-${boundary.startMs}`} className="race-timeline__phase-marker" role="img" style={{ left: `${timelinePercentage(boundary.startMs, startMs, endMs)}%` }} aria-label={label} title={label} />
+      })}
+      {artifact?.incidentMarkers.map((marker) => <QualifyingIncidentTimelineMarker key={`${marker.driverId}-${marker.timeMs}-${marker.rawMessage}`} marker={marker} startMs={startMs} endMs={endMs} />)}
+    </div>
+  )
+}
+
+function QualifyingIncidentTimelineMarker({ marker, startMs, endMs }: { readonly marker: QualifyingIncidentMarker; readonly startMs: number; readonly endMs: number }) {
+  const label = `Qualifying incident: ${marker.driverId} at ${formatTime(marker.timeMs - startMs)} — ${marker.rawMessage}`
+  return <span className="race-timeline__qualifying-incident-marker" role="img" style={{ left: `${timelinePercentage(marker.timeMs, startMs, endMs)}%` }} aria-label={label} title={label} />
+}
+
+export function selectCurrentQualifyingPhase(boundaries: readonly QualifyingPhaseBoundary[], timeMs: number): QualifyingPhase | null {
+  return boundaries.reduce<QualifyingPhase | null>((activePhase, boundary) => boundary.startMs <= timeMs ? boundary.phase : activePhase, null)
+}
+
+export function selectQualifyingPhaseBoundary(boundaries: readonly QualifyingPhaseBoundary[] | undefined, currentPhase: QualifyingPhase | null, offset: -1 | 1): QualifyingPhaseBoundary | undefined {
+  if (boundaries === undefined || boundaries.length === 0) return undefined
+  const currentIndex = currentPhase === null ? -1 : boundaries.findIndex((boundary) => boundary.phase === currentPhase)
+  if (currentPhase !== null && currentIndex === -1) return undefined
+  const targetIndex = currentPhase === null && offset === 1 ? 0 : currentIndex + offset
+  return boundaries[targetIndex]
+}
+
+function timelineIntervalStyle(interval: TimelineInterval | QualifyingTimelineInterval, startMs: number, endMs: number) {
   const left = timelinePercentage(interval.startMs, startMs, endMs)
   return { left: `${left}%`, width: `${Math.max(timelinePercentage(interval.endMs, startMs, endMs) - left, 0)}%` }
 }
@@ -123,7 +171,7 @@ function timelinePercentage(timeMs: number, startMs: number, endMs: number): num
   return Math.min(Math.max(((timeMs - startMs) / (endMs - startMs)) * 100, 0), 100)
 }
 
-function timelineKindLabel(kind: TimelineInterval['kind']): string {
+function timelineKindLabel(kind: TimelineInterval['kind'] | QualifyingTimelineInterval['kind']): string {
   return ({ yellow: 'Yellow flag', sc: 'Safety car', red: 'Red flag', vsc: 'Virtual safety car' })[kind]
 }
 

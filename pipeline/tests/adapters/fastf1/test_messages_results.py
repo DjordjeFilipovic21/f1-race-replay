@@ -7,9 +7,14 @@ import polars as pl
 import pytest
 import numpy as np
 
-from f1_replay_pipeline.domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA, RESULTS_SCHEMA
+from f1_replay_pipeline.domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA_V2, RESULTS_SCHEMA_V2
 from f1_replay_pipeline.adapters.fastf1.messages_results import adapt_race_control_messages, adapt_results
 from f1_replay_pipeline.domain.normalizers import NormalizationError
+from fixtures.fake_fastf1_session import (
+    build_qualifying_session,
+    build_qualifying_session_with_cancelled_q3,
+    build_qualifying_session_with_invalid_q1,
+)
 
 
 DRIVERS = {"44": "HAM", "1": "VER"}
@@ -23,7 +28,7 @@ def test_adapt_race_control_messages_preserves_sparse_records_and_typed_nulls():
 
     frame = adapt_race_control_messages(messages, DRIVERS, "2026-03-race")
 
-    assert list(frame.schema.items()) == list(RACE_CONTROL_MESSAGES_SCHEMA.items())
+    assert list(frame.schema.items()) == list(RACE_CONTROL_MESSAGES_SCHEMA_V2.items())
     assert frame.to_dicts() == [
         {"session_id": "2026-03-race", "session_time_ms": 1000, "message_index": 0,
          "category": None, "flag": "YELLOW", "scope": None, "message": "Yellow", "driver_id": "HAM", "lap_number": None},
@@ -119,7 +124,7 @@ def test_adapt_race_control_messages_returns_typed_empty_frame(messages):
     frame = adapt_race_control_messages(messages, DRIVERS, "2026-03-race")
 
     assert frame.height == 0
-    assert list(frame.schema.items()) == list(RACE_CONTROL_MESSAGES_SCHEMA.items())
+    assert list(frame.schema.items()) == list(RACE_CONTROL_MESSAGES_SCHEMA_V2.items())
 
 
 def test_adapt_race_control_messages_rejects_unknown_driver_with_actionable_context():
@@ -141,12 +146,14 @@ def test_adapt_results_maps_drivers_converts_nullable_fields_and_sorts():
 
     frame = adapt_results(results, DRIVERS, "2026-03-race")
 
-    assert list(frame.schema.items()) == list(RESULTS_SCHEMA.items())
+    assert list(frame.schema.items()) == list(RESULTS_SCHEMA_V2.items())
     assert frame.to_dicts() == [
         {"session_id": "2026-03-race", "driver_id": "HAM", "classified_position": "R", "grid_position": None,
-         "status": None, "points": None, "laps_completed": None, "result_time_ms": None},
+         "status": None, "points": None, "laps_completed": None, "result_time_ms": None,
+         "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None},
         {"session_id": "2026-03-race", "driver_id": "VER", "classified_position": "1", "grid_position": 2,
-         "status": "Finished", "points": 25.0, "laps_completed": 58, "result_time_ms": 5_400_000},
+         "status": "Finished", "points": 25.0, "laps_completed": 58, "result_time_ms": 5_400_000,
+         "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None},
     ]
 
 
@@ -155,12 +162,126 @@ def test_adapt_results_returns_typed_empty_frame(results):
     frame = adapt_results(results, DRIVERS, "2026-03-race")
 
     assert frame.height == 0
-    assert list(frame.schema.items()) == list(RESULTS_SCHEMA.items())
+    assert list(frame.schema.items()) == list(RESULTS_SCHEMA_V2.items())
 
 
 def test_adapt_results_rejects_unknown_driver_with_actionable_context():
     with pytest.raises(NormalizationError, match="unknown driver '99'.*DriverNumber.*44"):
         adapt_results([{"DriverNumber": "99"}], DRIVERS, "2026-03-race")
+
+
+def test_adapt_results_converts_qualifying_times_and_preserves_missing_segments():
+    frame = adapt_results(
+        [
+            {
+                "DriverNumber": "44",
+                "Q1": pd.Timedelta("1.2345s"),
+                "Q2": pd.NaT,
+                "Q3": pd.Timedelta("1.0005s"),
+            },
+            {"DriverNumber": "1"},
+        ],
+        DRIVERS,
+        "2026-03-qualifying",
+    )
+
+    assert frame.select("driver_id", "q1_time_ms", "q2_time_ms", "q3_time_ms").to_dicts() == [
+        {"driver_id": "HAM", "q1_time_ms": 1_235, "q2_time_ms": None, "q3_time_ms": 1_001},
+        {"driver_id": "VER", "q1_time_ms": None, "q2_time_ms": None, "q3_time_ms": None},
+    ]
+
+
+@pytest.mark.parametrize("field", ["Q1", "Q2", "Q3"])
+def test_adapt_results_rejects_invalid_qualifying_time(field):
+    with pytest.raises(NormalizationError, match=f"{field.lower()} time"):
+        adapt_results([{"DriverNumber": "44", field: "not-a-duration"}], DRIVERS, "2026-03-qualifying")
+
+
+def test_adapt_results_rejects_negative_qualifying_time():
+    # Arrange: a qualifying segment time that precedes the session origin.
+    results = [{"DriverNumber": "44", "Q1": timedelta(seconds=-1)}]
+
+    # Act / Assert: a negative Q value fails explicitly rather than becoming null.
+    with pytest.raises(NormalizationError, match="q1 time must be a non-negative duration"):
+        adapt_results(results, DRIVERS, "2026-03-qualifying")
+
+
+def test_adapt_results_accepts_zero_qualifying_time():
+    # Arrange: a zero-duration qualifying segment is valid FastF1-shaped timing.
+    frame = adapt_results([{"DriverNumber": "44", "Q1": timedelta(0)}], DRIVERS, "2026-03-qualifying")
+
+    assert frame.item(0, "q1_time_ms") == 0
+
+
+def test_adapt_results_models_representative_q1_q2_q3_elimination_shape():
+    # Arrange: a representative grid spanning every elimination stage.
+    drivers = {**DRIVERS, "63": "RUS"}
+    results = [
+        {"DriverNumber": "44", "Position": 1, "Q1": pd.Timedelta(105_123, unit="ms"),
+         "Q2": pd.Timedelta(104_567, unit="ms"), "Q3": pd.Timedelta(103_999, unit="ms")},
+        {"DriverNumber": "63", "Position": 5, "Q1": pd.Timedelta(105_300, unit="ms"),
+         "Q2": pd.Timedelta(104_900, unit="ms"), "Q3": None},
+        {"DriverNumber": "1", "Position": 17, "Q1": pd.Timedelta(106_200, unit="ms"),
+         "Q2": None, "Q3": None},
+    ]
+
+    # Act: normalize the full qualifying results table.
+    rows = {row["driver_id"]: row for row in adapt_results(results, drivers, "2026-03-qualifying").to_dicts()}
+
+    # Assert: Q3 participant keeps all segments, and eliminated drivers keep only
+    # the segments they actually set, with later segments null.
+    assert rows["HAM"]["q1_time_ms"] == 105_123
+    assert rows["HAM"]["q2_time_ms"] == 104_567
+    assert rows["HAM"]["q3_time_ms"] == 103_999
+    assert rows["RUS"]["q1_time_ms"] == 105_300
+    assert rows["RUS"]["q2_time_ms"] == 104_900
+    assert rows["RUS"]["q3_time_ms"] is None
+    assert rows["VER"]["q1_time_ms"] == 106_200
+    assert rows["VER"]["q2_time_ms"] is None
+    assert rows["VER"]["q3_time_ms"] is None
+
+
+def test_qualifying_fixture_results_include_populated_and_missing_q_segments():
+    # Arrange: the deterministic qualifying fixture supplies Q values per driver.
+    session = build_qualifying_session()
+
+    # Act: normalize the qualifying results through the public adapter.
+    rows = adapt_results(session, DRIVERS, "2026-03-qualifying").to_dicts()
+
+    # Assert: populated Q1/Q2/Q3 for the front-row driver, missing segments for the eliminated driver.
+    assert rows[0] == {
+        "session_id": "2026-03-qualifying", "driver_id": "HAM",
+        "classified_position": "1", "grid_position": None, "status": "Finished",
+        "points": 0.0, "laps_completed": 18, "result_time_ms": None,
+        "q1_time_ms": 105_123, "q2_time_ms": 104_567, "q3_time_ms": 103_999,
+    }
+    assert rows[1] == {
+        "session_id": "2026-03-qualifying", "driver_id": "VER",
+        "classified_position": "2", "grid_position": None, "status": "Finished",
+        "points": 0.0, "laps_completed": 16, "result_time_ms": None,
+        "q1_time_ms": 105_200, "q2_time_ms": None, "q3_time_ms": None,
+    }
+
+
+def test_cancelled_q3_qualifying_fixture_leaves_q3_null_for_every_driver():
+    # Arrange / Act: normalize the cancelled-Q3 fixture variant.
+    rows = {
+        row["driver_id"]: row
+        for row in adapt_results(build_qualifying_session_with_cancelled_q3(), DRIVERS, "2026-03-qualifying").to_dicts()
+    }
+
+    # Assert: Q1/Q2 stay populated while Q3 is cancelled-equivalent null for both drivers.
+    assert rows["HAM"]["q1_time_ms"] == 105_123
+    assert rows["HAM"]["q2_time_ms"] == 104_567
+    assert rows["HAM"]["q3_time_ms"] is None
+    assert rows["VER"]["q1_time_ms"] == 105_200
+    assert rows["VER"]["q3_time_ms"] is None
+
+
+def test_qualifying_fixture_with_invalid_q1_fails_normalization():
+    # Arrange / Act / Assert: an invalid Q1 value must fail explicitly, not coerce to null.
+    with pytest.raises(NormalizationError, match="q1 time"):
+        adapt_results(build_qualifying_session_with_invalid_q1(), DRIVERS, "2026-03-qualifying")
 
 
 def test_adapt_results_accepts_canonical_driver_metadata_frame():

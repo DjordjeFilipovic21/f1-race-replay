@@ -1,0 +1,14 @@
+{
+  "format_version": "canonical-parquet-v2",
+  "manifest_version": 2,
+  "generation_id": "2026-07-15T120000Z-abc",
+  "tables": [],
+  "writer_settings": {
+    "use_pyarrow": false,
+    "compression": "zstd",
+    "compression_level": 3,
+    "statistics": "full",
+    "row_group_size": 262144,
+    "data_page_size": 1048576
+  }
+}

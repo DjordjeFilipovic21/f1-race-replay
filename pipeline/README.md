@@ -146,8 +146,8 @@ f1-replay-pipeline testing \
 f1-replay-pipeline browser \
   --canonical artifacts/demo-bahrain-2024 \
   --output artifacts/browser-bahrain-2024 \
-  --delivery-version 2024-bahrain-race-v1 \
-  --schema-root ../contracts/replay-data/v1/schemas
+  --delivery-version 2024-bahrain-race-v2 \
+  --schema-root ../contracts/replay-data/v2/schemas
 
 f1-replay-pipeline generate \
   --year 2024 --round 3 --session R --resume --publish-r2
@@ -167,7 +167,7 @@ f1-replay-pipeline generate \
   accepts `fastf1`, `f1timing`, or `ergast`; testing accepts only `fastf1` or
   `f1timing`.
 - `browser` requires a canonical parent selected by its validated `current.json`,
-  a separate output parent, one safe delivery version, and a local v1 schema
+  a separate output parent, one safe delivery version, and a local v2 schema
   directory. It performs no FastF1 or network loading.
 - `generate` accepts one or more `--round` values or `--all`. It generates the
   canonical and browser forms, atomically refreshes the local season catalog,
@@ -195,7 +195,7 @@ track assets, builds browser chunks, validates them against local schemas, and
 publishes them behind `browser-current.json`. Its stable stdout is:
 
 ```text
-delivery_version=2024-bahrain-race-v1
+delivery_version=2024-bahrain-race-v2
 ```
 
 Publication stages and validates the generation before atomically replacing
@@ -355,7 +355,7 @@ The manifest records two different hashes for every table:
 - **`byte_sha256`** hashes the exact published Parquet file bytes. It detects
   corruption or unexpected changes to the artifact itself.
 
-The native Polars writer uses the documented v1 settings (`use_pyarrow=False`,
+The native Polars writer uses the documented canonical settings (`use_pyarrow=False`,
 Zstandard compression level 3, full statistics, and fixed row/page sizes). Those
 settings improve repeatability but do **not** promise identical Parquet bytes
 across Polars/Arrow versions, operating systems, filesystems, or other writer
@@ -425,8 +425,8 @@ never filled; interval and previous-value fields are evaluated explicitly.
 - `status` comes from position telemetry. `lap` and `tyreCompound` use the
   containing half-open lap interval. Pit state is `true` only in a known pit
   interval, `false` for a known non-pit interval, otherwise `null`.
-- `trackDistanceMeters`, `gapToLeaderMs`, and `position` are always `null` in
-  v1; no source exists from which to fabricate them.
+- `trackDistanceMeters`, `gapToLeaderMs`, and `position` are populated when
+  source quality supports them; otherwise they remain `null`.
 - Leaderboard order comes from classified results, track status from its active
   interval, weather from the latest native observation, and race-control
   messages remain sparse events. Missing values remain `null`.
@@ -458,7 +458,7 @@ schema retriever is configured; Python `jsonschema` remains the differential tes
 oracle. It serializes and
 hashes each artifact once, then verifies staged descriptor size and streaming
 SHA-256 against the prepared digest without a second full-file byte copy. It
-validates every artifact against a caller-supplied local v1 `schema_root`
+validates every artifact against a caller-supplied local v2 `schema_root`
 registry without remote retrieval. It then writes a version under:
 
 ```text
@@ -483,7 +483,7 @@ Parquet. It does not perform network, GUI, or FastF1 loading.
 ### Minimal offline API example
 
 The canonical and track-asset paths below are supplied explicitly. The track
-asset file must validate against the replay-data v1 track-assets schema. No
+asset file must validate against the replay-data v2 track-assets schema. No
 network, GUI, FastF1 loading, or automatic canonical selection is implied.
 
 ```python
@@ -501,9 +501,9 @@ track_assets = generate_track_assets(snapshot)
 delivery = build_browser_delivery(snapshot, track_assets)
 published = publish_browser_delivery(
     browser_parent=browser_parent,
-    delivery_version="example-v1",
+    delivery_version="example-v2",
     delivery=delivery,
-    schema_root=Path("../contracts/replay-data/v1/schemas"),
+    schema_root=Path("../contracts/replay-data/v2/schemas"),
 )
 print(published.manifest_path)
 ```

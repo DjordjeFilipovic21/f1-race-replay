@@ -10,10 +10,19 @@ from types import MappingProxyType
 
 import polars as pl
 
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_contract import (
+    ContractVersion,
+    QUALIFYING_PHASE_COLUMN,
+    QUALIFYING_PHASES,
+    get_canonical_contract,
+)
+from f1_replay_pipeline.domain.canonical_schema import get_canonical_schema
+from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
+from f1_replay_pipeline.domain.session_modes import normalize_session_mode
 
 
 _CANONICAL_DRIVER_ID = re.compile(r"(?:[A-Z]{3}|D(?:0|[1-9][0-9]*))\Z")
+_QUALIFYING_MODES = frozenset({"qualifying", "sprint-qualifying", "sprint-shootout"})
 
 
 class CanonicalValidationError(ValueError):
@@ -109,10 +118,12 @@ CANONICAL_TABLE_METADATA: Mapping[str, CanonicalTableMetadata] = MappingProxyTyp
 )
 
 
-def validate_canonical_table(table_name: str, frame: pl.DataFrame) -> None:
-    """Raise an actionable error unless ``frame`` satisfies its canonical contract."""
+def validate_canonical_table(
+    table_name: str, frame: pl.DataFrame, *, version: ContractVersion | str = "v2",
+) -> None:
+    """Raise an actionable error unless ``frame`` satisfies its selected contract."""
     try:
-        schema = CANONICAL_TABLE_SCHEMAS[table_name]
+        schema = get_canonical_schema(table_name, version)
         metadata = CANONICAL_TABLE_METADATA[table_name]
     except KeyError as error:
         raise CanonicalValidationError(f"unknown canonical table: {table_name}") from error
@@ -129,6 +140,125 @@ def validate_canonical_table(table_name: str, frame: pl.DataFrame) -> None:
         _validate_driver_source_mapping(table_name, frame)
     _validate_key_order(table_name, frame, metadata.key_columns)
     _validate_unique_keys(table_name, frame, metadata.key_columns)
+    if get_canonical_contract(version).version == "v2":
+        _validate_v2_table_semantics(table_name, frame)
+
+
+def _validate_v2_table_semantics(table_name: str, frame: pl.DataFrame) -> None:
+    if table_name == "session_metadata":
+        session_id = frame.get_column("session_id").item(0)
+        try:
+            validate_generation_id(session_id)
+        except GenerationIdentityError as error:
+            raise CanonicalValidationError(
+                "v2 session_metadata session_id must be a safe non-blank identity component"
+            ) from error
+        mode = frame.get_column("session_mode").item(0)
+        try:
+            if normalize_session_mode(mode) != mode:
+                raise ValueError("session mode is not normalized")
+        except (TypeError, ValueError) as error:
+            raise CanonicalValidationError(
+                "v2 session_metadata session_mode must be normalized and non-null"
+            ) from error
+    elif table_name == "results":
+        invalid = [
+            column for column in ("q1_time_ms", "q2_time_ms", "q3_time_ms")
+            if frame.filter(pl.col(column).is_not_null() & (pl.col(column) < 0)).height
+        ]
+        if invalid:
+            raise CanonicalValidationError(
+                "results qualifying times must contain non-negative integer milliseconds: "
+                f"{', '.join(invalid)}"
+            )
+    elif table_name == "laps":
+        invalid = sorted({
+            value for value in frame.get_column(QUALIFYING_PHASE_COLUMN).drop_nulls().to_list()
+            if value not in QUALIFYING_PHASES
+        })
+        if invalid:
+            raise CanonicalValidationError(
+                "laps qualifying_phase must be null or one of Q1, Q2, Q3: "
+                f"{invalid}"
+            )
+
+
+def validate_canonical_frames(
+    frames: Mapping[str, pl.DataFrame], *, version: ContractVersion | str = "v2",
+) -> None:
+    """Validate a complete canonical generation, including v2 relationships.
+
+    Table validation alone cannot establish that a generation describes one
+    session.  The v1 boundary intentionally retains its historical per-table
+    behavior; v2 additionally requires a safe, normalized session identity and
+    rejects references to drivers that are not declared by the generation.
+    """
+    if not isinstance(frames, Mapping):
+        raise CanonicalValidationError("canonical frames must be a mapping")
+    expected = set(CANONICAL_TABLE_METADATA)
+    if set(frames) != expected:
+        raise CanonicalValidationError(
+            f"canonical frames must contain exactly ten tables; "
+            f"missing={sorted(expected - set(frames))}; extra={sorted(set(frames) - expected)}"
+        )
+    for table_name, frame in frames.items():
+        if not isinstance(frame, pl.DataFrame):
+            raise CanonicalValidationError(f"{table_name} must be a Polars DataFrame")
+        validate_canonical_table(table_name, frame, version=version)
+    if get_canonical_contract(version).version == "v2":
+        _validate_v2_frame_relationships(frames)
+
+
+def _validate_v2_frame_relationships(frames: Mapping[str, pl.DataFrame]) -> None:
+    metadata = frames["session_metadata"]
+    session_id = metadata.get_column("session_id").item(0)
+    try:
+        validate_generation_id(session_id)
+    except GenerationIdentityError as error:
+        raise CanonicalValidationError(
+            "v2 session_metadata session_id must be a safe non-blank identity component"
+        ) from error
+
+    mode = metadata.get_column("session_mode").item(0)
+    try:
+        if normalize_session_mode(mode) != mode:
+            raise ValueError("session mode is not normalized")
+    except (TypeError, ValueError) as error:
+        raise CanonicalValidationError(
+            "v2 session_metadata session_mode must be normalized and non-null"
+        ) from error
+
+    if mode not in _QUALIFYING_MODES:
+        laps = frames["laps"]
+        if laps.get_column(QUALIFYING_PHASE_COLUMN).is_not_null().any():
+            raise CanonicalValidationError(
+                "v2 laps qualifying_phase must be null for non-qualifying sessions"
+            )
+
+    for table_name, frame in frames.items():
+        mismatches = frame.filter(pl.col("session_id") != session_id).height
+        if mismatches:
+            raise CanonicalValidationError(
+                f"v2 {table_name} session_id must match session_metadata session_id"
+            )
+
+    declared_drivers = set(frames["drivers"].get_column("driver_id").drop_nulls().to_list())
+    for table_name in ("car_telemetry", "position_telemetry", "laps", "stints", "results"):
+        referenced = set(frames[table_name].get_column("driver_id").drop_nulls().to_list())
+        unknown = sorted(referenced - declared_drivers)
+        if unknown:
+            raise CanonicalValidationError(
+                f"v2 {table_name} references undeclared driver_id values: {unknown}"
+            )
+    messages = frames["race_control_messages"]
+    if messages.height and "driver_id" in messages.columns:
+        unknown = sorted(
+            set(messages.get_column("driver_id").drop_nulls().to_list()) - declared_drivers
+        )
+        if unknown:
+            raise CanonicalValidationError(
+                f"v2 race_control_messages references undeclared driver_id values: {unknown}"
+            )
 
 
 def _validate_schema(table_name: str, frame: pl.DataFrame, expected: Mapping[str, pl.DataType]) -> None:
@@ -275,5 +405,5 @@ def _validate_unique_keys(table_name: str, frame: pl.DataFrame, key_columns: tup
 
 __all__ = [
     "CANONICAL_TABLE_METADATA", "CanonicalTableMetadata", "CanonicalValidationError",
-    "validate_canonical_table",
+    "validate_canonical_frames", "validate_canonical_table",
 ]

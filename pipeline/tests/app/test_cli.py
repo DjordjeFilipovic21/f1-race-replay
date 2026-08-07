@@ -68,15 +68,15 @@ def test_browser_command_builds_request_and_prints_delivery_version(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=browser_service)
 
     assert status == 0
     assert received == [BrowserPublishRequest(
-        Path("artifacts/canonical"), Path("artifacts/browser"), "bahrain-v1",
-        Path("contracts/replay-data/v1/schemas"),
+        Path("artifacts/canonical"), Path("artifacts/browser"), "bahrain-v2",
+        Path("contracts/replay-data/v2/schemas"),
     )]
-    assert capsys.readouterr().out == "delivery_version=bahrain-v1\n"
+    assert capsys.readouterr().out == "delivery_version=bahrain-v2\n"
 
 
 def test_browser_command_flushes_granular_progress_to_stderr(
@@ -95,7 +95,7 @@ def test_browser_command_flushes_granular_progress_to_stderr(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=GranularBrowserService())
 
     captured = capsys.readouterr()
@@ -125,7 +125,7 @@ def test_browser_keyboard_interrupt_closes_progress_without_traceback(
 
     status = main([
         "browser", "--canonical", "artifacts/canonical", "--output", "artifacts/browser",
-        "--delivery-version", "bahrain-v1", "--schema-root", "contracts/replay-data/v1/schemas",
+        "--delivery-version", "bahrain-v2", "--schema-root", "contracts/replay-data/v2/schemas",
     ], browser_service=InterruptedBrowserService())
 
     captured = capsys.readouterr()
@@ -194,6 +194,42 @@ def test_parser_rejects_abbreviated_or_incomplete_arguments(capsys: pytest.Captu
     assert abbreviated.value.code == 2
     assert incomplete.value.code == 2
     assert "error:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments"),
+    [
+        ("generate", ["--year", "2026", "--round", "1"]),
+        ("verify", ["--year", "2026"]),
+    ],
+)
+def test_generation_commands_default_to_v2_schema_root(command: str, arguments: list[str]) -> None:
+    namespace = build_parser().parse_args([command, *arguments])
+
+    assert namespace.schema_root == Path("contracts/replay-data/v2/schemas")
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments"),
+    [
+        ("generate", ["--year", "2026", "--round", "1"]),
+        ("verify", ["--year", "2026"]),
+    ],
+)
+def test_generation_commands_accept_explicit_schema_root(command: str, arguments: list[str]) -> None:
+    override = Path("custom/schema-root")
+    namespace = build_parser().parse_args([command, *arguments, "--schema-root", str(override)])
+
+    assert namespace.schema_root == override
+
+
+@pytest.mark.parametrize("command", ["browser", "generate", "verify"])
+def test_schema_root_help_identifies_v2(command: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        build_parser().parse_args([command, "--help"])
+
+    assert raised.value.code == 0
+    assert "Local replay-data v2 schema directory." in capsys.readouterr().out
 
 
 def test_browser_parser_rejects_unsafe_version_without_calling_service() -> None:

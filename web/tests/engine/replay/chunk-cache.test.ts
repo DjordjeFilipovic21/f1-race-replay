@@ -5,7 +5,7 @@ import { loadReplayIndex } from '../../../src/data/replay/loader'
 import type { ReplayChunk, ReplayIndex, ReplaySource } from '../../../src/data/replay/types'
 import { createChunkCache } from '../../../src/engine/replay/chunk-cache'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v2/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
 
 describe('replay-engine chunk cache', () => {

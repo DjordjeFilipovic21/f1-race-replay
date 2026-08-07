@@ -22,6 +22,7 @@ MIN_GEOMETRIC_WRAP_DECREASE_RATIO = 0.80
 
 class ProgressMode(str, Enum):
     ACTIVE = "active"
+    PRE_PIT = "pre_pit"
     PIT = "pit"
     FINISHED = "finished"
     RETIRED = "retired"
@@ -122,7 +123,7 @@ def advance_progress(
         return _terminal(terminal, mode)
     if mode is ProgressMode.FINISHED:
         return _finish(state, session_time_ms, lap_number, circuit_length_meters, projection)
-    if mode is ProgressMode.PIT:
+    if mode in (ProgressMode.PRE_PIT, ProgressMode.PIT):
         return _pit(_replace(state, last_session_time_ms=session_time_ms), mode)
     if projection is None:
         return _missing(_replace(state, last_session_time_ms=session_time_ms), mode, session_time_ms)

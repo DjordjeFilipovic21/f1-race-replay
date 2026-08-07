@@ -1,4 +1,11 @@
 .live-track-map { min-width: 0; }
+.live-track-map__legend { align-items: center; background: #1a2025; border: 1px solid var(--border); color: var(--text); display: flex; flex-wrap: wrap; gap: .4rem .85rem; margin-bottom: .5rem; min-width: 0; padding: .5rem .65rem; }
+.live-track-map__legend-title { color: var(--text-muted); font-family: var(--font-display); font-size: .65rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.live-track-map__legend-list { align-items: center; display: flex; flex-wrap: wrap; gap: .35rem .85rem; list-style: none; margin: 0; min-width: 0; padding: 0; }
+.live-track-map__legend-item { align-items: center; display: inline-flex; font-size: .78rem; gap: .4rem; line-height: 1.25; white-space: nowrap; }
+.live-track-map__legend-swatch { border: 2px solid #111315; border-radius: 999px; display: inline-block; flex: 0 0 auto; height: .8rem; width: .8rem; }
+.live-track-map__legend-swatch--outlap { border-color: #f0bc53; border-style: dashed; }
+.live-track-map__legend-swatch--flying { border-color: var(--focus); }
 .live-track-map__canvas { position: relative; }
 .live-track-map__status { align-items: center; background: #1a2025; border: 1px solid var(--border); color: var(--text-muted); display: inline-flex; font-family: var(--font-display); font-size: .65rem; font-weight: 800; left: .5rem; letter-spacing: .07em; margin: 0; min-height: 1.75rem; padding: .3rem .5rem; pointer-events: none; position: absolute; text-transform: uppercase; top: .5rem; width: fit-content; z-index: 1; }
 .live-track-map__status--yellow { background: rgb(240 188 83 / 14%); border-color: rgb(240 188 83 / 55%); color: #f0bc53; }
@@ -10,9 +17,12 @@
 .live-track-map__center-line { fill: none; stroke: var(--text-muted); stroke-dasharray: 5 6; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .live-track-map__start-finish { stroke: var(--focus); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .live-track-map__marker circle { stroke: #111315; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.live-track-map__marker[data-qualifying-lap-state="outlap"] .live-track-map__driver-dot { stroke: #f0bc53; stroke-dasharray: 2 2; stroke-width: 3; }
+.live-track-map__marker[data-qualifying-lap-state="flying"] .live-track-map__driver-dot { stroke: var(--focus); stroke-width: 3; }
 .live-track-map__safety-car-marker circle { fill: #f0bc53; stroke: #111315; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .live-track-map__safety-car-marker text { fill: #111315; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 900; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__marker--selected .live-track-map__driver-dot { filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 6px currentColor); }
 .live-track-map__marker--selected text { fill: #f5f6f7; font-weight: 900; }
 .live-track-map__marker text { fill: #111315; font-family: var(--font-display); font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .live-track-map__empty { color: var(--text-muted); font-size: .9rem; }
+.live-track-map__position-notice { background: #1a2025; border: 1px solid var(--border); color: var(--text-muted); font-size: .8rem; left: .5rem; margin: 0; padding: .4rem .55rem; position: absolute; right: .5rem; text-align: center; top: 3rem; z-index: 1; }

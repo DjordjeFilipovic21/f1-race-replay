@@ -14,6 +14,7 @@ from pathlib import Path
 import stat
 
 from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_browser_delivery_pointer
+from f1_replay_pipeline.domain.canonical_contract import CANONICAL_PARQUET_V2
 from f1_replay_pipeline.domain.dataset_manifest import parse_current_pointer, parse_manifest, serialize_deterministic_json
 from f1_replay_pipeline.domain.generation_identity import validate_generation_id
 from f1_replay_pipeline.storage.generation_publication import (
@@ -25,8 +26,8 @@ from f1_replay_pipeline.storage.generation_publication import (
 )
 
 
-CANONICAL_POINTER_FORMAT = "canonical-parquet-v1"
-BROWSER_POINTER_FORMAT = "browser-delivery-v1"
+CANONICAL_POINTER_FORMAT = CANONICAL_PARQUET_V2
+BROWSER_POINTER_FORMAT = "browser-delivery-v2"
 
 
 def _safe(value: str, label: str) -> str:
@@ -212,13 +213,20 @@ def write_session_canonical_pointer(
 ) -> Path:
     """Atomically replace one session snapshot without touching its generation."""
     return write_session_pointer_bytes(
-        canonical_root, session_code, "current.json", deterministic_pointer_bytes(generation_id, manifest_sha256),
+        canonical_root,
+        session_code,
+        "current.json",
+        deterministic_pointer_bytes(
+            generation_id, manifest_sha256, format_version=CANONICAL_POINTER_FORMAT,
+        ),
     )
 
 
 def deterministic_session_canonical_pointer_bytes(generation_id: str, manifest_sha256: str) -> bytes:
     """Return the canonical race-pointer bytes used by a session snapshot."""
-    return deterministic_pointer_bytes(generation_id, manifest_sha256)
+    return deterministic_pointer_bytes(
+        generation_id, manifest_sha256, format_version=CANONICAL_POINTER_FORMAT,
+    )
 
 
 def write_session_browser_pointer(
@@ -262,6 +270,8 @@ def read_session_canonical_pointer(canonical_root: Path, session_code: str) -> G
     _require_directory(canonical_root)
     guarded_pointer = read_regular_file_no_follow(pointer_path, "session canonical pointer")
     pointer = parse_current_pointer(guarded_pointer.data)
+    if pointer.format_version != CANONICAL_POINTER_FORMAT:
+        raise ValueError("session canonical pointer must use canonical-parquet-v2")
     generation_id = _safe(pointer.generation_id, "generation_id")
     expected_path = f"generations/{generation_id}/manifest.json"
     if pointer.manifest_path != expected_path:
@@ -276,6 +286,11 @@ def read_session_canonical_pointer(canonical_root: Path, session_code: str) -> G
     manifest = parse_manifest(guarded_manifest.data)
     if manifest.generation_id != generation_id:
         raise ValueError("session canonical manifest generation disagrees")
+    if (
+        getattr(manifest, "format_version", CANONICAL_POINTER_FORMAT) != CANONICAL_POINTER_FORMAT
+        or getattr(manifest, "manifest_version", 2) != 2
+    ):
+        raise ValueError("session canonical manifest must use canonical-parquet-v2")
     verify_regular_file_identity(manifest_path, guarded_manifest, "session canonical manifest")
     verify_regular_file_identity(pointer_path, guarded_pointer, "session canonical pointer")
     return GenerationPublicationResult(generation, manifest_path, pointer_path, pointer.manifest_sha256)
@@ -304,8 +319,12 @@ def read_session_browser_pointer(browser_root: Path, session_code: str) -> Sessi
     if pointer.get("manifestSha256") != digest:
         raise ValueError("session browser pointer manifest checksum disagrees")
     manifest = json.loads(guarded_manifest.data)
-    if manifest.get("deliveryVersion") != version:
-        raise ValueError("session browser manifest delivery version disagrees")
+    if (
+        manifest.get("formatVersion") != BROWSER_POINTER_FORMAT
+        or manifest.get("contractVersion") != "v2"
+        or manifest.get("deliveryVersion") != version
+    ):
+        raise ValueError("session browser manifest contract identity disagrees")
     verify_regular_file_identity(manifest_path, guarded_manifest, "session browser manifest")
     verify_regular_file_identity(pointer_path, guarded_pointer, "session browser pointer")
     return SessionBrowserPointer(version, digest, pointer_path, manifest_path)

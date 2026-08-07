@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar",
-  "title": "Browser replay weather sidecar",
-  "description": "Optional native-cadence weather observations for a browser replay. Arrays are aligned, and timeMs is strictly ascending.",
+  "$id": "urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar",
+  "title": "Browser delivery v2 weather sidecar",
+  "description": "Optional native-cadence weather observations for a v2 browser replay. Arrays are aligned, and timeMs is strictly ascending.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,6 +17,7 @@
     "windDirectionDeg",
     "windSpeedMps"
   ],
+  "$comment": "Equal-length column arrays and strictly ascending timeMs are mandatory semantic checks enforced by the delivery model and loader; JSON Schema enforces non-negative unique timestamps and per-array ranges only. Measurements are nullable and fail closed; sentinel-prone FastF1 zeros are sanitized to null at the build boundary per the zero-sentinel policy. The v1 weather schema remains a frozen compatibility reference only; a v2 manifest and v2 fixtures must never reference it.",
   "$defs": {
     "fixtureId": {
       "type": "string",
@@ -70,7 +71,7 @@
       ],
       "minimum": 0
     },
-    "weatherSidecarFileReference": {
+    "reference": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -83,7 +84,7 @@
           "const": "weather-sidecar.json"
         },
         "schemaId": {
-          "const": "urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar"
+          "const": "urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar"
         },
         "sha256": {
           "type": "string",
@@ -94,7 +95,7 @@
   },
   "properties": {
     "contractVersion": {
-      "const": "v1"
+      "const": "v2"
     },
     "fixtureId": {
       "$ref": "#/$defs/fixtureId"

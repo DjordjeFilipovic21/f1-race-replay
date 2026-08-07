@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from itertools import groupby
 import math
 import re
@@ -10,26 +11,47 @@ from typing import cast
 
 import polars as pl
 
-from ...domain.canonical_schema import LAPS_SCHEMA, STINTS_SCHEMA
+from ...domain.canonical_schema import LAPS_SCHEMA_V2, STINTS_SCHEMA_V2
 from ...domain.normalizers import NormalizationError, normalize_nullable_scalar, normalize_session_time_ms
+from ...domain.session_modes import normalize_session_mode
 from ...domain.validators import validate_canonical_table
 
 
 _INT16_MAX = 32_767
 _CANONICAL_DRIVER_ID = re.compile(r"(?:[A-Z]{3}|D(?:0|[1-9][0-9]*))\Z")
+_QUALIFYING_MODES = frozenset({"qualifying", "sprint-qualifying", "sprint-shootout"})
 
 
-def adapt_laps(session: object, session_id: str, driver_ids: Mapping[str, str]) -> pl.DataFrame:
+@dataclass(frozen=True)
+class _SourceLap:
+    position: int
+    source_index: object | None
+    record: Mapping[str, object]
+    composite_identity: tuple[object, ...]
+
+
+def adapt_laps(
+    session: object,
+    session_id: str,
+    driver_ids: Mapping[str, str],
+    session_mode: str | None = None,
+) -> pl.DataFrame:
     """Adapt ``session.laps`` without consulting source ``Driver`` labels.
 
     ``driver_ids`` is the already-normalized, session-scoped mapping from the
     original FastF1 driver-number key to its canonical driver identifier.
     """
     _require_session_id(session_id)
-    rows = [_lap_row(record, session_id, driver_ids) for record in _records(session)]
+    source_laps = _source_laps(session)
+    phase_by_position = _qualifying_phase_by_position(session, source_laps, session_mode)
+    rows = []
+    for source_lap in source_laps:
+        row = _lap_row(source_lap.record, session_id, driver_ids)
+        row["qualifying_phase"] = phase_by_position.get(source_lap.position)
+        rows.append(row)
     _reject_duplicate_laps(rows)
-    frame = pl.DataFrame(sorted(rows, key=_lap_key), schema=LAPS_SCHEMA, strict=True)
-    validate_canonical_table("laps", frame)
+    frame = pl.DataFrame(sorted(rows, key=_lap_key), schema=LAPS_SCHEMA_V2, strict=True)
+    validate_canonical_table("laps", frame, version="v2")
     return frame
 
 
@@ -50,8 +72,8 @@ def adapt_stints(
         for _, driver_laps in groupby(laps, key=lambda row: (row["session_id"], row["driver_id"]))
         for _, group in _contiguous_stint_groups(list(driver_laps))
     ]
-    frame = pl.DataFrame(sorted(stints, key=_stint_key), schema=STINTS_SCHEMA, strict=True)
-    validate_canonical_table("stints", frame)
+    frame = pl.DataFrame(sorted(stints, key=_stint_key), schema=STINTS_SCHEMA_V2, strict=True)
+    validate_canonical_table("stints", frame, version="v2")
     return frame
 
 
@@ -60,12 +82,35 @@ normalize_stints = adapt_stints
 
 
 def _records(session: object) -> Iterable[Mapping[str, object]]:
+    return tuple(source_lap.record for source_lap in _source_laps(session))
+
+
+def _source_laps(session: object) -> tuple[_SourceLap, ...]:
     try:
         laps = getattr(session, "laps")
     except AttributeError as error:
         raise NormalizationError("loaded session is missing required laps") from error
     if laps is None:
         return ()
+    iterrows = getattr(laps, "iterrows", None)
+    if callable(iterrows):
+        source_laps: list[_SourceLap] = []
+        rows = cast(Iterable[tuple[object, object]], iterrows())
+        for position, (source_index, row) in enumerate(rows):
+            converter = getattr(row, "to_dict", None)
+            record = converter() if callable(converter) else row
+            if not isinstance(record, Mapping):
+                raise NormalizationError("lap records must be mappings")
+            source_laps.append(_source_lap(position, source_index, record))
+        return tuple(source_laps)
+    return tuple(_source_lap(position, None, record) for position, record in enumerate(_records_from_table(laps)))
+
+
+def _source_lap(position: int, source_index: object | None, record: Mapping[str, object]) -> _SourceLap:
+    return _SourceLap(position, source_index, record, _lap_composite_identity(record))
+
+
+def _records_from_table(laps: object) -> tuple[Mapping[str, object], ...]:
     to_dicts = getattr(laps, "to_dicts", None)
     if callable(to_dicts):
         return _mapping_records(to_dicts())
@@ -78,6 +123,137 @@ def _records(session: object) -> Iterable[Mapping[str, object]]:
     if isinstance(laps, Iterable) and not isinstance(laps, (str, bytes, Mapping)):
         return _mapping_records(laps)
     raise NormalizationError("session laps must provide iterable mapping records")
+
+
+def _qualifying_phase_by_position(
+    session: object,
+    source_laps: tuple[_SourceLap, ...],
+    session_mode: str | None,
+) -> dict[int, str]:
+    mode = _session_mode(session, session_mode)
+    if mode not in _QUALIFYING_MODES:
+        return {}
+    laps = getattr(session, "laps", None)
+    splitter = getattr(laps, "split_qualifying_sessions", None)
+    if not callable(splitter):
+        raise NormalizationError(
+            "qualifying phase assignment requires split_qualifying_sessions"
+        )
+    try:
+        raw_partitions = splitter()
+    except Exception as error:
+        if type(error).__name__ in {"DataNotLoadedError", "NoLapDataError"}:
+            raise NormalizationError(
+                "qualifying phase assignment failed: loaded session status data is required"
+            ) from error
+        raise NormalizationError(
+            "qualifying phase assignment failed while obtaining authoritative partitions"
+        ) from error
+    if not isinstance(raw_partitions, Iterable) or isinstance(raw_partitions, (str, bytes, Mapping)):
+        raise NormalizationError("split_qualifying_sessions must return Q1, Q2, and Q3 partitions")
+    partitions = tuple(raw_partitions)
+    if len(partitions) != 3:
+        raise NormalizationError("split_qualifying_sessions must return Q1, Q2, and Q3 partitions")
+
+    source_by_index = _unique_source_index_map(source_laps)
+    if len(source_by_index) != len(source_laps):
+        raise NormalizationError(
+            "qualifying phase assignment requires unique authoritative source lap indices"
+        )
+    source_positions = {source_lap.position for source_lap in source_laps}
+
+    assignments: dict[int, str] = {}
+    for phase_number, partition in enumerate(partitions, start=1):
+        if partition is None:
+            continue
+        for partition_index, record in _partition_records(partition):
+            position = _match_source_lap(partition_index, record, source_by_index)
+            if position is None:
+                raise NormalizationError(
+                    "qualifying partition contains an unknown or mismatched source lap index"
+                )
+            if position in assignments:
+                raise NormalizationError("qualifying partition contains a duplicate lap")
+            assignments[position] = f"Q{phase_number}"
+    if set(assignments) != source_positions:
+        raise NormalizationError(
+            "qualifying phase assignment is incomplete: every source lap must belong to exactly one partition"
+        )
+    return assignments
+
+
+def _session_mode(session: object, explicit_mode: str | None) -> str | None:
+    value = explicit_mode if explicit_mode is not None else getattr(session, "name", None)
+    if value is None:
+        return None
+    try:
+        return normalize_session_mode(value)
+    except NormalizationError:
+        return None
+
+
+def _unique_source_index_map(source_laps: tuple[_SourceLap, ...]) -> dict[object, _SourceLap]:
+    indexed: dict[object, _SourceLap] = {}
+    for source_lap in source_laps:
+        if source_lap.source_index is None:
+            return {}
+        try:
+            if source_lap.source_index in indexed:
+                return {}
+            indexed[source_lap.source_index] = source_lap
+        except TypeError:
+            return {}
+    return indexed
+
+
+def _partition_records(partition: object) -> tuple[tuple[object | None, Mapping[str, object]], ...]:
+    iterrows = getattr(partition, "iterrows", None)
+    if callable(iterrows):
+        records = []
+        rows = cast(Iterable[tuple[object, object]], iterrows())
+        for source_index, row in rows:
+            converter = getattr(row, "to_dict", None)
+            record = converter() if callable(converter) else row
+            if not isinstance(record, Mapping):
+                raise NormalizationError("qualifying partition records must be mappings")
+            records.append((source_index, record))
+        return tuple(records)
+    return tuple((None, record) for record in _records_from_table(partition))
+
+
+def _match_source_lap(
+    partition_index: object | None,
+    record: Mapping[str, object],
+    source_by_index: Mapping[object, _SourceLap],
+) -> int | None:
+    if partition_index is None:
+        return None
+    try:
+        source_lap = source_by_index[partition_index]
+    except (KeyError, TypeError):
+        return None
+    if source_lap.composite_identity != _lap_composite_identity(record):
+        return None
+    return source_lap.position
+
+
+def _lap_composite_identity(record: Mapping[str, object]) -> tuple[object, ...]:
+    return (
+        _identity_value(record.get("DriverNumber")),
+        _identity_value(record.get("Time")),
+        _identity_value(record.get("LapStartTime")),
+        _identity_value(record.get("LapNumber")),
+    )
+
+
+def _identity_value(value: object | None) -> object | None:
+    if _is_missing(value):
+        return None
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
 
 
 def _mapping_records(records: object) -> tuple[Mapping[str, object], ...]:

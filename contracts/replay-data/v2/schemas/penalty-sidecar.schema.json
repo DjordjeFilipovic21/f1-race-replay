@@ -1,0 +1,7 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar",
+  "title":"Browser delivery v2 issued-penalty sidecar","type":"object","additionalProperties":false,"required":["contractVersion","fixtureId","penaltyIssuances"],
+  "$defs":{"driver":{"type":"string","pattern":"^[A-Z0-9]{2,4}$"},"time":{"type":"integer","minimum":0,"maximum":9223372036854775807},"reference":{"type":"object","additionalProperties":false,"required":["path","schemaId","sha256"],"properties":{"path":{"const":"penalty-sidecar.json"},"schemaId":{"const":"urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},
+  "properties":{"contractVersion":{"const":"v2"},"fixtureId":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"penaltyIssuances":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["driverId","sessionTimeMs","penaltyType","reason","rawMessage"],"properties":{"driverId":{"$ref":"#/$defs/driver"},"sessionTimeMs":{"$ref":"#/$defs/time"},"penaltyType":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1},"rawMessage":{"type":"string","minLength":1},"lapNumber":{"type":"integer","minimum":1}}}}}
+}

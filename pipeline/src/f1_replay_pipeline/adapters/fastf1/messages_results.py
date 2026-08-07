@@ -9,7 +9,7 @@ import re
 
 import polars as pl
 
-from ...domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA, RESULTS_SCHEMA
+from ...domain.canonical_schema import RACE_CONTROL_MESSAGES_SCHEMA_V2, RESULTS_SCHEMA_V2
 from ...domain.normalizers import (
     NormalizationError,
     normalize_nullable_scalar,
@@ -34,8 +34,8 @@ def adapt_race_control_messages(
     rows.sort(key=_message_sort_key)
     for index, row in enumerate(rows):
         row["message_index"] = index
-    frame = pl.DataFrame(rows, schema=RACE_CONTROL_MESSAGES_SCHEMA)
-    validate_canonical_table("race_control_messages", frame)
+    frame = pl.DataFrame(rows, schema=RACE_CONTROL_MESSAGES_SCHEMA_V2)
+    validate_canonical_table("race_control_messages", frame, version="v2")
     return frame
 
 
@@ -52,13 +52,218 @@ def adapt_results(
         for record in _records(session_or_results, "results")
     ]
     _reject_duplicate_results(rows)
-    frame = pl.DataFrame(sorted(rows, key=lambda row: (row["session_id"], row["driver_id"])), schema=RESULTS_SCHEMA)
-    validate_canonical_table("results", frame)
+    frame = pl.DataFrame(
+        sorted(rows, key=lambda row: (row["session_id"], row["driver_id"])),
+        schema=RESULTS_SCHEMA_V2,
+    )
+    validate_canonical_table("results", frame, version="v2")
     return frame
 
 
 normalize_race_control_messages = adapt_race_control_messages
 normalize_results = adapt_results
+
+
+# ---------------------------------------------------------------------------
+# Qualifying-safe incident marker evidence
+# ---------------------------------------------------------------------------
+
+_CANONICAL_INCIDENT_DRIVER = re.compile(r"(?:[A-Z]{3}|D(?:0|[1-9][0-9]*))\Z")
+_CAR = re.compile(
+    r"\bCAR\s*#?\s*(?P<number>[0-9]+)"
+    r"(?:\s*\((?P<abbreviation>[A-Za-z]{3})\))?",
+    re.IGNORECASE,
+)
+# Conservative starter set of FastF1 terminal on-track forms (external evidence:
+# "CAR 16 CRASH", "CAR 44 STOPS").  Requiring the terminal verb immediately
+# after the car identity prevents non-terminal phrases such as "CAR 44 PIT STOP"
+# from becoming incident markers. Ambiguous single words such as OUT remain
+# excluded; unrecognized forms are omitted silently.
+_TERMINAL_CAR_EVENT = re.compile(
+    r"\bCAR(?:\s*#?\s*[0-9]+(?:\s*\([A-Za-z]{3}\))?)?\s+"
+    r"(?:CRASH|STOPS?|STOPPED|RETIRED|STALLED)\b",
+    re.IGNORECASE,
+)
+_INCIDENT_ALIAS_KEYS = (
+    "source_driver_key", "driver_number", "RacingNumber", "DriverNumber",
+    "abbreviation", "driver_abbreviation", "code", "short_code", "Driver",
+)
+
+
+class QualifyingIncidentEvidenceError(ValueError):
+    """Raised when qualifying incident evidence cannot be resolved safely."""
+
+
+@dataclass(frozen=True)
+class QualifyingIncidentMarker:
+    """One qualifying-safe incident marker derived from canonical evidence."""
+
+    driver_id: str
+    time_ms: int
+    raw_message: str
+    source: str = "race-control-car-event"
+    lap_number: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.driver_id, str) or not _CANONICAL_INCIDENT_DRIVER.fullmatch(self.driver_id):
+            raise ValueError("qualifying incident marker driver_id is invalid")
+        if type(self.time_ms) is not int or self.time_ms < 0:
+            raise ValueError("qualifying incident marker time_ms must be a non-negative integer")
+        if not isinstance(self.raw_message, str) or not self.raw_message.strip():
+            raise ValueError("qualifying incident marker raw_message must be a non-empty string")
+        if self.source != "race-control-car-event":
+            raise ValueError("qualifying incident marker source is invalid")
+        if self.lap_number is not None and (type(self.lap_number) is not int or self.lap_number < 1):
+            raise ValueError("qualifying incident marker lap_number must be a positive integer or null")
+
+
+def parse_qualifying_incident_markers(
+    messages: object,
+    driver_metadata: object | None = None,
+) -> tuple[QualifyingIncidentMarker, ...]:
+    """Derive deterministic, fail-closed qualifying incident markers.
+
+    A marker is produced only when a canonical race-control row is a
+    ``CarEvent`` category with an explicit terminal on-track form
+    (CRASH/STOPS?/STOPPED/RETIRED/STALLED), a resolvable canonical driver
+    identity, and a causal timestamp.  Rows that are not ``CarEvent`` or carry
+    no terminal form are ignored.  A recognized terminal form with a missing or
+    ambiguous driver identity, a contradictory identity, or a missing timestamp
+    fails closed (raises) rather than publishing a guessed marker.  This parser
+    never consults position-sample status, results status, or missing-sample
+    heuristics, and it never fabricates ``OUT``/DNF semantics.
+    """
+    aliases = _incident_driver_aliases(driver_metadata)
+    markers = [
+        marker
+        for record in _records(messages, "race_control_messages")
+        for marker in (_parse_incident_record(record, aliases),)
+        if marker is not None
+    ]
+    return tuple(sorted(markers, key=_incident_marker_sort_key))
+
+
+def _parse_incident_record(
+    record: Mapping[str, object],
+    aliases: Mapping[str, frozenset[str]],
+) -> QualifyingIncidentMarker | None:
+    category = _first_text(record, "category", "Category")
+    if category is None or not _is_car_event_category(category):
+        return None
+    raw_message = _first_text(record, "message", "Message", "raw_message", "rawMessage")
+    if raw_message is None:
+        return None
+    if _TERMINAL_CAR_EVENT.search(raw_message) is None:
+        return None
+    time_ms = _first_non_negative_int(record, "session_time_ms", "sessionTimeMs")
+    if time_ms is None:
+        raise QualifyingIncidentEvidenceError(
+            "qualifying incident marker has no canonical timestamp"
+        )
+    driver_id = _resolve_incident_driver(record, raw_message, aliases)
+    if driver_id is None:
+        raise QualifyingIncidentEvidenceError(
+            "qualifying incident marker has an ambiguous or missing driver"
+        )
+    lap_number = _first_positive_int(record, "lap_number", "lapNumber", "Lap")
+    return QualifyingIncidentMarker(
+        driver_id=driver_id,
+        time_ms=time_ms,
+        raw_message=raw_message,
+        lap_number=lap_number,
+    )
+
+
+def _is_car_event_category(value: str) -> bool:
+    return "".join(value.split()).casefold() == "carevent"
+
+
+def _resolve_incident_driver(
+    record: Mapping[str, object],
+    raw_message: str,
+    aliases: Mapping[str, frozenset[str]],
+) -> str | None:
+    """Return the single canonical driver for an incident, or None when ambiguous.
+
+    The canonical ``driver_id`` must agree with the message's embedded
+    ``CAR <number>``/abbreviation reference when present; disagreement or
+    ambiguity is a hard failure, never a guess.
+    """
+    candidates: set[str] = set()
+    explicit = _canonical_incident_driver(_first_value(record, "driver_id", "driverId"))
+    if explicit is not None:
+        candidates.add(explicit)
+    car_match = _CAR.search(raw_message)
+    if car_match is not None:
+        candidates.update(aliases.get(_incident_alias_key(car_match.group("number")), frozenset()))
+        abbreviation = car_match.group("abbreviation")
+        if abbreviation is not None:
+            candidates.update(aliases.get(_incident_alias_key(abbreviation), frozenset()))
+            direct = _canonical_incident_driver(abbreviation)
+            if direct is not None:
+                candidates.add(direct)
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _incident_driver_aliases(source: object | None) -> dict[str, frozenset[str]]:
+    """Map driver numbers/abbreviations to their canonical driver IDs."""
+    mappings: dict[str, set[str]] = {}
+    for record in _incident_metadata_records(source):
+        driver_id = _canonical_incident_driver(_first_value(record, "driver_id", "driverId"))
+        if driver_id is None:
+            continue
+        values = [record.get(key) for key in _INCIDENT_ALIAS_KEYS]
+        values.append(driver_id)
+        for value in values:
+            alias = _incident_alias_key(value)
+            if alias:
+                mappings.setdefault(alias, set()).add(driver_id)
+    return {alias: frozenset(driver_ids) for alias, driver_ids in mappings.items()}
+
+
+def _incident_metadata_records(source: object | None) -> tuple[Mapping[str, object], ...]:
+    if source is None:
+        return ()
+    if isinstance(source, Mapping):
+        return tuple(
+            {"source_driver_key": key, "driver_id": value}
+            for key, value in source.items()
+            if isinstance(value, str)
+        )
+    return tuple(_records(source, "drivers"))
+
+
+def _canonical_incident_driver(value: object | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().upper()
+    return candidate if _CANONICAL_INCIDENT_DRIVER.fullmatch(candidate) else None
+
+
+def _incident_alias_key(value: object) -> str:
+    if isinstance(value, bool):
+        return ""
+    text = str(value).strip().upper()
+    return str(int(text)) if text.isdigit() else text
+
+
+def _incident_marker_sort_key(marker: QualifyingIncidentMarker) -> tuple[object, ...]:
+    return (marker.time_ms, marker.driver_id, marker.raw_message)
+
+
+def _first_text(record: Mapping[str, object], *names: str) -> str | None:
+    value = _first_value(record, *names)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _first_non_negative_int(record: Mapping[str, object], *names: str) -> int | None:
+    value = _first_value(record, *names)
+    return value if type(value) is int and value >= 0 else None
+
+
+def _first_positive_int(record: Mapping[str, object], *names: str) -> int | None:
+    value = _first_value(record, *names)
+    return value if type(value) is int and value > 0 else None
 
 
 def _message_row(
@@ -90,6 +295,9 @@ def _result_row(record: Mapping[str, object], session_id: str, driver_lookup: "D
         "points": _nullable_float(_value(record, "Points"), "points"),
         "laps_completed": _nullable_int16(_value(record, "Laps"), "laps completed"),
         "result_time_ms": _nullable_time(_value(record, "Time"), "result time"),
+        "q1_time_ms": _nullable_time(_value(record, "Q1"), "q1 time"),
+        "q2_time_ms": _nullable_time(_value(record, "Q2"), "q2 time"),
+        "q3_time_ms": _nullable_time(_value(record, "Q3"), "q3 time"),
     }
 
 
@@ -352,4 +560,7 @@ __all__ = [
     "adapt_results",
     "normalize_race_control_messages",
     "normalize_results",
+    "parse_qualifying_incident_markers",
+    "QualifyingIncidentMarker",
+    "QualifyingIncidentEvidenceError",
 ]

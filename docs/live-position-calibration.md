@@ -109,7 +109,7 @@ Reproduction uses the project virtual environment explicitly:
   --canonical artifacts/demo-bahrain-2024 \
   --output artifacts/browser-bahrain-cli \
   --delivery-version 2024-bahrain-race-cli-v4-derived \
-  --schema-root contracts/replay-data/v1/schemas
+  --schema-root contracts/replay-data/v2/schemas
 ```
 
 The production quality gate passed the same 1,004 independent laps and 32,128

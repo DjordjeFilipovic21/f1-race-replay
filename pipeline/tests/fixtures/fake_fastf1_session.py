@@ -100,6 +100,41 @@ class FakeFastF1Session:
         raise ValueError(f"unknown driver: {identifier}")
 
 
+class FakeQualifyingLaps(pd.DataFrame):
+    """DataFrame double exposing FastF1's qualifying partition API."""
+
+    _metadata = [
+        "_cancelled_q3", "_missing_status", "_duplicate_partition",
+        "_incomplete_partition", "_malformed_partition",
+    ]
+
+    @property
+    def _constructor(self):  # type: ignore[no-untyped-def]
+        return FakeQualifyingLaps
+
+    def split_qualifying_sessions(self) -> list[pd.DataFrame | None]:
+        if getattr(self, "_missing_status", False):
+            raise DataNotLoadedError("session status data is not loaded")
+        partitions: list[pd.DataFrame | None] = [
+            self.loc[self["QualifyingPhase"] == phase].drop(columns=["QualifyingPhase"])
+            for phase in ("Q1", "Q2", "Q3")
+        ]
+        if getattr(self, "_cancelled_q3", False):
+            partitions[2] = None
+        if getattr(self, "_duplicate_partition", False):
+            partitions[1] = partitions[0]
+        if getattr(self, "_incomplete_partition", False):
+            if partitions[1] is not None:
+                partitions[1] = partitions[1].iloc[:0]
+        if getattr(self, "_malformed_partition", False):
+            partitions[0] = "not-a-partition"
+        return partitions
+
+
+class DataNotLoadedError(RuntimeError):
+    """FastF1-shaped missing session-status failure for adapter tests."""
+
+
 @dataclass(frozen=True)
 class FakeFastF1EventSchedule:
     """Public-shaped schedule seam for the special FastF1 testing lookup."""
@@ -215,16 +250,151 @@ def build_session_with_empty_table(table_name: str) -> FakeFastF1Session:
 def build_permuted_session() -> FakeFastF1Session:
     """Build the complete data with every row and driver-key order reversed."""
     session = _new_session(driver_keys=list(reversed(tuple(_DRIVERS))))
+    _set_tables(session, _permuted_tables(_complete_tables()))
+    return session
+
+
+def build_practice_session(practice_index: int = 1) -> FakeFastF1Session:
+    """Build an already-loaded FP1/FP2/FP3 session with FastF1-documented practice shapes.
+
+    FastF1 documents per-lap ``Position`` as NaN for FP1/FP2/FP3 while valid lap
+    timing and telemetry remain available; the fixture models exactly that.
+    """
+    _validate_practice_index(practice_index)
+    session = _new_session(name=f"FP{practice_index}")
     tables = _complete_tables()
-    for name, table in tables.items():
-        if isinstance(table, dict):
-            tables[name] = {
-                key: frame.iloc[::-1].reset_index(drop=True)
-                for key, frame in reversed(tuple(table.items()))
-            }
-        else:
-            tables[name] = table.iloc[::-1].reset_index(drop=True)
+    tables["laps"] = _practice_laps()
+    tables["results"] = _practice_results()
     _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session() -> FakeFastF1Session:
+    """Build an already-loaded Qualifying session with populated and missing Q1/Q2/Q3 times."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps()
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_cancelled_q3() -> FakeFastF1Session:
+    """Build a Qualifying session whose Q3 was cancelled, leaving Q3 null for everyone.
+
+    FastF1 models cancelled qualifying segments as missing timedelta values
+    (``None`` from ``split_qualifying_sessions`` and NaT in results), so the
+    fixture keeps Q1/Q2 populated and Q3 NaT for every driver.
+    """
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(cancelled_q3=True)
+    tables["results"] = _qualifying_results(cancelled_q3=True)
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_missing_status() -> FakeFastF1Session:
+    """Build a qualifying session whose source status prerequisite is absent."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(missing_status=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_duplicate_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API repeats a lap across phases."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(duplicate_partition=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_missing_splitter() -> FakeFastF1Session:
+    """Build a qualifying session whose laps expose no authoritative splitter."""
+    session = build_qualifying_session()
+    session.laps = session.laps.to_dict("records")
+    return session
+
+
+def build_qualifying_session_with_incomplete_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API omits a source lap."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(incomplete_partition=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_malformed_partition() -> FakeFastF1Session:
+    """Build a qualifying session whose split API returns a malformed partition."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps(malformed_partition=True)
+    tables["results"] = _qualifying_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_qualifying_session_with_invalid_q1() -> FakeFastF1Session:
+    """Build a Qualifying session whose Q1 value cannot be normalized.
+
+    This is a deliberate invalid fixture used by explicit failing tests: the
+    value is present but not a duration, so normalization must raise rather than
+    silently coerce or drop it.
+    """
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps()
+    tables["results"] = _invalid_q1_results()
+    _set_tables(session, tables)
+    return session
+
+
+def build_sprint_session() -> FakeFastF1Session:
+    """Build an already-loaded Sprint session with race-shaped data.
+
+    FastF1 Sprint sessions are race-shaped: full lap timing and classified
+    results alongside native telemetry, weather, status, and messages.  The
+    fixture models exactly that shape under a distinct ``Sprint`` identity so
+    the mode normalizer can prove sprint is not mislabeled as a race.
+    """
+    session = _new_session(name="Sprint")
+    _set_tables(session, _complete_tables())
+    return session
+
+
+def build_permuted_practice_session(practice_index: int = 1) -> FakeFastF1Session:
+    """Build an FP session with every row and driver-key order reversed."""
+    _validate_practice_index(practice_index)
+    session = _new_session(name=f"FP{practice_index}", driver_keys=list(reversed(tuple(_DRIVERS))))
+    tables = _complete_tables()
+    tables["laps"] = _practice_laps()
+    tables["results"] = _practice_results()
+    _set_tables(session, _permuted_tables(tables))
+    return session
+
+
+def build_permuted_qualifying_session() -> FakeFastF1Session:
+    """Build a Qualifying session with every row and driver-key order reversed."""
+    session = _new_session(name="Qualifying", driver_keys=list(reversed(tuple(_DRIVERS))))
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps()
+    tables["results"] = _qualifying_results()
+    _set_tables(session, _permuted_tables(tables))
+    return session
+
+
+def build_permuted_sprint_session() -> FakeFastF1Session:
+    """Build a Sprint session with every row and driver-key order reversed."""
+    session = _new_session(name="Sprint", driver_keys=list(reversed(tuple(_DRIVERS))))
+    tables = _complete_tables()
+    _set_tables(session, _permuted_tables(tables))
     return session
 
 
@@ -247,7 +417,7 @@ def build_testing_event_schedule() -> FakeFastF1EventSchedule:
     )
 
 
-def _new_session(driver_keys: list[str] | None = None) -> FakeFastF1Session:
+def _new_session(driver_keys: list[str] | None = None, name: str = "Race") -> FakeFastF1Session:
     keys = driver_keys or list(_DRIVERS)
     return FakeFastF1Session(
         event={
@@ -256,7 +426,7 @@ def _new_session(driver_keys: list[str] | None = None) -> FakeFastF1Session:
             "EventName": "Australian Grand Prix",
             "EventFormat": "conventional",
         },
-        name="Race",
+        name=name,
         drivers=keys,
         driver_records={key: dict(_DRIVERS[key]) for key in keys},
         # FastF1's UTC schedule timestamps are timezone-naive pandas Timestamps.
@@ -417,9 +587,217 @@ def _empty_tables() -> dict[str, Any]:
     }
 
 
+def _practice_laps() -> pd.DataFrame:
+    """Lap timing with valid timed laps and FastF1's documented NaN per-lap Position."""
+    return pd.DataFrame(
+        {
+            "DriverNumber": ["44", "1"],
+            "LapNumber": [1, 1],
+            "LapStartTime": [pd.Timedelta(0, unit="s"), pd.Timedelta(0, unit="s")],
+            "Time": [pd.Timedelta(92_500, unit="ms"), pd.Timedelta(93_200, unit="ms")],
+            "LapTime": [pd.Timedelta(92_500, unit="ms"), pd.Timedelta(93_200, unit="ms")],
+            "Compound": ["SOFT", "MEDIUM"],
+            "Position": [np.nan, np.nan],
+        }
+    )
+
+
+def _practice_results() -> pd.DataFrame:
+    """Practice results with nullable positions where classification is unavailable.
+
+    FastF1 derives practice results ordering where available and leaves it
+    missing otherwise; ``Position``/``ClassifiedPosition`` must stay nullable.
+    """
+    return pd.DataFrame(
+        {
+            "DriverNumber": ["44", "1"],
+            "Position": [1.0, np.nan],
+            "ClassifiedPosition": ["1", np.nan],
+            "GridPosition": [np.nan, np.nan],
+            "Status": ["Finished", None],
+            "Points": [0.0, np.nan],
+            "Laps": [23.0, 22.0],
+            "Time": [pd.NaT, pd.NaT],
+        }
+    )
+
+
+def _qualifying_laps(
+    *, cancelled_q3: bool = False, missing_status: bool = False, duplicate_partition: bool = False,
+    incomplete_partition: bool = False, malformed_partition: bool = False,
+) -> FakeQualifyingLaps:
+    """Flying laps with valid times and FastF1's documented NaN per-lap Position.
+
+    Each row carries the FastF1 3.8.3 evidence columns the qualifying flying-lap
+    policy consumes (PitInTime/PitOutTime/IsAccurate/Deleted/TrackStatus plus
+    the three sector durations and session timestamps).  All three laps are
+    accurate, non-deleted, pit-free flying laps whose sector sums equal their
+    LapTime, so the canonical adapter and the lap-sector sidecar can derive a
+    deterministic ``flying`` classification for each phase.
+    """
+    laps = FakeQualifyingLaps(
+        {
+            "DriverNumber": ["44", "1", "44"],
+            "LapNumber": [1, 1, 2],
+            "LapStartTime": [
+                pd.Timedelta(0, unit="s"),
+                pd.Timedelta(0, unit="s"),
+                pd.Timedelta(110, unit="s"),
+            ],
+            "Time": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(213_999, unit="ms"),
+            ],
+            "LapTime": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(103_999, unit="ms"),
+            ],
+            "Compound": ["SOFT", "SOFT", "SOFT"],
+            "Position": [np.nan, np.nan, np.nan],
+            "QualifyingPhase": ["Q1", "Q2", "Q3"],
+            "PitInTime": [pd.NaT, pd.NaT, pd.NaT],
+            "PitOutTime": [pd.NaT, pd.NaT, pd.NaT],
+            "IsAccurate": [True, True, True],
+            "Deleted": [False, False, False],
+            "TrackStatus": ["1", "1", "1"],
+            "Sector1Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(34_500, unit="ms"),
+            ],
+            "Sector2Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(34_500, unit="ms"),
+            ],
+            "Sector3Time": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_200, unit="ms"),
+                pd.Timedelta(34_999, unit="ms"),
+            ],
+            "Sector1SessionTime": [
+                pd.Timedelta(35_041, unit="ms"),
+                pd.Timedelta(35_000, unit="ms"),
+                pd.Timedelta(144_500, unit="ms"),
+            ],
+            "Sector2SessionTime": [
+                pd.Timedelta(70_082, unit="ms"),
+                pd.Timedelta(70_000, unit="ms"),
+                pd.Timedelta(179_000, unit="ms"),
+            ],
+            "Sector3SessionTime": [
+                pd.Timedelta(105_123, unit="ms"),
+                pd.Timedelta(105_200, unit="ms"),
+                pd.Timedelta(213_999, unit="ms"),
+            ],
+        }
+    )
+    if cancelled_q3:
+        laps = laps.loc[laps["QualifyingPhase"] != "Q3"].copy()
+    laps._cancelled_q3 = cancelled_q3
+    laps._missing_status = missing_status
+    laps._duplicate_partition = duplicate_partition
+    laps._incomplete_partition = incomplete_partition
+    laps._malformed_partition = malformed_partition
+    return laps
+
+
+def build_qualifying_session_with_incidents() -> FakeFastF1Session:
+    """Build a Qualifying session whose race-control stream carries CarEvents."""
+    session = _new_session(name="Qualifying")
+    tables = _complete_tables()
+    tables["laps"] = _qualifying_laps()
+    tables["results"] = _qualifying_results()
+    tables["race_control_messages"] = _incident_messages()
+    _set_tables(session, tables)
+    return session
+
+
+def _incident_messages() -> pd.DataFrame:
+    """Race-control messages mixing terminal CarEvents and non-incident rows.
+
+    ``CAR 44 CRASH`` and ``CAR 1 STOPS`` are actionable terminal CarEvents;
+    ``YELLOW FLAG`` is a session-wide Flag (never a per-driver marker) and
+    ``CAR 44 OFF TRACK`` is a non-terminal CarEvent (never proof of an
+    incident).  Race-control ``Time`` is absolute UTC, unlike the duration
+    streams, so all timestamps anchor to ``t0_date``.
+    """
+    return pd.DataFrame(
+        {
+            "Time": [
+                pd.Timestamp("2026-03-08T05:00:40.000"),
+                pd.Timestamp("2026-03-08T05:00:50.000"),
+                pd.Timestamp("2026-03-08T05:01:00.000"),
+                pd.Timestamp("2026-03-08T05:01:10.000"),
+            ],
+            "Category": ["CarEvent", "CarEvent", "Flag", "CarEvent"],
+            "Message": [
+                "CAR 44 CRASH",
+                "CAR 1 STOPS",
+                "YELLOW FLAG",
+                "CAR 44 OFF TRACK",
+            ],
+            "Flag": [None, None, "YELLOW", None],
+            "Scope": [None, None, "Track", None],
+            "RacingNumber": ["44", None, None, None],
+            "Lap": [7, 9, None, None],
+        }
+    )
+
+
+def _qualifying_results(*, cancelled_q3: bool = False) -> pd.DataFrame:
+    """Qualifying results with populated, missing, and optionally cancelled Q values.
+
+    ``cancelled_q3`` models a cancelled Q3 segment: FastF1 leaves every Q3 value
+    as NaT for a cancelled segment, distinct from a driver simply being
+    eliminated (missing Q2/Q3 for the driver).
+    """
+    q3 = pd.NaT if cancelled_q3 else pd.Timedelta(103_999, unit="ms")
+    return pd.DataFrame(
+        {
+            "DriverNumber": ["44", "1"],
+            "Position": [1.0, 2.0],
+            "ClassifiedPosition": ["1", "2"],
+            "GridPosition": [np.nan, np.nan],
+            "Q1": [pd.Timedelta(105_123, unit="ms"), pd.Timedelta(105_200, unit="ms")],
+            "Q2": [pd.Timedelta(104_567, unit="ms"), pd.NaT],
+            "Q3": [q3, pd.NaT],
+            "Status": ["Finished", "Finished"],
+            "Points": [0.0, 0.0],
+            "Laps": [18.0, 16.0],
+        }
+    )
+
+
+def _invalid_q1_results() -> pd.DataFrame:
+    """A single qualifying result whose Q1 value cannot be normalized."""
+    return pd.DataFrame({"DriverNumber": ["44"], "Q1": ["not-a-duration"]})
+
+
+def _permuted_tables(tables: Mapping[str, Any]) -> dict[str, Any]:
+    """Reverse every row and driver-key order within the supplied tables."""
+    permuted: dict[str, Any] = {}
+    for name, table in tables.items():
+        if isinstance(table, dict):
+            permuted[name] = {
+                key: frame.iloc[::-1].reset_index(drop=True)
+                for key, frame in reversed(tuple(table.items()))
+            }
+        else:
+            permuted[name] = table.iloc[::-1].reset_index(drop=True)
+    return permuted
+
+
 def _set_tables(session: FakeFastF1Session, tables: Mapping[str, Any]) -> None:
     for name, table in tables.items():
         setattr(session, name, table)
+
+
+def _validate_practice_index(practice_index: int) -> None:
+    if practice_index not in (1, 2, 3):
+        raise ValueError(f"unknown practice session: {practice_index}; expected 1, 2, or 3")
 
 
 def _validate_table_name(table_name: str) -> None:

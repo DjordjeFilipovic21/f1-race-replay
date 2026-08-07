@@ -12,11 +12,16 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
 from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
     extract_eligible_pit_loss_observations,
 )
-from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import PitLossObservation
+from f1_replay_pipeline.delivery.browser.browser_pit_loss_model import (
+    NORMAL_PIT_LOSS_STATUS,
+    SAFETY_CAR_PIT_LOSS_STATUS,
+    VIRTUAL_SAFETY_CAR_PIT_LOSS_STATUS,
+    PitLossObservation,
+)
 
 
 TIMES = (0, 50, 100, 150, 200, 250, 300, 350, 400)
-ALL_CLEAR = (None, 1, None, 1, None, 1, None, None, None)
+ALL_CLEAR = (1, 1, 1, 1, 1, 1, 1, 1, 1)
 
 
 def _driver(
@@ -162,6 +167,34 @@ def test_selects_latest_prior_gap_and_first_on_track_return() -> None:
     assert observation.after_gap.gap_to_leader_ms == 23_000.0
 
 
+def test_pairs_pit_in_on_ending_stint_with_pit_out_on_next_stint() -> None:
+    inputs = _inputs()
+    split_summary = BrowserStintSummary(
+        "race-01",
+        {
+            "HAM": _stints(),
+            "VER": BrowserDriverStintSummary(
+                stint_number=(1, 2),
+                compound=("MEDIUM", "HARD"),
+                start_lap=(1, 2),
+                end_lap=(1, None),
+                start_time_ms=(0, 200),
+                end_time_ms=(100, None),
+                tyre_life_at_start=(0, 0),
+                is_fresh_tyre=(True, True),
+                pit_in_time_ms=(100, None),
+                pit_out_time_ms=(None, 200),
+            ),
+        },
+    )
+
+    observations = _extract((split_summary, inputs[1], inputs[2], inputs[3]))
+
+    assert len(observations) == 1
+    assert observations[0].candidate.pit_in_time_ms == 100
+    assert observations[0].candidate.pit_out_time_ms == 200
+
+
 def test_two_stops_have_deterministic_pit_out_order() -> None:
     observations = _extract(
         _inputs(transitions=(("LEC", 150, 300), ("VER", 100, 200))),
@@ -173,7 +206,7 @@ def test_two_stops_have_deterministic_pit_out_order() -> None:
     ) == ((200, "VER"), (300, "LEC"))
 
 
-def test_yellow_overlap_is_rejected_even_when_sparse_status_is_filled() -> None:
+def test_yellow_overlap_is_rejected_when_status_samples_are_unknown() -> None:
     status = (None, 1, None, 2, None, 1, None, None, None)
 
     assert _extract(_inputs(track_status_code=status)) == ()
@@ -248,3 +281,47 @@ def test_duplicate_pit_transition_fails_closed() -> None:
 
     with pytest.raises(ValueError, match="duplicate pit-in"):
         _extract(inputs)
+
+
+def test_all_clear_interval_classifies_observation_normal() -> None:
+    observations = _extract(_inputs())
+
+    assert len(observations) == 1
+    assert observations[0].status == NORMAL_PIT_LOSS_STATUS
+
+
+def test_safety_car_interval_classifies_observation_safety_car() -> None:
+    status = (None, 1, 4, 4, 4, 4, None, None, None)
+
+    observations = _extract(_inputs(track_status_code=status))
+
+    assert len(observations) == 1
+    assert observations[0].status == SAFETY_CAR_PIT_LOSS_STATUS
+
+
+@pytest.mark.parametrize("code", [6, 7])
+def test_vsc_interval_classifies_observation_virtual_safety_car(code: int) -> None:
+    status = (None, 1, code, code, code, 1, None, None, None)
+
+    observations = _extract(_inputs(track_status_code=status))
+
+    assert len(observations) == 1
+    assert observations[0].status == VIRTUAL_SAFETY_CAR_PIT_LOSS_STATUS
+
+
+def test_mixed_status_interval_is_rejected() -> None:
+    status = (None, 1, 4, 4, 6, 6, None, None, None)
+
+    assert _extract(_inputs(track_status_code=status)) == ()
+
+
+def test_unknown_status_code_interval_is_rejected() -> None:
+    status = (None, 1, 3, 3, 3, 1, None, None, None)
+
+    assert _extract(_inputs(track_status_code=status)) == ()
+
+
+def test_quality_gate_false_skips_safety_car_observations() -> None:
+    status = (None, 1, 4, 4, 4, 4, None, None, None)
+
+    assert _extract(_inputs(track_status_code=status), quality_gate_passed=False) == ()

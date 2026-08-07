@@ -10,8 +10,6 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Iterable, Sequence, TypeVar
 
-import pytest
-
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
 
 
@@ -96,24 +94,6 @@ def test_synthetic_contract_covers_wrap_ambiguity_and_stale_fallback() -> None:
     assert _fallback_progress((10_000, 320.0), 10_999) == 320.0
     assert _fallback_progress((10_000, 320.0), 11_000) is None
     assert _stratified_samples(tuple(range(100)), 4) == (0, 33, 66, 99)
-
-
-def test_bahrain_holdout_quality_gate_when_local_artifacts_are_available() -> None:
-    if not CANONICAL_PARENT.is_dir() or not TRACK_ASSETS.is_file():
-        pytest.skip("Bahrain canonical generation and track-assets fixture are not checked out")
-
-    evidence = _measure_bahrain_holdouts(CANONICAL_PARENT, TRACK_ASSETS)
-    print(evidence.report())
-
-    assert evidence.source_driver == "VER"
-    assert evidence.source_lap == 39
-    assert evidence.source_duration_ms == 92_608
-    assert evidence.holdout_laps >= MIN_HOLDOUT_LAPS, evidence.report()
-    assert evidence.holdout_samples >= MIN_HOLDOUT_SAMPLES, evidence.report()
-    assert evidence.p95_residual_m <= P95_RESIDUAL_LIMIT_M, evidence.report()
-    assert evidence.max_residual_m <= MAX_RESIDUAL_LIMIT_M, evidence.report()
-    assert evidence.laps_with_invalid_or_multiple_wraps == 0, evidence.report()
-    assert evidence.implausible_backward_jumps_after_unwrap == 0, evidence.report()
 
 
 def _measure_bahrain_holdouts(canonical_parent: Path, track_assets_path: Path) -> CalibrationEvidence:

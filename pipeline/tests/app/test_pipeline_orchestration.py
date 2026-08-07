@@ -11,9 +11,15 @@ from f1_replay_pipeline.app.orchestration import (
     NormalizationError, PipelineRequest, PipelineRequestError, PipelineResult,
     PipelineValidationError, PublicationError, RaceSelection, SelectionError,
     SessionResolutionError, TestingSelection as PipelineTestingSelection, resolve_generation_id,
-    resolve_session, run_pipeline,
+    resolve_session, run_pipeline, normalize_session,
 )
-from fixtures.fake_fastf1_session import build_complete_session, build_no_weather_session
+from fixtures.fake_fastf1_session import (
+    build_complete_session,
+    build_qualifying_session,
+    build_qualifying_session_with_missing_splitter,
+    build_no_weather_session,
+    build_sprint_session,
+)
 
 
 def test_race_selection_is_immutable_and_accepts_a_positive_round() -> None:
@@ -157,6 +163,48 @@ def test_pipeline_normalizes_in_canonical_stage_order_and_publishes_exact_tables
         frames["extra"] = object()  # type: ignore[index]
 
 
+def test_normalize_session_passes_qualifying_mode_to_authoritative_lap_split() -> None:
+    frames = normalize_session(
+        build_qualifying_session(),
+        RaceSelection(year=2026, round_number=3, session="Qualifying"),
+    )
+
+    assert frames["laps"].select("driver_id", "qualifying_phase").to_dicts() == [
+        {"driver_id": "HAM", "qualifying_phase": "Q1"},
+        {"driver_id": "HAM", "qualifying_phase": "Q3"},
+        {"driver_id": "VER", "qualifying_phase": "Q2"},
+    ]
+
+
+def test_normalize_session_surfaces_incomplete_authoritative_qualifying_split() -> None:
+    with pytest.raises(NormalizationError, match="normalization failed during laps") as raised:
+        normalize_session(
+            build_qualifying_session_with_missing_splitter(),
+            RaceSelection(year=2026, round_number=3, session="Qualifying"),
+        )
+
+    assert raised.value.__cause__ is not None
+
+
+def test_race_session_normalization_keeps_qualifying_phase_null() -> None:
+    frames = normalize_session(
+        build_complete_session(),
+        RaceSelection(year=2026, round_number=3, session="Race"),
+    )
+
+    assert frames["laps"].get_column("qualifying_phase").to_list() == [None, None]
+
+
+def test_sprint_session_normalization_keeps_qualifying_phase_null() -> None:
+    frames = normalize_session(
+        build_sprint_session(),
+        RaceSelection(year=2026, round_number=3, session="Sprint"),
+    )
+
+    assert frames["session_metadata"].get_column("session_mode").to_list() == ["sprint"]
+    assert frames["laps"].get_column("qualifying_phase").to_list() == [None, None]
+
+
 def test_pipeline_keeps_core_replay_usable_when_weather_is_absent() -> None:
     # Arrange — FastF1 session data is complete except for optional weather rows.
     published: list[Mapping[str, object]] = []
@@ -191,7 +239,11 @@ def test_invalid_source_driver_mapping_does_not_call_publisher_and_preserves_sta
 
 def test_validation_failure_prevents_publishing_and_preserves_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     validation_error = ValueError("invalid generation")
-    monkeypatch.setattr(orchestration, "validate_canonical_frames", lambda frames: (_ for _ in ()).throw(validation_error))
+    monkeypatch.setattr(
+        orchestration,
+        "validate_canonical_frames",
+        lambda frames, **kwargs: (_ for _ in ()).throw(validation_error),
+    )
     calls: list[object] = []
 
     with pytest.raises(PipelineValidationError) as raised:

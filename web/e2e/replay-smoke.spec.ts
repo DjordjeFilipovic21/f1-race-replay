@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../contracts/replay-data/v2/fixtures/deterministic-race')
+const raceId = '2024-round-1-deterministic-race'
+const generationId = '2024-round-1-session-race-mode-race'
 
 test('loads deterministic replay and supports its critical controls', async ({ page }) => {
   const { recover } = await installReplayRoutes(page)
@@ -77,7 +79,7 @@ test('renders accessible globe and circuit preview for a race before entering wo
   await page.getByRole('radio', { name: 'Race' }).click()
   await page.getByRole('button', { name: 'Open replay workspace' }).click()
   await expect(page.getByRole('heading', { name: 'F1 Race Replay' })).toBeVisible()
-  expect(new URL(page.url()).searchParams.get('race')).toBe('deterministic-race')
+  expect(new URL(page.url()).searchParams.get('race')).toBe(raceId)
 })
 
 test('renders globe with reduced-motion preference', async ({ browser }) => {
@@ -100,13 +102,13 @@ test('renders globe with reduced-motion preference', async ({ browser }) => {
 async function installReplayRoutes(page: Page, initiallyUnavailable = false): Promise<{ readonly recover: () => void }> {
   const manifest = JSON.parse(await readFile(resolve(fixtureRoot, 'manifest.json'), 'utf8')) as Record<string, unknown>
   const deliveryVersion = 'e2e-delivery'
-  const browserRoot = '/replay-data/seasons/2024/browser/deterministic-race/'
+  const browserRoot = `/replay-data/seasons/2024/browser/${raceId}/`
   const catalog = {
     schemaVersion: 2,
     year: 2024,
     atomicAcrossRaces: true,
     races: [{
-      race_id: 'deterministic-race',
+      race_id: raceId,
       round_number: 1,
       event_name: 'Deterministic Grand Prix',
       country: 'Testland',
@@ -118,12 +120,12 @@ async function installReplayRoutes(page: Page, initiallyUnavailable = false): Pr
       sessions: [{
         session_code: 'r',
         session_name: 'Race',
-        generation_id: 'e2e-generation',
+        generation_id: generationId,
         delivery_version: deliveryVersion,
         outcome: 'classified',
         validated: true,
-        canonical_pointer: 'canonical/deterministic-race/sessions/r/manifest.json',
-        browser_pointer: 'browser/deterministic-race/sessions/r/browser-current.json',
+        canonical_pointer: `canonical/${raceId}/sessions/r/manifest.json`,
+        browser_pointer: `browser/${raceId}/sessions/r/browser-current.json`,
       }],
     }],
   }
@@ -133,9 +135,9 @@ async function installReplayRoutes(page: Page, initiallyUnavailable = false): Pr
     pathData: 'M 150 50 A 100 100 0 1 1 149.9999 50',
     viewBox: '50 -50 200 200',
   })
-  const manifestBytes = Buffer.from(JSON.stringify({ ...manifest, formatVersion: 'browser-delivery-v1', deliveryVersion }))
+  const manifestBytes = Buffer.from(JSON.stringify({ ...manifest, deliveryVersion }))
   const pointerBytes = Buffer.from(JSON.stringify({
-    formatVersion: 'browser-delivery-v1',
+    formatVersion: 'browser-delivery-v2',
     deliveryVersion,
     manifestPath: `generations/${deliveryVersion}/manifest.json`,
     manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),

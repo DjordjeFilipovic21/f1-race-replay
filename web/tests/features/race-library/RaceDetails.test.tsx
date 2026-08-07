@@ -24,8 +24,8 @@ function createRace(raceId: string, eventName: string, visual?: CatalogV2Race['v
     sessions: [{
       session_code: 'r',
       session_name: 'Race',
-      generation_id: 'generation-1',
-      delivery_version: 'v1',
+       generation_id: '2024-round-01-session-race-mode-race',
+       delivery_version: '2024-round-01-session-race-mode-race',
       outcome: 'classified',
       validated: true,
       canonical_pointer: 'canonical/manifest.json',
@@ -152,5 +152,36 @@ describe('RaceDetails visual integration', () => {
     })
     await waitFor(() => expect(mockLoadCircuitPreview).toHaveBeenLastCalledWith(source, 'visuals/monaco.json'))
     expect(mockLoadCircuitPreview).toHaveBeenCalledTimes(2)
+  })
+
+  test('lists every session identity with truthful accessible names', () => {
+    const race: CatalogV2Race = {
+      ...createRace('race-1', 'Bahrain Grand Prix'),
+      sessions: [
+        { ...createRace('race-1', 'x').sessions[0], session_code: 'fp1', session_name: 'Practice 1' },
+        { ...createRace('race-1', 'x').sessions[0], session_code: 'fp2', session_name: 'Practice 2' },
+        { ...createRace('race-1', 'x').sessions[0], session_code: 'q', session_name: 'Qualifying' },
+        { ...createRace('race-1', 'x').sessions[0], session_code: 's', session_name: 'Sprint' },
+        createRace('race-1', 'x').sessions[0],
+      ],
+    }
+    render(
+      <RaceDetails
+        race={race}
+        source={createSource()}
+        selectedSessionCode={null}
+        onSelectSession={vi.fn()}
+        canOpenWorkspace={false}
+        onOpenWorkspace={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('radiogroup', { name: 'Available sessions' })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Practice 1/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Practice 2/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Qualifying/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Sprint/ })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: /Race/ })).toBeTruthy()
+    expect(screen.getAllByRole('radio')).toHaveLength(5)
   })
 })

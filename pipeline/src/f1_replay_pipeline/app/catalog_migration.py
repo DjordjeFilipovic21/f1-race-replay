@@ -1,4 +1,9 @@
-"""Offline migration of the tracked v1 season catalog to catalog v2."""
+"""Offline preflight for the v2 catalog cutover.
+
+Historical v1 artifacts are intentionally not upgraded in place.  The later
+republish step must create v2 artifacts first, after which this module can
+validate the complete active catalog and its session pointers.
+"""
 
 from __future__ import annotations
 
@@ -10,29 +15,23 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import stat
-from typing import Sequence, cast
+from typing import Sequence
 
-from f1_replay_pipeline.app.batch_generation import ScheduledRace, _atomic_write_json, _session_name
 from f1_replay_pipeline.app.catalog_v2_schema import (
-    CatalogV2Payload,
-    CatalogV2RaceRecord,
-    CatalogV2SessionRecord,
-    session_code_from_generation_id,
+    BROWSER_POINTER_FORMAT,
+    CANONICAL_POINTER_FORMAT,
+    validate_v2_cutover_contract,
+    validate_active_catalog,
 )
-from f1_replay_pipeline.app.catalog_visuals import resolve_venue_coordinates
 from f1_replay_pipeline.app.session_pointer_publication import (
-    deterministic_session_browser_pointer_bytes,
-    deterministic_session_canonical_pointer_bytes,
-    read_optional_session_pointer,
+    read_session_browser_pointer,
+    read_session_canonical_pointer,
     remove_session_pointer,
-    session_pointer_directory,
     write_session_pointer_bytes,
-    write_session_browser_pointer,
-    write_session_canonical_pointer,
 )
-from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_browser_delivery_pointer
 from f1_replay_pipeline.domain.dataset_manifest import parse_current_pointer, parse_manifest
 from f1_replay_pipeline.domain.generation_identity import validate_generation_id
+from f1_replay_pipeline.delivery.browser.browser_delivery_publication import validate_browser_delivery_pointer
 from f1_replay_pipeline.storage.generation_publication import read_regular_file_no_follow, verify_regular_file_identity
 
 
@@ -117,12 +116,14 @@ def _track_name(browser_root: Path, delivery_version: str) -> str | None:
     pointer_path = browser_root / "browser-current.json"
     guarded_pointer = read_regular_file_no_follow(pointer_path, "browser current pointer")
     pointer = json.loads(guarded_pointer.data)
+    _require_v2_browser_pointer(pointer)
     validate_browser_delivery_pointer(pointer)
     manifest_path = browser_root / "generations" / delivery_version / "manifest.json"
     guarded_manifest = read_regular_file_no_follow(manifest_path, "browser manifest")
     if pointer.get("deliveryVersion") != delivery_version or pointer.get("manifestSha256") != _sha256(guarded_manifest.data):
         return None
     manifest = json.loads(guarded_manifest.data)
+    _require_v2_browser_manifest(manifest)
     reference = manifest.get("trackAssets")
     if not isinstance(reference, dict) or not isinstance(reference.get("path"), str):
         return None
@@ -145,12 +146,19 @@ def _authoritative_canonical(canonical_root: Path) -> tuple[str, str]:
     pointer_path = canonical_root / "current.json"
     guarded_pointer = read_regular_file_no_follow(pointer_path, "canonical current pointer")
     pointer = parse_current_pointer(guarded_pointer.data)
+    if pointer.format_version != CANONICAL_POINTER_FORMAT:
+        raise ValueError(
+            "active catalog requires canonical-parquet-v2 pointers; "
+            "canonical-parquet-v1 is deprecated"
+        )
     manifest_path = canonical_root / "generations" / pointer.generation_id / "manifest.json"
     guarded_manifest = read_regular_file_no_follow(manifest_path, "canonical manifest")
     digest = _sha256(guarded_manifest.data)
     if digest != pointer.manifest_sha256:
         raise ValueError("canonical pointer manifest checksum disagrees")
     manifest = parse_manifest(guarded_manifest.data)
+    if manifest.format_version != CANONICAL_POINTER_FORMAT or manifest.manifest_version != 2:
+        raise ValueError("active catalog rejects a v1 or mixed-version canonical manifest")
     if manifest.generation_id != pointer.generation_id:
         raise ValueError("canonical manifest generation disagrees")
     verify_regular_file_identity(manifest_path, guarded_manifest, "canonical manifest")
@@ -164,13 +172,18 @@ def _authoritative_browser(
     pointer_path = browser_root / "browser-current.json"
     guarded_pointer = read_regular_file_no_follow(pointer_path, "browser current pointer")
     pointer = json.loads(guarded_pointer.data)
-    version = validate_browser_delivery_pointer(pointer)
+    version = _require_v2_browser_pointer(pointer)
+    # Reuse the browser contract's exact pointer shape check.  Checking only
+    # deliveryVersion would allow a forged manifestPath or checksum field to
+    # become the active discovery boundary.
+    validate_browser_delivery_pointer(pointer)
     manifest_path = browser_root / "generations" / version / "manifest.json"
     guarded_manifest = read_regular_file_no_follow(manifest_path, "browser manifest")
     digest = _sha256(guarded_manifest.data)
     if digest != pointer["manifestSha256"]:
         raise ValueError("browser pointer manifest checksum disagrees")
     manifest = json.loads(guarded_manifest.data)
+    _require_v2_browser_manifest(manifest)
     if (
         manifest.get("deliveryVersion") != version
         or manifest.get("sourceGenerationId") != expected_generation_id
@@ -184,34 +197,28 @@ def _authoritative_browser(
     return version, digest
 
 
-@dataclass(frozen=True)
-class _PreparedRace:
-    race_id: str
-    canonical_root: Path
-    browser_root: Path
-    session_code: str
-    generation_id: str
-    delivery_version: str
-    canonical_manifest_sha256: str
-    browser_manifest_sha256: str
-    canonical_payload: bytes
-    browser_payload: bytes
-    prior_canonical: bytes | None
-    prior_browser: bytes | None
-    canonical_parent_existed: bool
-    browser_parent_existed: bool
-    record: CatalogV2RaceRecord
+def _require_v2_browser_pointer(pointer: object) -> str:
+    if not isinstance(pointer, dict):
+        raise ValueError("active catalog browser pointer must be an object")
+    if pointer.get("formatVersion") != BROWSER_POINTER_FORMAT:
+        raise ValueError(
+            "active catalog requires browser-delivery-v2 pointers; "
+            "browser-delivery-v1 is deprecated"
+        )
+    version = pointer.get("deliveryVersion")
+    if not isinstance(version, str) or not version:
+        raise ValueError("active catalog browser pointer deliveryVersion is missing")
+    return version
 
 
-def _existing_pointer(root: Path, session_code: str, filename: str) -> bytes | None:
-    return read_optional_session_pointer(root, session_code, filename)
-
-
-def _session_parent_exists(root: Path, session_code: str) -> bool:
-    try:
-        return stat.S_ISDIR(session_pointer_directory(root, session_code).lstat().st_mode)
-    except OSError:
-        return False
+def _require_v2_browser_manifest(manifest: object) -> None:
+    if not isinstance(manifest, dict):
+        raise ValueError("active catalog browser manifest must be an object")
+    if (
+        manifest.get("formatVersion") != BROWSER_POINTER_FORMAT
+        or manifest.get("contractVersion") != "v2"
+    ):
+        raise ValueError("active catalog rejects a v1 or mixed-version browser manifest")
 
 
 def _journal_path(season_root: Path) -> Path:
@@ -231,24 +238,6 @@ def _read_optional_journal(path: Path) -> bytes | None:
     return read_regular_file_no_follow(path, "catalog migration journal").data
 
 
-def _journal_value(prepared: Sequence[_PreparedRace], *, status: str) -> dict[str, object]:
-    return {
-        "version": 1,
-        "status": status,
-        "races": [
-            {
-                "race_id": item.race_id,
-                "session_code": item.session_code,
-                "canonical_previous": base64.b64encode(item.prior_canonical).decode("ascii") if item.prior_canonical is not None else None,
-                "browser_previous": base64.b64encode(item.prior_browser).decode("ascii") if item.prior_browser is not None else None,
-                "canonical_parent_existed": item.canonical_parent_existed,
-                "browser_parent_existed": item.browser_parent_existed,
-            }
-            for item in prepared
-        ],
-    }
-
-
 def _remove_journal(path: Path) -> None:
     try:
         descriptor = _open_directory_no_follow(path.parent)
@@ -264,21 +253,63 @@ def _remove_journal(path: Path) -> None:
         os.close(descriptor)
 
 
-def _rollback_pointers(prepared: Sequence[_PreparedRace]) -> tuple[BaseException, ...]:
-    errors: list[BaseException] = []
-    for item in reversed(prepared):
-        for root, filename, previous, parent_existed in (
-            (item.canonical_root, "current.json", item.prior_canonical, item.canonical_parent_existed),
-            (item.browser_root, "browser-current.json", item.prior_browser, item.browser_parent_existed),
-        ):
+def validate_active_catalog_references(season_root: Path) -> Path:
+    """Validate a v2 catalog without changing any pointer or catalog bytes."""
+    catalog_path = season_root / "catalog.json"
+    catalog_file = read_regular_file_no_follow(catalog_path, "season catalog")
+    catalog = json.loads(catalog_file.data)
+    parsed = validate_active_catalog(catalog)
+    for race in parsed.races:
+        for session in race.sessions:
+            if not session.validated:
+                continue
+            if session.generation_id is None or session.delivery_version is None:
+                raise ValueError(f"active catalog session {race.race_id}/{session.session_code} is incomplete")
+            canonical_root = season_root / "canonical" / race.race_id
+            browser_root = season_root / "browser" / race.race_id
+            expected_browser_pointer = (
+                f"browser/{race.race_id}/sessions/{session.session_code}/browser-current.json"
+            )
+            if session.browser_pointer != expected_browser_pointer:
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} has an unexpected browser pointer"
+                )
+            if session.canonical_pointer is not None:
+                expected_canonical_pointer = (
+                    f"canonical/{race.race_id}/sessions/{session.session_code}/current.json"
+                )
+                if session.canonical_pointer != expected_canonical_pointer:
+                    raise ValueError(
+                        f"active catalog session {race.race_id}/{session.session_code} has an unexpected canonical pointer"
+                    )
+            generation_id, canonical_digest = _authoritative_canonical(canonical_root)
+            delivery_version, _ = _authoritative_browser(browser_root, generation_id, canonical_digest)
             try:
-                if previous is None:
-                    remove_session_pointer(root, item.session_code, filename, remove_empty_parent=not parent_existed)
-                else:
-                    write_session_pointer_bytes(root, item.session_code, filename, previous)
-            except BaseException as error:
-                errors.append(error)
-    return tuple(errors)
+                session_canonical = read_session_canonical_pointer(canonical_root, session.session_code)
+            except FileNotFoundError:
+                session_canonical = None
+            if session_canonical is not None:
+                if (
+                    session_canonical.generation_path.name != generation_id
+                    or session_canonical.manifest_sha256 != canonical_digest
+                ):
+                    raise ValueError(
+                        f"active catalog session {race.race_id}/{session.session_code} disagrees with canonical session pointer"
+                    )
+            try:
+                session_browser = read_session_browser_pointer(browser_root, session.session_code)
+            except FileNotFoundError:
+                session_browser = None
+            if session_browser is not None and session_browser.delivery_version != delivery_version:
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} disagrees with browser session pointer"
+                )
+            if generation_id != session.generation_id or delivery_version != session.delivery_version:
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} disagrees with its v2 pointers"
+                )
+    verify_regular_file_identity(catalog_path, catalog_file, "season catalog")
+    return catalog_path
 
 
 def recover_catalog_migration(season_root: Path) -> None:
@@ -290,8 +321,14 @@ def recover_catalog_migration(season_root: Path) -> None:
     journal = json.loads(journal_bytes)
     catalog = json.loads(read_regular_file_no_follow(season_root / "catalog.json", "season catalog").data)
     if catalog.get("schemaVersion") == 2:
+        # A recovery marker must not be discarded merely because an attacker
+        # changed the catalog version field.  Validate the complete shape
+        # before treating the migration as already committed.
+        validate_active_catalog(catalog)
+        validate_active_catalog_references(season_root)
         _remove_journal(path)
         return
+    _validate_recovery_journal(journal, catalog)
     errors: list[BaseException] = []
     for entry in reversed(journal.get("races", ())):
         race_id = validate_generation_id(entry["race_id"])
@@ -303,6 +340,8 @@ def recover_catalog_migration(season_root: Path) -> None:
             try:
                 encoded = entry.get(key)
                 previous = base64.b64decode(encoded, validate=True) if encoded is not None else None
+                if previous is not None:
+                    _validate_recovery_pointer(previous, filename)
                 root = season_root / root_name / race_id
                 if previous is None:
                     remove_session_pointer(root, code, filename, remove_empty_parent=not entry.get(parent_key, False))
@@ -315,110 +354,126 @@ def recover_catalog_migration(season_root: Path) -> None:
     _remove_journal(path)
 
 
+def _validate_recovery_journal(journal: object, catalog: object) -> None:
+    """Validate rollback metadata before allowing it to select any path.
+
+    The journal is local input, not a trusted capability.  In particular, a
+    syntactically valid base64 value must not be enough to restore a v1 or
+    attacker-crafted pointer into a session directory.
+    """
+    if not isinstance(journal, dict) or set(journal) != {"races"}:
+        raise ValueError("catalog migration journal has an invalid shape")
+    entries = journal["races"]
+    if not isinstance(entries, list):
+        raise ValueError("catalog migration journal races must be an array")
+    catalog_races = catalog.get("races") if isinstance(catalog, dict) else None
+    allowed: dict[str, set[str]] = {}
+    if isinstance(catalog_races, list):
+        for race in catalog_races:
+            if not isinstance(race, dict):
+                continue
+            race_id = race.get("race_id")
+            if not isinstance(race_id, str):
+                continue
+            validate_generation_id(race_id)
+            sessions = race.get("sessions", ())
+            codes = {
+                session.get("session_code")
+                for session in sessions
+                if isinstance(session, dict) and isinstance(session.get("session_code"), str)
+            }
+            allowed[race_id] = {validate_generation_id(code) for code in codes}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("catalog migration journal entry must be an object")
+        required = {
+            "race_id", "session_code", "canonical_previous", "browser_previous",
+            "canonical_parent_existed", "browser_parent_existed",
+        }
+        if set(entry) != required:
+            raise ValueError("catalog migration journal entry has an invalid shape")
+        race_id = validate_generation_id(entry["race_id"])
+        code = validate_generation_id(entry["session_code"])
+        if race_id not in allowed or code not in allowed[race_id]:
+            raise ValueError("catalog migration journal selects a non-catalog session")
+        if type(entry["canonical_parent_existed"]) is not bool or type(entry["browser_parent_existed"]) is not bool:
+            raise ValueError("catalog migration journal parent flags must be booleans")
+        for key in ("canonical_previous", "browser_previous"):
+            encoded = entry[key]
+            if encoded is not None and not isinstance(encoded, str):
+                raise ValueError("catalog migration journal pointer bytes must be base64 text")
+            if encoded is not None:
+                try:
+                    payload = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError) as error:
+                    raise ValueError("catalog migration journal pointer bytes are invalid base64") from error
+                filename = "current.json" if key == "canonical_previous" else "browser-current.json"
+                _validate_recovery_pointer(payload, filename)
+
+
+def _validate_recovery_pointer(payload: bytes, filename: str) -> None:
+    if filename == "current.json":
+        pointer = parse_current_pointer(payload)
+        if pointer.format_version != CANONICAL_POINTER_FORMAT:
+            raise ValueError("recovery refuses a historical canonical pointer")
+        return
+    if filename == "browser-current.json":
+        pointer = json.loads(payload)
+        if not isinstance(pointer, dict) or pointer.get("formatVersion") != BROWSER_POINTER_FORMAT:
+            raise ValueError("recovery refuses a historical browser pointer")
+        validate_browser_delivery_pointer(pointer)
+        return
+    raise ValueError("catalog migration journal names an invalid pointer")
+
+
 def migrate_catalog_v1_to_v2(
     season_root: Path,
     *,
-    schedule: Sequence[ScheduledRace] = (),
+    schedule: Sequence[object] = (),
 ) -> Path:
-    """Preflight every race, then publish pointers and catalog as one recoverable transaction."""
+    """Reject v1 migration and validate an already-republished v2 catalog.
+
+    The function name remains for callers of the old operational command, but
+    it no longer creates active records from historical v1 artifacts.
+    """
     catalog_path = season_root / "catalog.json"
     recover_catalog_migration(season_root)
     catalog_file = read_regular_file_no_follow(catalog_path, "season catalog")
     catalog = json.loads(catalog_file.data)
     if catalog.get("schemaVersion") == 2:
-        return catalog_path
+        if schedule:
+            required_races = _schedule_race_ids(schedule)
+            validate_v2_cutover_contract(catalog, required_races)
+        return validate_active_catalog_references(season_root)
     if not isinstance(catalog.get("races"), list):
-        raise ValueError("v1 season catalog is malformed")
-    schedule_by_round = {race.round_number: race for race in schedule}
-    prepared: list[_PreparedRace] = []
-    for source in catalog["races"]:
-        if not isinstance(source, dict):
-            raise ValueError("v1 catalog race is malformed")
-        race_id_value = source.get("race_id")
-        generation_value = source.get("generation_id")
-        if not all(isinstance(value, str) for value in (race_id_value, generation_value)):
-            raise ValueError("v1 catalog race identity is incomplete")
-        race_id = cast(str, race_id_value)
-        round_number = source.get("round_number")
-        if type(round_number) is not int or round_number < 1:
-            raise ValueError("v1 catalog round_number is invalid")
-        canonical_root = season_root / "canonical" / race_id
-        browser_root = season_root / "browser" / race_id
-        generation_id, canonical_manifest_sha256 = _authoritative_canonical(canonical_root)
-        delivery_version, browser_manifest_sha256 = _authoritative_browser(
-            browser_root, generation_id, canonical_manifest_sha256,
-        )
-        session_code = session_code_from_generation_id(generation_id, race_id)
-        track_name = _track_name(browser_root, delivery_version)
-        scheduled = schedule_by_round.get(round_number)
-        event_name = (
-            scheduled.event_name if scheduled is not None else track_name or str(source.get("event_name") or race_id)
-        )
-        session = CatalogV2SessionRecord(
-            session_code, _session_name(session_code), generation_id, delivery_version,
-            str(source.get("outcome") or "generated"), True, None,
-            f"browser/{race_id}/sessions/{session_code}/browser-current.json",
-        )
-        coordinates = resolve_venue_coordinates(
-            scheduled.country, scheduled.location,
-        ) if scheduled is not None else None
-        race_record = CatalogV2RaceRecord(
-            race_id, round_number, event_name, (session,),
-            scheduled.country if scheduled else None,
-            scheduled.location if scheduled else None,
-            scheduled.event_date if scheduled else None,
-            latitude=coordinates.latitude if coordinates is not None else None,
-            longitude=coordinates.longitude if coordinates is not None else None,
-        )
-        prepared.append(_PreparedRace(
-            race_id, canonical_root, browser_root, session_code,
-            generation_id, delivery_version, canonical_manifest_sha256, browser_manifest_sha256,
-            deterministic_session_canonical_pointer_bytes(generation_id, canonical_manifest_sha256),
-            deterministic_session_browser_pointer_bytes(delivery_version, browser_manifest_sha256),
-            _existing_pointer(canonical_root, session_code, "current.json"),
-            _existing_pointer(browser_root, session_code, "browser-current.json"),
-            _session_parent_exists(canonical_root, session_code),
-            _session_parent_exists(browser_root, session_code),
-            race_record,
-        ))
-    verify_regular_file_identity(catalog_path, catalog_file, "season catalog")
-    payload = CatalogV2Payload(catalog.get("year"), tuple(item.record for item in prepared)).to_dict()
-    journal = _journal_path(season_root)
-    _atomic_write_json(journal, _journal_value(prepared, status="prepared"))
-    try:
-        for item in prepared:
-            write_session_canonical_pointer(
-                item.canonical_root, item.session_code, item.generation_id, item.canonical_manifest_sha256,
-            )
-            write_session_browser_pointer(
-                item.browser_root, item.session_code, item.delivery_version, item.browser_manifest_sha256,
-            )
-        _atomic_write_json(catalog_path, payload)
-    except BaseException as error:
-        current_catalog: bytes | None = None
-        catalog_state_error: BaseException | None = None
-        try:
-            current_catalog = read_regular_file_no_follow(catalog_path, "season catalog").data
-        except BaseException as state_error:
-            catalog_state_error = state_error
-        if catalog_state_error is not None:
-            raise RuntimeError("catalog migration failed with unknown catalog state; journal recovery is required") from catalog_state_error
-        expected_catalog = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-        if current_catalog != expected_catalog:
-            rollback_errors = _rollback_pointers(prepared)
-            if rollback_errors:
-                raise RuntimeError("catalog migration failed and recovery is incomplete") from rollback_errors[0]
-            _remove_journal(journal)
-        else:
-            _atomic_write_json(journal, _journal_value(prepared, status="catalog_committed"))
-        raise error
-    _atomic_write_json(journal, _journal_value(prepared, status="catalog_committed"))
-    _remove_journal(journal)
-    return catalog_path
+        raise ValueError("season catalog is malformed; expected active schemaVersion 2")
+    raise ValueError(
+        "refusing to activate a v1 catalog: canonical and browser v1 artifacts are "
+        "deprecated; republish all four races as v2 before switching the active catalog"
+    )
 
+
+def _schedule_race_ids(schedule: Sequence[object]) -> tuple[str, ...]:
+    """Extract the four immutable race identities required for cutover."""
+    race_ids: list[str] = []
+    for item in schedule:
+        if isinstance(item, str):
+            race_id = item
+        elif isinstance(item, dict) and isinstance(item.get("race_id"), str):
+            race_id = item["race_id"]
+        else:
+            race_id = getattr(item, "race_id", None)
+        if not isinstance(race_id, str):
+            raise ValueError("cutover schedule entries must provide a race_id")
+        validate_generation_id(race_id)
+        race_ids.append(race_id)
+    return tuple(race_ids)
 
 def migrate_2024_catalog(season_root: Path) -> Path:
     return migrate_catalog_v1_to_v2(season_root)
 
 
-__all__ = ["migrate_2024_catalog", "migrate_catalog_v1_to_v2", "recover_catalog_migration"]
+__all__ = [
+    "migrate_2024_catalog", "migrate_catalog_v1_to_v2", "recover_catalog_migration",
+    "validate_active_catalog_references",
+]

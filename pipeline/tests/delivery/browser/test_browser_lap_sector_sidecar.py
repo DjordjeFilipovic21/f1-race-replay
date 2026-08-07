@@ -6,8 +6,8 @@ Covers:
   - BrowserLapSectorSidecarReference contract enforcement
   - build_lap_sector_sidecar derivation (determinism, null preservation,
     ordering, zero-lap drivers, causal pairing)
-  - Publication (artifact writing, SHA-256, schema validation,
-    mutation rejection, backward compatibility, cross-checks)
+     - Publication (artifact writing, SHA-256, schema validation,
+     mutation rejection, cross-checks)
 """
 
 from __future__ import annotations
@@ -26,6 +26,10 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 from referencing import Registry, Resource
 
+from f1_replay_pipeline.adapters.fastf1.messages_results import (
+    QualifyingIncidentEvidenceError,
+    parse_qualifying_incident_markers,
+)
 from f1_replay_pipeline.delivery.browser.browser_chunk_builder import (
     BrowserChunk,
     BrowserEvent,
@@ -38,11 +42,16 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserLapSectorSidecar,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
+    BrowserQualifyingIncidentMarker,
+    BrowserQualifyingPhaseBoundary,
+    BrowserQualifyingTimeline,
+    BrowserQualifyingTimelineInterval,
     CanonicalGenerationSnapshot,
     MAX_INT64,
 )
 from f1_replay_pipeline.delivery.browser.browser_lap_sector_sidecar import (
     build_lap_sector_sidecar,
+    build_qualifying_timeline,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
     BrowserDeliveryBuild,
@@ -55,15 +64,15 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_publication import (
     validate_complete_browser_delivery,
 )
 from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.domain.session_modes import SessionMode
 from f1_replay_pipeline.storage.canonical_writer import publish_canonical_generation
 from f1_replay_pipeline.storage.parquet_io import CANONICAL_PARQUET_TABLE_NAMES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
-SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
-FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
+SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+SCHEMA_ROOT_V2 = SCHEMA_ROOT
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -71,8 +80,15 @@ FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
 
 
 def _snapshot() -> CanonicalGenerationSnapshot:
-    """Minimal anonymous snapshot for delivery construction."""
-    return CanonicalGenerationSnapshot("test-gen", "a" * 64, {})
+    """Minimal v2 snapshot with the required race session metadata."""
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Race", "session_name": "Race", "session_type": "R",
+        "session_mode": "race", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return CanonicalGenerationSnapshot(
+        "test-gen", "a" * 64, {"session_metadata": session_metadata},
+    )
 
 
 def _chunk() -> BrowserChunk:
@@ -100,7 +116,7 @@ def _track_assets() -> dict[str, object]:
         point, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0},
     )
     return {
-        "contractVersion": "v1", "fixtureId": "test-race",
+        "contractVersion": "v2", "fixtureId": "test-race",
         "trackId": "track-one", "trackName": "Track One",
         "coordinateSpace": {"units": "meters", "origin": "test"},
         "circuitLengthMeters": 1.0, "rotationDegrees": 0.0,
@@ -111,6 +127,7 @@ def _track_assets() -> dict[str, object]:
 
 def _delivery(
     *,
+    session_mode: SessionMode = "race",
     sidecar: BrowserLapSectorSidecar | None = None,
     sidecar_drivers: tuple[Mapping[str, object], ...] | None = None,
 ) -> BrowserDeliveryBuild:
@@ -123,7 +140,9 @@ def _delivery(
         "id": "HAM", "displayName": "Hamilton", "teamName": "Team",
         "colorHex": "#000000", "carNumber": "44",
     },)
-    manifest = BrowserManifest("test-race", "Test Race", drivers)
+    manifest = BrowserManifest(
+        "test-race", "Test Race", drivers, session_mode=session_mode,
+    )
     return BrowserDeliveryBuild(
         _snapshot(), manifest, _track_assets(), (_chunk(),),
         lap_sector_sidecar=sidecar,
@@ -156,6 +175,23 @@ def _publish(  # type: ignore[no-any-unimported]
     return publish_browser_delivery(
         browser_parent=browser, delivery_version="delivery-one",
         delivery=_delivery(sidecar=sidecar), schema_root=SCHEMA_ROOT,
+    )
+
+
+def _v2_practice_delivery(
+    sidecar: BrowserLapSectorSidecar | None = None,
+) -> BrowserDeliveryBuild:
+    delivery = _delivery(session_mode="practice", sidecar=sidecar)
+    session_metadata = pl.DataFrame([{
+        "session_id": "test-race", "year": 2026, "round_number": 1,
+        "event_name": "Practice", "session_name": "Practice 1", "session_type": "FP1",
+        "session_mode": "practice", "session_start_time_utc": None,
+    }], schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]), strict=True)
+    return replace(
+        delivery,
+        source=CanonicalGenerationSnapshot(
+            "test-gen", "a" * 64, {"session_metadata": session_metadata},
+        ),
     )
 
 
@@ -465,6 +501,126 @@ class TestBrowserDriverLapSector:
         assert isinstance(result["lapNumber"], list)
         assert result["sector1DurationMs"] == [300, None]
 
+    def test_lap_kind_defaults_to_null_aligned(self) -> None:
+        """✅ Positive: absent lap_kind aligns to all-null without changing shape."""
+        # Arrange & Act
+        sector = BrowserDriverLapSector(
+            lap_number=(1, 2),
+            lap_start_ms=(0, 100_000),
+            lap_end_ms=(100_000, 200_000),
+            lap_duration_ms=(100_000, 100_000),
+            sector_1_duration_ms=(30_000, 30_000),
+            sector_2_duration_ms=(30_000, 30_000),
+            sector_3_duration_ms=(40_000, 40_000),
+            sector_1_session_time_ms=(30_000, 130_000),
+            sector_2_session_time_ms=(60_000, 160_000),
+            sector_3_session_time_ms=(100_000, 200_000),
+        )
+
+        # Assert
+        assert sector.lap_kind == (None, None)
+
+    def test_lap_kind_accepts_valid_values(self) -> None:
+        """✅ Positive: the four frozen lapKind values are accepted and aligned."""
+        # Arrange & Act
+        sector = BrowserDriverLapSector(
+            lap_number=(1, 2, 3, 4),
+            lap_start_ms=(0, 100_000, 200_000, 300_000),
+            lap_end_ms=(100_000, 200_000, 300_000, 400_000),
+            lap_duration_ms=(100_000, 100_000, 100_000, 100_000),
+            sector_1_duration_ms=(30_000, 30_000, 30_000, 30_000),
+            sector_2_duration_ms=(30_000, 30_000, 30_000, 30_000),
+            sector_3_duration_ms=(40_000, 40_000, 40_000, 40_000),
+            sector_1_session_time_ms=(30_000, 130_000, 230_000, 330_000),
+            sector_2_session_time_ms=(60_000, 160_000, 260_000, 360_000),
+            sector_3_session_time_ms=(100_000, 200_000, 300_000, 400_000),
+            lap_kind=("flying", "outlap", "inlap", "unknown"),
+        )
+
+        # Assert
+        assert sector.lap_kind == ("flying", "outlap", "inlap", "unknown")
+
+    def test_lap_kind_rejects_invalid_value(self) -> None:
+        """❌ Negative: an out-of-enum lapKind value raises ValueError."""
+        with pytest.raises(ValueError, match="lap_kind"):
+            BrowserDriverLapSector(
+                lap_number=(1,),
+                lap_start_ms=(0,),
+                lap_end_ms=(100_000,),
+                lap_duration_ms=(100_000,),
+                sector_1_duration_ms=(30_000,),
+                sector_2_duration_ms=(30_000,),
+                sector_3_duration_ms=(40_000,),
+                sector_1_session_time_ms=(30_000,),
+                sector_2_session_time_ms=(60_000,),
+                sector_3_session_time_ms=(100_000,),
+                lap_kind=("fast",),  # type: ignore[arg-type]
+            )
+
+    def test_lap_kind_rejects_misaligned_length(self) -> None:
+        """❌ Negative: a lap_kind length differing from lap_number raises ValueError."""
+        with pytest.raises(ValueError, match="aligned to lap_number"):
+            BrowserDriverLapSector(
+                lap_number=(1, 2),
+                lap_start_ms=(0, 100_000),
+                lap_end_ms=(100_000, 200_000),
+                lap_duration_ms=(100_000, 100_000),
+                sector_1_duration_ms=(30_000, 30_000),
+                sector_2_duration_ms=(30_000, 30_000),
+                sector_3_duration_ms=(40_000, 40_000),
+                sector_1_session_time_ms=(30_000, 130_000),
+                sector_2_session_time_ms=(60_000, 160_000),
+                sector_3_session_time_ms=(100_000, 200_000),
+                lap_kind=("flying",),
+            )
+
+    def test_lap_kind_serialized_only_when_requested(self) -> None:
+        """✅ Positive: lapKind appears only when explicitly requested with values."""
+        # Arrange
+        sector = BrowserDriverLapSector(
+            lap_number=(1,),
+            lap_start_ms=(0,),
+            lap_end_ms=(100_000,),
+            lap_duration_ms=(100_000,),
+            sector_1_duration_ms=(30_000,),
+            sector_2_duration_ms=(30_000,),
+            sector_3_duration_ms=(40_000,),
+            sector_1_session_time_ms=(30_000,),
+            sector_2_session_time_ms=(60_000,),
+            sector_3_session_time_ms=(100_000,),
+            lap_kind=("flying",),
+        )
+
+        # Act
+        without = sector.as_dict()
+        with_kind = sector.as_dict(include_lap_kind=True)
+
+        # Assert
+        assert "lapKind" not in without
+        assert with_kind["lapKind"] == ["flying"]
+
+    def test_lap_kind_all_null_omitted_on_serialization(self) -> None:
+        """✅ Positive: an all-null lap_kind is omitted (capability unavailable)."""
+        # Arrange — a driver whose lap_kind was never derived.
+        sector = BrowserDriverLapSector(
+            lap_number=(1,),
+            lap_start_ms=(0,),
+            lap_end_ms=(100_000,),
+            lap_duration_ms=(100_000,),
+            sector_1_duration_ms=(30_000,),
+            sector_2_duration_ms=(30_000,),
+            sector_3_duration_ms=(40_000,),
+            sector_1_session_time_ms=(30_000,),
+            sector_2_session_time_ms=(60_000,),
+            sector_3_session_time_ms=(100_000,),
+        )
+
+        # Act
+        result = sector.as_dict(include_lap_kind=True)
+
+        # Assert — absent column means capability unavailable, never a guess.
+        assert "lapKind" not in result
+
 
 # ===========================================================================
 # BrowserLapSectorSidecar model tests
@@ -546,7 +702,7 @@ class TestBrowserLapSectorSidecar:
             BrowserLapSectorSidecar("race-01", {"HAM": "not-a-sector"})  # type: ignore[dict-item]
 
     def test_as_dict_returns_contract_format(self) -> None:
-        """✅ Positive: as_dict returns v1 contract with nested driver arrays."""
+        """✅ Positive: as_dict returns v2 contract with nested driver arrays."""
         # Arrange
         sidecar = _sidecar()
 
@@ -554,7 +710,7 @@ class TestBrowserLapSectorSidecar:
         result = sidecar.as_dict()
 
         # Assert
-        assert result["contractVersion"] == "v1"
+        assert result["contractVersion"] == "v2"
         assert result["fixtureId"] == "test-race"
         assert "drivers" in result
         assert "HAM" in result["drivers"]
@@ -570,6 +726,124 @@ class TestBrowserLapSectorSidecar:
         """✅ Positive: numeric-only driver codes like '44' are accepted."""
         sidecar = BrowserLapSectorSidecar("race-01", {"44": _empty_driver()})
         assert "44" in sidecar.drivers
+
+
+# ===========================================================================
+# Qualifying timeline model tests
+# ===========================================================================
+
+
+class TestQualifyingTimelineModels:
+    """Positive and negative contract enforcement for the qualifying timeline."""
+
+    def _timeline(
+        self,
+        *,
+        intervals: tuple[BrowserQualifyingTimelineInterval, ...] = (),
+        markers: tuple[BrowserQualifyingIncidentMarker, ...] = (),
+    ) -> BrowserQualifyingTimeline:
+        return BrowserQualifyingTimeline(
+            "race-01", 0, 400_000, intervals, markers,
+        )
+
+    def test_constructs_valid_timeline(self) -> None:
+        """✅ Positive: a timeline with intervals and markers constructs."""
+        # Arrange & Act
+        timeline = self._timeline(
+            intervals=(BrowserQualifyingTimelineInterval("yellow", 10_000, 20_000),),
+            markers=(BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH"),),
+        )
+
+        # Assert
+        assert timeline.fixture_id == "race-01"
+        assert timeline.intervals[0].kind == "yellow"
+        assert timeline.incident_markers[0].source == "race-control-car-event"
+
+    def test_rejects_invalid_interval_kind(self) -> None:
+        """❌ Negative: SC/VSC interval kinds are not exposed in this revision."""
+        with pytest.raises(ValueError, match="interval kind"):
+            BrowserQualifyingTimelineInterval("sc", 0, 100)  # type: ignore[arg-type]
+
+    def test_rejects_interval_outside_bounds(self) -> None:
+        """❌ Negative: an interval outside the artifact window raises ValueError."""
+        with pytest.raises(ValueError, match="within replay bounds"):
+            self._timeline(intervals=(BrowserQualifyingTimelineInterval("red", 500_000, 600_000),))
+
+    def test_rejects_marker_outside_bounds(self) -> None:
+        """❌ Negative: a marker at or beyond endMs raises ValueError."""
+        with pytest.raises(ValueError, match="within replay bounds"):
+            self._timeline(markers=(BrowserQualifyingIncidentMarker("HAM", 400_000, "CAR 44 CRASH"),))
+
+    def test_rejects_unsorted_markers(self) -> None:
+        """❌ Negative: markers must be ordered by timeMs, driverId, rawMessage."""
+        with pytest.raises(ValueError, match="deterministically ordered"):
+            self._timeline(markers=(
+                BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH"),
+                BrowserQualifyingIncidentMarker("HAM", 20_000, "CAR 44 STOPS"),
+            ))
+
+    def test_rejects_duplicate_markers(self) -> None:
+        """❌ Negative: exact duplicate markers are rejected."""
+        with pytest.raises(ValueError, match="must not contain duplicates"):
+            self._timeline(markers=(
+                BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH"),
+                BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH"),
+            ))
+
+    def test_rejects_invalid_marker_source(self) -> None:
+        """❌ Negative: a non-frozen marker source is rejected."""
+        with pytest.raises(ValueError, match="source is invalid"):
+            BrowserQualifyingIncidentMarker("HAM", 30_000, "CAR 44 CRASH", source="dnf")  # type: ignore[arg-type]
+
+    def test_accepts_red_flag_position_freeze_source(self) -> None:
+        """✅ Positive: the inferred red-flag freeze source is a valid marker."""
+        # Arrange & Act
+        marker = BrowserQualifyingIncidentMarker(
+            "HAM", 30_000, "RED FLAG", source="red-flag-position-freeze",
+        )
+
+        # Assert — the source round-trips through serialization unchanged.
+        assert marker.source == "red-flag-position-freeze"
+        assert marker.raw_message == "RED FLAG"
+        assert marker.as_dict() == {
+            "driverId": "HAM", "timeMs": 30_000,
+            "source": "red-flag-position-freeze", "rawMessage": "RED FLAG",
+        }
+
+    def test_rejects_non_v2_contract(self) -> None:
+        """❌ Negative: the qualifying timeline is available only as v2."""
+        with pytest.raises(ValueError, match="contract version v2"):
+            BrowserQualifyingTimeline(
+                "race-01", 0, 400_000, (), (), contract_version="v1",  # type: ignore[arg-type]
+            )
+
+    def test_as_dict_emits_intervals_and_incident_markers(self) -> None:
+        """✅ Positive: as_dict carries only qualifying-safe field names."""
+        # Arrange
+        timeline = self._timeline(
+            intervals=(
+                BrowserQualifyingTimelineInterval("yellow", 10_000, 20_000),
+                BrowserQualifyingTimelineInterval("red", 30_000, 40_000),
+            ),
+            markers=(BrowserQualifyingIncidentMarker("HAM", 25_000, "CAR 44 CRASH", lap_number=7),),
+        )
+
+        # Act
+        result = timeline.as_dict()
+
+        # Assert — no DNF/OUT/finish/position semantics are ever exposed.
+        assert result["contractVersion"] == "v2"
+        assert result["intervals"] == [
+            {"kind": "yellow", "startMs": 10_000, "endMs": 20_000},
+            {"kind": "red", "startMs": 30_000, "endMs": 40_000},
+        ]
+        assert result["incidentMarkers"] == [{
+            "driverId": "HAM", "timeMs": 25_000,
+            "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+            "lapNumber": 7,
+        }]
+        assert "dnfMarkers" not in result
+        assert "OUT" not in result
 
 
 # ===========================================================================
@@ -607,7 +881,7 @@ class TestBrowserLapSectorSidecarReference:
         with pytest.raises(ValueError, match="schema_id is invalid"):
             BrowserLapSectorSidecarReference(
                 path="lap-sector-sidecar.json",
-                schema_id="urn:f1-cache-replay:schema:replay-data:v1:wrong",
+                schema_id="urn:f1-cache-replay:schema:replay-data:unsupported:lap-sector-sidecar",
                 sha256="a" * 64,
             )
 
@@ -634,6 +908,10 @@ class TestBuildLapSectorSidecar:
         laps_data: list[dict[str, object]],
         driver_ids: tuple[str, ...] = ("HAM",),
         fixture_id: str = "test-race",
+        session_mode: SessionMode = "race",
+        track_status_data: list[dict[str, object]] | None = None,
+        messages_data: list[dict[str, object]] | None = None,
+        position_data: list[dict[str, object]] | None = None,
     ) -> CanonicalGenerationSnapshot:
         """Build a minimal CanonicalGenerationSnapshot for sidecar tests."""
         session_row: dict[str, object] = {
@@ -641,6 +919,7 @@ class TestBuildLapSectorSidecar:
             "year": 2026, "round_number": 1,
             "event_name": "Test Grand Prix", "session_name": "Race",
             "session_type": "R",
+            "session_mode": session_mode,
             "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
         driver_rows: list[dict[str, object]] = []
@@ -651,9 +930,9 @@ class TestBuildLapSectorSidecar:
                 "full_name": did, "team_name": f"Team {did}",
                 "team_colour": "112233",
             })
-        # Build laps frame using the canonical LAPS_SCHEMA — fill only
-        # columns that build_lap_sector_sidecar reads, default others to null.
-        lap_schema = dict(CANONICAL_TABLE_SCHEMAS["laps"])
+        # Build the v2 laps frame — fill only columns that
+        # build_lap_sector_sidecar reads, default others to null.
+        lap_schema = dict(CANONICAL_TABLE_SCHEMAS_V2["laps"])
         lap_rows: list[dict[str, object]] = []
         for row in laps_data:
             full: dict[str, object] = {col: None for col in lap_schema}
@@ -663,16 +942,34 @@ class TestBuildLapSectorSidecar:
         frames: dict[str, pl.DataFrame] = {
             "session_metadata": pl.DataFrame(
                 [session_row],
-                schema=dict(CANONICAL_TABLE_SCHEMAS["session_metadata"]),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["session_metadata"]),
                 strict=True,
             ),
             "drivers": pl.DataFrame(
                 driver_rows,
-                schema=dict(CANONICAL_TABLE_SCHEMAS["drivers"]),
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["drivers"]),
                 strict=True,
             ),
             "laps": laps,
         }
+        if track_status_data:
+            frames["track_status_intervals"] = pl.DataFrame(
+                track_status_data,
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["track_status_intervals"]),
+                strict=True,
+            )
+        if messages_data:
+            frames["race_control_messages"] = pl.DataFrame(
+                messages_data,
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["race_control_messages"]),
+                strict=True,
+            )
+        if position_data:
+            frames["position_telemetry"] = pl.DataFrame(
+                position_data,
+                schema=dict(CANONICAL_TABLE_SCHEMAS_V2["position_telemetry"]),
+                strict=True,
+            )
         return CanonicalGenerationSnapshot("generation", "a" * 64, frames)
 
     @staticmethod
@@ -685,6 +982,40 @@ class TestBuildLapSectorSidecar:
             "lap_end_time_ms": (lap + 1) * 100_000,
             "lap_duration_ms": 100_000,
         }
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def _flying_lap_row(
+        driver_id: str, lap: int, *, phase: str | None = "Q1", duration: int = 100_000,
+        **overrides: object,
+    ) -> dict[str, object]:
+        """Return a canonical completed lap that passes the flying evidence gate.
+
+        The lap is pit-free, accurate, non-deleted, green-status, has all three
+        sector durations and session timestamps, and its sector-duration sum
+        equals its duration within the 3 ms FastF1 tolerance.
+        """
+        start = lap * 100_000
+        sector_1, sector_2 = 30_000, 30_000
+        sector_3 = duration - sector_1 - sector_2
+        row = TestBuildLapSectorSidecar._lap_row(
+            driver_id, lap,
+            lap_end_time_ms=start + duration,
+            lap_duration_ms=duration,
+            qualifying_phase=phase,
+            pit_in_time_ms=None,
+            pit_out_time_ms=None,
+            is_accurate=True,
+            deleted=False,
+            track_status="1",
+            sector_1_duration_ms=sector_1,
+            sector_2_duration_ms=sector_2,
+            sector_3_duration_ms=sector_3,
+            sector_1_session_time_ms=start + sector_1,
+            sector_2_session_time_ms=start + sector_1 + sector_2,
+            sector_3_session_time_ms=start + duration,
+        )
         row.update(overrides)
         return row
 
@@ -887,6 +1218,388 @@ class TestBuildLapSectorSidecar:
             assert (s2d is None) == (s2t is None)
             assert (s3d is None) == (s3t is None)
 
+    def test_preserves_canonical_qualifying_phases_and_derives_phase_starts(self) -> None:
+        snapshot = self._snapshot_with_laps([
+            self._lap_row("HAM", 1, qualifying_phase="Q1"),
+            self._lap_row("HAM", 2, qualifying_phase="Q2"),
+            self._lap_row("HAM", 3, qualifying_phase="Q3"),
+        ])
+
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        assert sidecar.drivers["HAM"].qualifying_phase == ("Q1", "Q2", "Q3")
+        assert sidecar.qualifying_phase_boundaries == (
+            BrowserQualifyingPhaseBoundary("Q1", 100_000),
+            BrowserQualifyingPhaseBoundary("Q2", 200_000),
+            BrowserQualifyingPhaseBoundary("Q3", 300_000),
+        )
+
+    def test_non_qualifying_schema_without_phase_column_preserves_null_phase_alignment(self) -> None:
+        snapshot = self._snapshot_with_laps([self._lap_row("HAM", 1)])
+
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        assert sidecar.drivers["HAM"].qualifying_phase == (None,)
+        assert sidecar.qualifying_phase_boundaries == ()
+
+    def test_rejects_invalid_or_misaligned_qualifying_phase_values(self) -> None:
+        with pytest.raises(ValueError, match="qualifying_phase"):
+            BrowserDriverLapSector(
+                lap_number=(1,), lap_start_ms=(0,), lap_end_ms=(1,),
+                lap_duration_ms=(1,), sector_1_duration_ms=(1,),
+                sector_2_duration_ms=(1,), sector_3_duration_ms=(1,),
+                sector_1_session_time_ms=(1,), sector_2_session_time_ms=(1,),
+                sector_3_session_time_ms=(1,), qualifying_phase=("Q4",),  # type: ignore[arg-type]
+            )
+        with pytest.raises(ValueError, match="aligned"):
+            BrowserDriverLapSector(
+                lap_number=(1,), lap_start_ms=(0,), lap_end_ms=(1,),
+                lap_duration_ms=(1,), sector_1_duration_ms=(1,),
+                sector_2_duration_ms=(1,), sector_3_duration_ms=(1,),
+                sector_1_session_time_ms=(1,), sector_2_session_time_ms=(1,),
+                sector_3_session_time_ms=(1,), qualifying_phase=("Q1", "Q2"),
+            )
+
+    # -- Qualifying lapKind derivation --------------------------------------
+
+    def test_derives_flying_for_accurate_quicklap_in_qualifying(self) -> None:
+        """✅ Positive: a complete accurate lap within the phase gate is flying."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("flying",)
+
+    def test_derives_outlap_from_pit_out_signal(self) -> None:
+        """✅ Positive: non-null pit-out classifies the lap outlap, never flying."""
+        # Arrange — pit-out is authoritative even with otherwise perfect timing.
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", pit_out_time_ms=90_000)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("outlap",)
+
+    def test_derives_inlap_from_pit_in_signal(self) -> None:
+        """✅ Positive: non-null pit-in classifies the lap inlap, never flying."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", pit_in_time_ms=90_000)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("inlap",)
+
+    def test_both_pit_signals_resolve_to_unknown(self) -> None:
+        """✅ Positive: a row with both pit signals is unknown, never guessed."""
+        # Arrange — ADR-003 refuses to pick between outlap and inlap here.
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row(
+                "HAM", 1, phase="Q1",
+                pit_in_time_ms=90_000, pit_out_time_ms=95_000,
+            )],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_accuracy_missing(self) -> None:
+        """✅ Positive: missing accuracy evidence fails closed to unknown."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", is_accurate=None)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_deleted_flag_missing(self) -> None:
+        """✅ Positive: missing deletion evidence fails closed to unknown."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", deleted=None)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_lap_deleted(self) -> None:
+        """✅ Positive: a deleted lap is never flying."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", deleted=True)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_track_status_missing_or_non_green(self) -> None:
+        """✅ Positive: absent or non-green track status fails closed to unknown."""
+        # Arrange & Act
+        missing = build_lap_sector_sidecar(self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", track_status=None)],
+            session_mode="qualifying",
+        ))
+        red_flag = build_lap_sector_sidecar(self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", track_status="5")],
+            session_mode="qualifying",
+        ))
+
+        # Assert
+        assert missing.drivers["HAM"].lap_kind == ("unknown",)
+        assert red_flag.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_sector_evidence_incomplete(self) -> None:
+        """✅ Positive: a missing sector duration fails closed to unknown."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", sector_1_duration_ms=None)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_sector_sum_mismatches_duration(self) -> None:
+        """✅ Positive: an inconsistent sector sum beyond 3 ms fails closed."""
+        # Arrange — sectors sum to 110_000 while the duration is 100_000.
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1", sector_3_duration_ms=50_000)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_unknown_when_lap_exceeds_quicklap_threshold(self) -> None:
+        """✅ Positive: a slow accurate non-pit lap above 107% resolves to unknown."""
+        # Arrange — phase best is 100_000; 107% gate = 107_000; 110_000 fails.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row("VER", 2, phase="Q1", duration=110_000),
+            ],
+            driver_ids=("HAM", "VER"),
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — never promoted to flying; unknown is the fail-closed value.
+        assert sidecar.drivers["HAM"].lap_kind == ("flying",)
+        assert sidecar.drivers["VER"].lap_kind == ("unknown",)
+
+    def test_quicklap_gate_is_cross_driver_per_phase(self) -> None:
+        """✅ Positive: the gate uses the phase aggregate, not the driver's own."""
+        # Arrange — VER's 106_000 lap is within 107% of HAM's 100_000 phase best.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row("VER", 2, phase="Q1", duration=106_000),
+            ],
+            driver_ids=("HAM", "VER"),
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("flying",)
+        assert sidecar.drivers["VER"].lap_kind == ("flying",)
+
+    def test_quicklap_gate_is_phase_local_not_global(self) -> None:
+        """✅ Positive: a lap is compared against its own phase, not Q3's best."""
+        # Arrange — HAM's Q1 105_000 lap is within Q1's own gate but above 107%
+        # of VER's faster 90_000 Q2 best; phase locality keeps it flying.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=105_000),
+                self._flying_lap_row("VER", 2, phase="Q2", duration=90_000),
+            ],
+            driver_ids=("HAM", "VER"),
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("flying",)
+        assert sidecar.drivers["VER"].lap_kind == ("flying",)
+
+    def test_unknown_when_lap_has_no_phase_assignment(self) -> None:
+        """✅ Positive: a phase-less lap cannot pass the per-phase gate."""
+        # Arrange — the lap is complete and accurate but has no Q phase.
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase=None)],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert
+        assert sidecar.drivers["HAM"].lap_kind == ("unknown",)
+
+    def test_non_qualifying_session_omits_lap_kind(self) -> None:
+        """✅ Positive: race-shaped sessions keep lap_kind absent (capability off)."""
+        # Arrange — the same flying lap under a race session mode.
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase=None)],
+            session_mode="race",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — all-null capability, never a guessed flying classification.
+        assert sidecar.drivers["HAM"].lap_kind == (None,)
+        payload = sidecar.as_dict(include_qualifying_phase=True)
+        assert "lapKind" not in payload["drivers"]["HAM"]
+
+    def test_qualifying_v2_serialization_includes_lap_kind_values(self) -> None:
+        """✅ Positive: a v2 qualifying sidecar serializes the aligned lapKind."""
+        # Arrange
+        snapshot = self._snapshot_with_laps(
+            [self._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+        )
+
+        # Act
+        payload = build_lap_sector_sidecar(snapshot).as_dict(
+            include_qualifying_phase=True,
+        )
+
+        # Assert
+        assert payload["drivers"]["HAM"]["qualifyingPhase"] == ["Q1"]
+        assert payload["drivers"]["HAM"]["lapKind"] == ["flying"]
+
+    def test_slow_cooldown_lap_after_flying_stays_unknown(self) -> None:
+        """✅ Positive: a later slow cooldown lap in the same phase is unknown
+        and never replaces the earlier flying lap.
+
+        Requirement 8: finish is driven by the last *flying* lap in the phase;
+        a later cooldown row must not become flying or delay the displayed time.
+        """
+        # Arrange — HAM completes a quick flying lap, then a slow cooldown lap
+        # in the same Q1 phase (well above the 107% quicklap gate).
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row("HAM", 2, phase="Q1", duration=130_000),
+            ],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — only the quick lap is flying; the cooldown fails closed.
+        assert sidecar.drivers["HAM"].lap_number == (1, 2)
+        assert sidecar.drivers["HAM"].lap_kind == ("flying", "unknown")
+
+    def test_inlap_after_flying_keeps_earlier_lap_flying(self) -> None:
+        """✅ Positive: a later pit-in/inlap never displaces the earlier flying lap."""
+        # Arrange — lap 1 is a clean flying lap; lap 2 ends in the pits.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row(
+                    "HAM", 2, phase="Q1", duration=110_000, pit_in_time_ms=190_000,
+                ),
+            ],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — the inlap is never flying and the earlier flying lap survives.
+        assert sidecar.drivers["HAM"].lap_kind == ("flying", "inlap")
+
+    def test_incomplete_later_lap_is_dropped_before_kind_derivation(self) -> None:
+        """✅ Positive: an incomplete (null-end) later lap cannot participate
+        in or delay the flying classification of a causally completed lap."""
+        # Arrange — lap 2 has no lap end, so it is not causally completed and
+        # must not become a later non-flying "last lap" in the phase.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row(
+                    "HAM", 2, phase="Q1", duration=100_000, lap_end_time_ms=None,
+                ),
+            ],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — only the causally completed lap is retained and it is flying.
+        assert sidecar.drivers["HAM"].lap_number == (1,)
+        assert sidecar.drivers["HAM"].lap_end_ms == (200_000,)
+        assert sidecar.drivers["HAM"].lap_kind == ("flying",)
+
+    def test_phase_boundaries_skip_an_absent_middle_phase(self) -> None:
+        """✅ Positive: boundaries reflect only phases with completed laps."""
+        # Arrange — HAM has Q1 and Q3 laps but no Q2 lap.
+        snapshot = self._snapshot_with_laps(
+            [
+                self._flying_lap_row("HAM", 1, phase="Q1", duration=100_000),
+                self._flying_lap_row("HAM", 2, phase="Q3", duration=95_000),
+            ],
+            session_mode="qualifying",
+        )
+
+        # Act
+        sidecar = build_lap_sector_sidecar(snapshot)
+
+        # Assert — boundaries skip Q2 and each phase uses its own quicklap gate.
+        assert sidecar.drivers["HAM"].qualifying_phase == ("Q1", "Q3")
+        assert sidecar.qualifying_phase_boundaries == (
+            BrowserQualifyingPhaseBoundary("Q1", 100_000),
+            BrowserQualifyingPhaseBoundary("Q3", 200_000),
+        )
+        assert sidecar.drivers["HAM"].lap_kind == ("flying", "flying")
+
     # -- Negative tests ------------------------------------------------------
 
     def test_rejects_non_tuple_lap_field_from_converted_data(self) -> None:
@@ -954,6 +1667,718 @@ class TestBuildLapSectorSidecar:
         assert ham.lap_start_ms == ()
         assert ham.lap_end_ms == ()
         assert ham.sector_1_duration_ms == ()
+
+
+# ===========================================================================
+# Qualifying incident marker evidence tests
+# ===========================================================================
+
+
+class TestQualifyingIncidentMarkers:
+    """Fail-closed derivation of qualifying incident markers from canonical rows."""
+
+    @staticmethod
+    def _message(
+        time_ms: int = 40_000,
+        *,
+        category: object = "CarEvent",
+        message: str = "CAR 44 CRASH",
+        driver_id: object = "HAM",
+        lap_number: object = 7,
+    ) -> dict[str, object]:
+        return {
+            "session_id": "2026-03-qualifying",
+            "session_time_ms": time_ms,
+            "message_index": 0,
+            "category": category,
+            "flag": None,
+            "scope": None,
+            "message": message,
+            "driver_id": driver_id,
+            "lap_number": lap_number,
+        }
+
+    def test_parses_terminal_car_event_with_canonical_identity_and_time(self) -> None:
+        """✅ Positive: CarEvent + CRASH + canonical driver + causal time => marker."""
+        # Arrange & Act
+        markers = parse_qualifying_incident_markers([self._message()])
+
+        # Assert
+        assert len(markers) == 1
+        marker = markers[0]
+        assert marker.driver_id == "HAM"
+        assert marker.time_ms == 40_000
+        assert marker.source == "race-control-car-event"
+        assert marker.raw_message == "CAR 44 CRASH"
+        assert marker.lap_number == 7
+
+    def test_resolves_driver_from_message_when_canonical_id_missing(self) -> None:
+        """✅ Positive: CAR <number> resolves through driver metadata aliases."""
+        # Arrange — the canonical row has no driver_id; the text carries CAR 1.
+        markers = parse_qualifying_incident_markers(
+            [self._message(driver_id=None, message="CAR 1 STOPS", lap_number=9)],
+            {"44": "HAM", "1": "VER"},
+        )
+
+        # Assert
+        assert len(markers) == 1
+        assert markers[0].driver_id == "VER"
+        assert markers[0].raw_message == "CAR 1 STOPS"
+
+    def test_ignores_non_car_event_categories(self) -> None:
+        """✅ Positive: Flag/Other rows are never per-driver incident evidence."""
+        # Arrange & Act
+        markers = parse_qualifying_incident_markers([
+            self._message(category="Flag", message="YELLOW FLAG", driver_id=None),
+            self._message(category="Other", message="CAR 44 CRASH", driver_id="HAM"),
+        ])
+
+        # Assert
+        assert markers == ()
+
+    def test_ignores_non_terminal_car_events(self) -> None:
+        """✅ Positive: a CarEvent without a terminal form is omitted silently."""
+        # Arrange — OFF TRACK is not proof of an incident (OffTrack backfill).
+        markers = parse_qualifying_incident_markers([
+            self._message(message="CAR 44 OFF TRACK"),
+            self._message(time_ms=50_000, message="CAR 44 PIT STOP"),
+        ])
+
+        # Assert
+        assert markers == ()
+
+    def test_recognizes_all_terminal_forms(self) -> None:
+        """✅ Positive: CRASH/STOPS/STOPPED/RETIRED/STALLED are recognized."""
+        # Arrange & Act
+        markers = parse_qualifying_incident_markers([
+            self._message(time_ms=10_000, message="CAR 44 CRASH"),
+            self._message(time_ms=20_000, message="CAR 44 STOPS"),
+            self._message(time_ms=30_000, message="CAR 44 STOPPED"),
+            self._message(time_ms=40_000, message="CAR 44 RETIRED"),
+            self._message(time_ms=50_000, message="CAR 44 STALLED"),
+        ])
+
+        # Assert
+        assert [marker.time_ms for marker in markers] == [10_000, 20_000, 30_000, 40_000, 50_000]
+
+    def test_sorts_markers_deterministically(self) -> None:
+        """✅ Positive: markers order by timeMs, then driverId, then rawMessage."""
+        # Arrange — deliberately out of order with a same-time tie.
+        markers = parse_qualifying_incident_markers([
+            self._message(time_ms=30_000, driver_id="VER", message="CAR 1 STOPS"),
+            self._message(time_ms=10_000, driver_id="HAM", message="CAR 44 CRASH"),
+            self._message(time_ms=30_000, driver_id="HAM", message="CAR 44 STALLED"),
+        ])
+
+        # Assert
+        assert [(marker.time_ms, marker.driver_id, marker.raw_message) for marker in markers] == [
+            (10_000, "HAM", "CAR 44 CRASH"),
+            (30_000, "HAM", "CAR 44 STALLED"),
+            (30_000, "VER", "CAR 1 STOPS"),
+        ]
+
+    def test_fails_closed_on_ambiguous_driver(self) -> None:
+        """❌ Negative: a terminal form without a resolvable driver raises."""
+        with pytest.raises(QualifyingIncidentEvidenceError, match="ambiguous or missing driver"):
+            parse_qualifying_incident_markers([
+                self._message(driver_id=None, message="A CAR CRASH"),
+            ])
+
+    def test_fails_closed_on_contradictory_identity(self) -> None:
+        """❌ Negative: canonical driver and text disagreement raise, never guess."""
+        # Arrange — canonical driver_id is HAM but the text says CAR 1 (VER).
+        with pytest.raises(QualifyingIncidentEvidenceError, match="ambiguous or missing driver"):
+            parse_qualifying_incident_markers(
+                [self._message(driver_id="HAM", message="CAR 1 STOPS")],
+                {"44": "HAM", "1": "VER"},
+            )
+
+    def test_fails_closed_on_missing_timestamp(self) -> None:
+        """❌ Negative: a terminal form without a canonical timestamp raises."""
+        # Arrange & Act & Assert
+        with pytest.raises(QualifyingIncidentEvidenceError, match="no canonical timestamp"):
+            parse_qualifying_incident_markers([
+                {**self._message(), "session_time_ms": None},
+            ])
+
+    def test_never_derives_markers_from_position_status(self) -> None:
+        """✅ Positive: OffTrack status evidence cannot fabricate a marker."""
+        # Arrange — a position-style OffTrack record is not race-control evidence.
+        markers = parse_qualifying_incident_markers([
+            self._message(category=None, message="OffTrack", driver_id="HAM"),
+        ])
+
+        # Assert — no marker, and nothing in the parser consults position data.
+        assert markers == ()
+
+    def test_qualifying_incident_fixture_normalizes_to_markers(self) -> None:
+        """✅ Positive: the incident fixture yields deterministic markers."""
+        # Arrange — normalize the fixture's race-control stream through the
+        # canonical adapter, then derive markers from canonical evidence.
+        from fixtures.fake_fastf1_session import build_qualifying_session_with_incidents
+        from f1_replay_pipeline.adapters.fastf1.messages_results import (
+            adapt_race_control_messages,
+        )
+
+        session = build_qualifying_session_with_incidents()
+        messages = adapt_race_control_messages(
+            session, {"44": "HAM", "1": "VER"}, "2026-03-qualifying",
+        )
+
+        # Act
+        markers = parse_qualifying_incident_markers(
+            messages, {"44": "HAM", "1": "VER"},
+        )
+
+        # Assert — CRASH and STOPS are actionable; Flag and OFF TRACK are not.
+        assert [(marker.driver_id, marker.time_ms, marker.raw_message) for marker in markers] == [
+            ("HAM", 40_000, "CAR 44 CRASH"),
+            ("VER", 50_000, "CAR 1 STOPS"),
+        ]
+        assert markers[0].lap_number == 7
+        assert markers[1].lap_number == 9
+
+
+# ===========================================================================
+# Qualifying timeline derivation tests
+# ===========================================================================
+
+
+class TestBuildQualifyingTimeline:
+    """Derivation of the optional qualifying-safe timeline artifact."""
+
+    @staticmethod
+    def _message_row(
+        time_ms: int, message: str, *, driver_id: object = "HAM", lap_number: object = 7,
+    ) -> dict[str, object]:
+        return {
+            "session_id": "test-race",
+            "session_time_ms": time_ms,
+            "message_index": 0,
+            "category": "CarEvent",
+            "flag": None,
+            "scope": None,
+            "message": message,
+            "driver_id": driver_id,
+            "lap_number": lap_number,
+        }
+
+    @staticmethod
+    def _status_row(
+        start_ms: int, end_ms: object, status: str, message: object = None,
+    ) -> dict[str, object]:
+        return {
+            "session_id": "test-race",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+            "status": status,
+            "message": message,
+        }
+
+    def test_derives_intervals_and_incident_markers(self) -> None:
+        """✅ Positive: yellow/red intervals and CarEvent markers are derived."""
+        # Arrange
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                self._status_row(10_000, 20_000, "2"),   # yellow
+                self._status_row(30_000, None, "5"),     # red to window end
+            ],
+            messages_data=[
+                self._message_row(15_000, "CAR 44 CRASH"),
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.start_ms == 0
+        assert timeline.end_ms == 400_000
+        assert [interval.kind for interval in timeline.intervals] == ["yellow", "red"]
+        assert timeline.intervals[0] == BrowserQualifyingTimelineInterval("yellow", 10_000, 20_000)
+        assert timeline.intervals[1] == BrowserQualifyingTimelineInterval("red", 30_000, 400_000)
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker("HAM", 15_000, "CAR 44 CRASH", lap_number=7),
+        )
+
+    def test_merges_adjacent_same_kind_intervals(self) -> None:
+        """✅ Positive: adjacent same-kind intervals merge into one interval."""
+        # Arrange
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                self._status_row(10_000, 15_000, "2"),
+                self._status_row(15_000, 20_000, "2"),
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.intervals == (
+            BrowserQualifyingTimelineInterval("yellow", 10_000, 20_000),
+        )
+
+    def test_clips_intervals_and_markers_to_window(self) -> None:
+        """✅ Positive: out-of-window evidence is dropped from the artifact."""
+        # Arrange — a red interval and a marker both outside [0, 400_000).
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                self._status_row(450_000, None, "5"),
+            ],
+            messages_data=[
+                self._message_row(500_000, "CAR 44 CRASH"),
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is None
+
+    def test_omitted_for_non_qualifying_sessions(self) -> None:
+        """✅ Positive: race-shaped sessions never carry the artifact."""
+        # Arrange
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase=None)],
+            session_mode="race",
+            track_status_data=[self._status_row(10_000, 20_000, "2")],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is None
+
+    def test_omitted_when_no_actionable_evidence(self) -> None:
+        """✅ Positive: qualifying with no intervals and no markers omits the artifact."""
+        # Arrange
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is None
+
+    def test_ignores_sc_vsc_status_for_intervals(self) -> None:
+        """✅ Positive: SC/VSC status codes are not exposed as qualifying intervals."""
+        # Arrange — only yellow (2) and red (5) map to intervals.
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                self._status_row(10_000, 20_000, "4"),   # SC
+                self._status_row(20_000, 30_000, "6"),   # VSC
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is None
+
+    def test_rejects_invalid_window(self) -> None:
+        """❌ Negative: a reversed or empty replay window raises ValueError."""
+        # Arrange
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+        )
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="non-empty interval"):
+            build_qualifying_timeline(snapshot, 400_000, 400_000)
+
+
+# ===========================================================================
+# Red-flag position-freeze incident marker tests
+# ===========================================================================
+
+
+class TestQualifyingRedFlagFreezeMarkers:
+    """Visibility-only freeze markers inferred from canonical position pairs.
+
+    Canonical position telemetry stores FastF1 native decimetres; the browser
+    delivery converts to metres (``FASTF1_POSITION_UNITS_PER_METER = 10.0``).
+    The documented freeze epsilon is 1 metre, so a driver whose post-red pairs
+    stay within that distance of the last pre-red pair is frozen.
+    """
+
+    # Red interval [10_000, 20_000) inside the [0, 400_000) replay window.
+    RED_START_MS = 10_000
+    RED_END_MS = 20_000
+
+    @staticmethod
+    def _position_row(
+        driver_id: str, time_ms: int, x: object, y: object,
+    ) -> dict[str, object]:
+        return {
+            "session_id": "test-race",
+            "driver_id": driver_id,
+            "source_driver_key": driver_id,
+            "session_time_ms": time_ms,
+            "x": x,
+            "y": y,
+            "z": None,
+            "status": "OnTrack",
+            "source": "pos",
+        }
+
+    def _snapshot(
+        self,
+        *,
+        position_rows: list[dict[str, object]],
+        message_rows: list[dict[str, object]] | None = None,
+        red_end_ms: object = 20_000,
+    ) -> CanonicalGenerationSnapshot:
+        driver_ids = tuple(sorted({cast(str, row["driver_id"]) for row in position_rows}))
+        lap_end_ms = red_end_ms if type(red_end_ms) is int else 30_000
+        laps_data = [
+            TestBuildLapSectorSidecar._lap_row(
+                driver_id,
+                1,
+                lap_start_time_ms=5_000,
+                lap_end_time_ms=lap_end_ms,
+                lap_duration_ms=None,
+                track_status="125",
+                is_accurate=False,
+                deleted=False,
+            )
+            for driver_id in driver_ids
+        ]
+        return TestBuildLapSectorSidecar._snapshot_with_laps(
+            laps_data,
+            driver_ids=driver_ids or ("HAM",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": red_end_ms,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            messages_data=message_rows,
+            position_data=position_rows,
+        )
+
+    def test_frozen_driver_gets_marker_at_red_end(self) -> None:
+        """✅ Positive: VER-like frozen coordinates produce a marker at red end."""
+        # Arrange — VER has a valid pre-red pair and frozen post-red pairs at
+        # the canonical decimetre form of the artifact's (-3665, 1243) metres.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 9_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 30_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — one visibility-only marker at the red interval end.
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+        assert timeline.incident_markers[0].source == "red-flag-position-freeze"
+        assert timeline.incident_markers[0].raw_message == "RED FLAG"
+        assert timeline.incident_markers[0].lap_number is None
+
+    def test_moving_driver_is_omitted(self) -> None:
+        """❌ Negative: a driver that moves after restart produces no marker."""
+        # Arrange — VER's post-red pair is ~100 m away from the pre-red site.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 13_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval renders but no freeze marker is inferred.
+        assert timeline is not None
+        assert [interval.kind for interval in timeline.intervals] == ["red"]
+        assert timeline.incident_markers == ()
+
+    def test_driver_without_pre_red_position_is_omitted(self) -> None:
+        """❌ Negative: SAI/STR-like drivers with no pre-red position get no marker."""
+        # Arrange — SAI has only post-red pairs because it never started.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("SAI", 25_000, -36_650.0, 12_430.0),
+            self._position_row("SAI", 30_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_driver_without_post_red_data_is_omitted(self) -> None:
+        """❌ Negative: missing post-red data alone is never incident evidence."""
+        # Arrange — VER has a pre-red pair but no valid pair after the red end.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_open_ended_red_interval_produces_no_marker(self) -> None:
+        """❌ Negative: a red interval open to the replay end is skipped."""
+        # Arrange — the canonical red interval never ends, so its effective end
+        # is clipped to the artifact end (400_000); a marker there is invalid.
+        snapshot = self._snapshot(
+            position_rows=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 410_000, -36_650.0, 12_430.0),
+            ],
+            red_end_ms=None,
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval is clipped to the window end and yields no marker.
+        assert timeline is not None
+        assert timeline.intervals == (
+            BrowserQualifyingTimelineInterval("red", 10_000, 400_000),
+        )
+        assert timeline.incident_markers == ()
+
+    def test_small_jitter_within_epsilon_is_still_frozen(self) -> None:
+        """✅ Positive: sub-metre jitter stays within the documented epsilon."""
+        # Arrange — the post-red pair drifts ~0.22 m from the pre-red site.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 9_500, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_652.0, 12_431.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_normal_red_flag_pause_does_not_create_freeze_marker(self) -> None:
+        """❌ Negative: movement immediately before red is a session pause."""
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("HAM", 5_000, 1_000.0, 2_000.0),
+            self._position_row("HAM", 9_500, 1_100.0, 2_000.0),
+            self._position_row("HAM", 25_000, 1_100.0, 2_000.0),
+        ])
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_zero_position_sentinel_does_not_count_as_pre_red_evidence(self) -> None:
+        """❌ Negative: a FastF1 (0, 0) sentinel means the driver did not start."""
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("SAI", 5_000, 0.0, 0.0),
+            self._position_row("SAI", 25_000, 0.0, 0.0),
+        ])
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_freeze_marker_combines_with_race_control_marker(self) -> None:
+        """✅ Positive: existing CarEvent markers are preserved and ordered."""
+        # Arrange — HAM crashes (CarEvent at 15_000) and VER freezes through red.
+        snapshot = self._snapshot(
+            position_rows=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+            message_rows=[
+                {
+                    "session_id": "test-race",
+                    "session_time_ms": 15_000,
+                    "message_index": 0,
+                    "category": "CarEvent",
+                    "flag": None,
+                    "scope": None,
+                    "message": "CAR 44 CRASH",
+                    "driver_id": "HAM",
+                    "lap_number": 7,
+                },
+                {
+                    "session_id": "test-race",
+                    "session_time_ms": 15_000,
+                    "message_index": 1,
+                    "category": "CarEvent",
+                    "flag": None,
+                    "scope": None,
+                    "message": "CAR 44 CRASH",
+                    "driver_id": "HAM",
+                    "lap_number": 7,
+                },
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — ordered by timeMs, then driverId, then rawMessage.
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker("HAM", 15_000, "CAR 44 CRASH", lap_number=7),
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_partial_red_lap_overlap_does_not_create_freeze_marker(self) -> None:
+        """❌ Negative: incomplete evidence must span the complete red interval."""
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [
+                TestBuildLapSectorSidecar._lap_row(
+                    "VER",
+                    1,
+                    lap_start_time_ms=15_000,
+                    lap_end_time_ms=25_000,
+                    lap_duration_ms=None,
+                    track_status="125",
+                    is_accurate=False,
+                    deleted=False,
+                ),
+            ],
+            driver_ids=("VER",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": self.RED_END_MS,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            position_data=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+        )
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == ()
+
+    def test_lap_start_and_end_on_red_boundaries_are_inclusive(self) -> None:
+        """✅ Positive: a lap exactly matching the red interval is sufficient."""
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [
+                TestBuildLapSectorSidecar._lap_row(
+                    "VER",
+                    1,
+                    lap_start_time_ms=self.RED_START_MS,
+                    lap_end_time_ms=self.RED_END_MS,
+                    lap_duration_ms=None,
+                    track_status="125",
+                    is_accurate=False,
+                    deleted=False,
+                ),
+            ],
+            driver_ids=("VER",),
+            session_mode="qualifying",
+            track_status_data=[
+                {
+                    "session_id": "test-race",
+                    "start_time_ms": self.RED_START_MS,
+                    "end_time_ms": self.RED_END_MS,
+                    "status": "5",
+                    "message": "RED FLAG",
+                },
+            ],
+            position_data=[
+                self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+                self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            ],
+        )
+
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        assert timeline is not None
+        assert timeline.incident_markers == (
+            BrowserQualifyingIncidentMarker(
+                "VER", self.RED_END_MS, "RED FLAG", source="red-flag-position-freeze",
+            ),
+        )
+
+    def test_deterministic_ordering_across_frozen_drivers(self) -> None:
+        """✅ Positive: same-time freeze markers order deterministically by driver."""
+        # Arrange — both drivers freeze at the same red end.
+        snapshot = self._snapshot(position_rows=[
+            self._position_row("VER", 5_000, -36_650.0, 12_430.0),
+            self._position_row("VER", 25_000, -36_650.0, 12_430.0),
+            self._position_row("SAI", 5_000, 1_000.0, 2_000.0),
+            self._position_row("SAI", 25_000, 1_000.0, 2_000.0),
+        ])
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — SAI sorts before VER at the same timeMs.
+        assert timeline is not None
+        assert [(marker.driver_id, marker.time_ms) for marker in timeline.incident_markers] == [
+            ("SAI", self.RED_END_MS),
+            ("VER", self.RED_END_MS),
+        ]
+
+    def test_no_position_telemetry_frame_yields_no_marker(self) -> None:
+        """✅ Positive: missing position telemetry fails closed to no marker."""
+        # Arrange — a qualifying session with a red interval but no position frame.
+        snapshot = TestBuildLapSectorSidecar._snapshot_with_laps(
+            [TestBuildLapSectorSidecar._flying_lap_row("HAM", 1, phase="Q1")],
+            session_mode="qualifying",
+            track_status_data=[
+                {"session_id": "test-race", "start_time_ms": 10_000, "end_time_ms": 20_000, "status": "5", "message": "RED FLAG"},
+            ],
+        )
+
+        # Act
+        timeline = build_qualifying_timeline(snapshot, 0, 400_000)
+
+        # Assert — the interval renders, markers remain empty.
+        assert timeline is not None
+        assert timeline.intervals == (
+            BrowserQualifyingTimelineInterval("red", 10_000, 20_000),
+        )
+        assert timeline.incident_markers == ()
 
 
 # ===========================================================================
@@ -1113,7 +2538,9 @@ class TestSidecarPublication:
 
         delivery = BrowserDeliveryBuild(
             _snapshot(),
-            BrowserManifest("test-race", "Test Race", manifest_drivers),
+            BrowserManifest(
+                "test-race", "Test Race", manifest_drivers, session_mode="race",
+            ),
             _track_assets(),
             (chunk,),
             lap_sector_sidecar=sidecar,
@@ -1122,7 +2549,7 @@ class TestSidecarPublication:
         # Act — publish and cross-check via full pipeline
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="delivery-v1",
+            delivery_version="delivery-v2",
             delivery=delivery,
             schema_root=SCHEMA_ROOT,
         )
@@ -1178,7 +2605,9 @@ class TestSidecarPublication:
         )
         delivery = BrowserDeliveryBuild(
             _snapshot(),
-            BrowserManifest("test-race", "Test Race", manifest_drivers),
+            BrowserManifest(
+                "test-race", "Test Race", manifest_drivers, session_mode="race",
+            ),
             _track_assets(),
             (_chunk(),),
             lap_sector_sidecar=_sidecar(),  # only HAM
@@ -1281,6 +2710,35 @@ class TestSidecarPublication:
         ).validate(manifest)
         assert "lapSectorSidecar" not in manifest
 
+    def test_v2_publication_emits_contract_v2_lap_sector_sidecar(self, tmp_path: Path) -> None:
+        """✅ Positive: a v2 practice delivery publishes a v2 sidecar artifact."""
+        # Arrange & Act
+        result = publish_browser_delivery(
+            browser_parent=tmp_path / "browser",
+            delivery_version="delivery-v2",
+            delivery=_v2_practice_delivery(_sidecar()),
+            schema_root=SCHEMA_ROOT_V2,
+            contract_version="v2",
+        )
+        manifest = _load_json(result.manifest_path)
+        sidecar = _load_json(result.lap_sector_sidecar_path)  # type: ignore[arg-type]
+
+        # Assert — v2 identity, schema registry entry, and aligned payload
+        assert manifest["sessionMode"] == "practice"
+        assert manifest["lapSectorSidecar"]["schemaId"].endswith(":v2:browser-lap-sector-sidecar")
+        assert manifest["schemas"]["lapSectorSidecar"].endswith(":v2:browser-lap-sector-sidecar")
+        assert sidecar["contractVersion"] == "v2"
+        assert sidecar["fixtureId"] == "test-race"
+        assert sidecar["drivers"]["HAM"]["lapNumber"] == [1]
+        assert sidecar["drivers"]["HAM"]["qualifyingPhase"] == [None]
+        assert sidecar["phaseBoundaries"] == []
+        validate_complete_browser_delivery(
+            tmp_path / "browser",
+            expected_generation_id="test-gen",
+            expected_manifest_sha256="a" * 64,
+            schema_root=SCHEMA_ROOT_V2,
+        )
+
     def test_sidecar_artifact_validates_against_sidecar_schema(self, tmp_path: Path) -> None:
         """✅ Positive: sidecar JSON passes its own schema validation."""
         # Arrange & Act
@@ -1302,7 +2760,7 @@ class TestSidecarPublication:
         ).validate(sidecar_json)
 
         # Verify key contract fields
-        assert sidecar_json["contractVersion"] == "v1"
+        assert sidecar_json["contractVersion"] == "v2"
         assert sidecar_json["fixtureId"] == "test-race"
         assert "drivers" in sidecar_json
 
@@ -1377,7 +2835,7 @@ class TestSidecarPublication:
         frames = _canonical_frames_with_sectors()
         published_canonical = publish_canonical_generation(
             frames=frames, target_parent=canonical_parent,
-            generation_id="canonical-v1",
+            generation_id="canonical-v2",
         )
 
         from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import (
@@ -1393,7 +2851,7 @@ class TestSidecarPublication:
         # Act
         result = publish_browser_delivery(
             browser_parent=tmp_path / "browser",
-            delivery_version="delivery-v1",
+            delivery_version="delivery-v2",
             delivery=delivery,
             schema_root=SCHEMA_ROOT,
         )
@@ -1408,7 +2866,7 @@ class TestSidecarPublication:
 
         # Verify sidecar content from real pipeline has expected shape
         sidecar = _load_json(result.lap_sector_sidecar_path)
-        assert sidecar["contractVersion"] == "v1"
+        assert sidecar["contractVersion"] == "v2"
         assert sidecar["fixtureId"] == "synthetic-race"
         assert "HAM" in sidecar["drivers"]
         assert "lapNumber" in sidecar["drivers"]["HAM"]
@@ -1418,7 +2876,7 @@ class TestSidecarPublication:
         # Full validation — use the actual canonical manifest SHA
         validate_complete_browser_delivery(
             tmp_path / "browser",
-            expected_generation_id="canonical-v1",
+            expected_generation_id="canonical-v2",
             expected_manifest_sha256=published_canonical.manifest_sha256,
             schema_root=SCHEMA_ROOT,
         )
@@ -1447,7 +2905,7 @@ def _empty_driver() -> BrowserDriverLapSector:
 
 def _canonical_row(table: str, **changes: object) -> dict[str, object]:
     """Build one canonical row with all schema fields defaulted to None."""
-    row: dict[str, object] = {column: None for column in CANONICAL_TABLE_SCHEMAS[table]}
+    row: dict[str, object] = {column: None for column in CANONICAL_TABLE_SCHEMAS_V2[table]}
     row.update(
         {
             "session_id": "synthetic-race",
@@ -1458,7 +2916,7 @@ def _canonical_row(table: str, **changes: object) -> dict[str, object]:
         {
             "session_metadata": {
                 "year": 2026, "round_number": 1, "event_name": "Synthetic Grand Prix",
-                "session_name": "Race", "session_type": "R",
+                "session_name": "Race", "session_type": "R", "session_mode": "race",
                 "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
             },
             "drivers": {
@@ -1544,6 +3002,6 @@ def _canonical_frames_with_sectors() -> dict[str, pl.DataFrame]:
     ]
 
     return {
-        name: pl.DataFrame(value, schema=dict(CANONICAL_TABLE_SCHEMAS[name]), strict=True)
+        name: pl.DataFrame(value, schema=dict(CANONICAL_TABLE_SCHEMAS_V2[name]), strict=True)
         for name, value in rows.items()
     }

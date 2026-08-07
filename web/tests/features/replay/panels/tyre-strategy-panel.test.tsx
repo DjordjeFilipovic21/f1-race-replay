@@ -31,7 +31,7 @@ function createStintSummary(driverStints: Record<string, {
   pitOutTimeMs: readonly (number | null)[]
 }>): StintSummary {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'fixture-1',
     drivers: driverStints,
   }

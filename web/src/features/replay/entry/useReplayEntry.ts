@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { loadReplayIndex } from '../../../data/replay/loader'
 import { createFetchSource } from '../../../data/replay/source'
-import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossModel, ReplayIndex, SeasonMetadata, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
+import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossEstimateSidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayIndex, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../../../engine/replay'
+import { isQualifyingSessionMode } from '../session-capabilities'
 
 export interface ReplayEntryOptions {
   readonly browserBaseUrl: string
@@ -15,6 +16,7 @@ export interface ReadyReplay {
   readonly startMs: number
   readonly endMs: number
   readonly drivers: readonly DriverMetadata[]
+  readonly sessionMode: SessionMode
   readonly lapStarts?: readonly LapStart[]
   readonly seasonMetadata?: SeasonMetadata
   readonly telemetryCapabilities?: TelemetryCapabilities
@@ -24,7 +26,11 @@ export interface ReadyReplay {
   readonly lapSectorSidecar?: LapSectorSidecar
   readonly stintSummary?: StintSummary
   readonly pitLossModel?: PitLossModel
+  readonly pitLossEstimateSidecar?: PitLossEstimateSidecar
   readonly penaltySidecar?: PenaltySidecar
+  readonly qualifyingSummary?: QualifyingSummary
+  readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
+  readonly qualifyingTimeline?: QualifyingTimeline
   readonly weatherSidecar?: WeatherSidecar
 }
 
@@ -50,7 +56,12 @@ export function useReplayEntry({ browserBaseUrl, browserPointerPath, coordinateI
       try {
         const index = await loadReplayIndex({ source: createFetchSource(browserBaseUrl), pointerPath: browserPointerPath })
         if (stale) return
-        controller = createReplayController({ index, coordinateInterpolation })
+        const startMs = selectReplayStartMs(index)
+        controller = createReplayController({
+          index,
+          coordinateInterpolation,
+          ...(startMs === index.manifest.chunks[0]?.startMs ? {} : { initialTimeMs: startMs }),
+        })
         setReplay(createReadyReplay(index, controller, coordinateInterpolation))
       } catch (loadError: unknown) {
         if (!stale) setError(loadError)
@@ -75,7 +86,7 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
   if (firstChunk === undefined || lastChunk === undefined) throw new Error('Replay manifest has no chunks')
   return Object.freeze({
     controller,
-    startMs: firstChunk.startMs,
+    startMs: selectReplayStartMs(index),
     endMs: lastChunk.endMs,
     drivers: index.manifest.drivers,
     lapStarts: index.manifest.lapStarts,
@@ -85,11 +96,22 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
     ...(index.lapSectorSidecar === undefined ? {} : { lapSectorSidecar: index.lapSectorSidecar }),
     ...(index.stintSummary === undefined ? {} : { stintSummary: index.stintSummary }),
     ...(index.pitLossModel === undefined ? {} : { pitLossModel: index.pitLossModel }),
+    ...(index.pitLossEstimateSidecar === undefined ? {} : { pitLossEstimateSidecar: index.pitLossEstimateSidecar }),
     ...(index.penaltySidecar === undefined ? {} : { penaltySidecar: index.penaltySidecar }),
+    sessionMode: index.manifest.sessionMode,
+    ...(index.qualifyingSummary === undefined ? {} : { qualifyingSummary: index.qualifyingSummary }),
+    ...(index.qualifyingLapStatus === undefined ? {} : { qualifyingLapStatus: index.qualifyingLapStatus }),
+    ...(index.qualifyingTimeline === undefined ? {} : { qualifyingTimeline: index.qualifyingTimeline }),
     ...(index.weatherSidecar === undefined ? {} : { weatherSidecar: index.weatherSidecar }),
     trackAssets: index.trackAssets,
     coordinateInterpolation,
   })
+}
+
+/** Keeps absolute engine timestamps while clipping qualifying presentation to Q1. */
+export function selectReplayStartMs(index: ReplayIndex): number {
+  if (!isQualifyingSessionMode(index.manifest.sessionMode) || index.lapSectorSidecar?.contractVersion !== 'v2') return index.manifest.chunks[0]?.startMs ?? 0
+  return index.lapSectorSidecar.phaseBoundaries.find(({ phase }) => phase === 'Q1')?.startMs ?? index.manifest.chunks[0]?.startMs ?? 0
 }
 
 function getRequestedInterpolation(): CoordinateInterpolationStrategy {

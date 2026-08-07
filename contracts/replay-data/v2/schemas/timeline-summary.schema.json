@@ -1,0 +1,8 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"urn:f1-cache-replay:schema:replay-data:v2:timeline-summary",
+  "title":"Browser delivery v2 race timeline summary","type":"object","additionalProperties":false,
+  "required":["contractVersion","fixtureId","startMs","endMs","intervals","dnfMarkers"],
+  "$defs":{"time":{"type":"integer","minimum":0,"maximum":9223372036854775807},"driver":{"type":"string","pattern":"^[A-Z0-9]{2,4}$"},"reference":{"type":"object","additionalProperties":false,"required":["path","schemaId","sha256"],"properties":{"path":{"const":"timeline-summary.json"},"schemaId":{"const":"urn:f1-cache-replay:schema:replay-data:v2:timeline-summary"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},
+  "properties":{"contractVersion":{"const":"v2"},"fixtureId":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"startMs":{"$ref":"#/$defs/time"},"endMs":{"$ref":"#/$defs/time"},"intervals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","startMs","endMs"],"properties":{"kind":{"enum":["yellow","sc","red","vsc"]},"startMs":{"$ref":"#/$defs/time"},"endMs":{"$ref":"#/$defs/time"}}}},"dnfMarkers":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["driverId","timeMs"],"properties":{"driverId":{"$ref":"#/$defs/driver"},"timeMs":{"$ref":"#/$defs/time"}}}}}
+}

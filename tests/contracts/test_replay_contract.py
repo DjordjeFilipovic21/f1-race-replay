@@ -12,20 +12,28 @@ from referencing import Registry, Resource
 from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
     PENALTY_SIDECAR_SCHEMA_ID,
+    PIT_LOSS_ESTIMATE_METHOD,
+    PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+    PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
     WEATHER_SIDECAR_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserPenaltySidecarReference,
+    BrowserPitLossEstimateSidecarReference,
     BrowserTimelineSummaryReference,
     BrowserWeatherSidecarReference,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v1"
+CONTRACT_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2"
 SCHEMA_ROOT = CONTRACT_ROOT / "schemas"
 FIXTURE_ROOT = CONTRACT_ROOT / "fixtures" / "deterministic-race"
+
+V2_SCHEMA_ROOT = REPO_ROOT / "contracts" / "replay-data" / "v2" / "schemas"
+V2_MANIFEST_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:manifest"
+V2_QUALIFYING_SUMMARY_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:qualifying-summary"
 
 CONTINUOUS_DRIVER_FIELDS = {
     "x",
@@ -71,6 +79,7 @@ def load_contract_bundle():
         "stintSummary": load_json(SCHEMA_ROOT / "stint-summary.schema.json"),
         "pitLossModel": load_json(SCHEMA_ROOT / "pit-loss-model.schema.json"),
         "weatherSidecar": load_json(SCHEMA_ROOT / "weather-sidecar.schema.json"),
+        "pitLossEstimateSidecar": load_json(SCHEMA_ROOT / "pit-loss-estimate-sidecar.schema.json"),
     }
     return {
         "manifest": manifest,
@@ -96,6 +105,17 @@ def schema_registry(contract_bundle):
     return registry
 
 
+@pytest.fixture(scope="module")
+def v2_schema_registry():
+    registry = Registry()
+
+    for name in ("manifest", "qualifying-summary", "browser-lap-sector-sidecar"):
+        schema = load_json(V2_SCHEMA_ROOT / f"{name}.schema.json")
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+
+    return registry
+
+
 def validate_instance(schema, instance, registry):
     validator = Draft202012Validator(
         schema,
@@ -110,7 +130,7 @@ def assert_manifest_semantics(bundle):
     chunks = bundle["chunks"]
     track_assets = bundle["track_assets"]
 
-    assert manifest["contractVersion"] == "v1"
+    assert manifest["contractVersion"] == "v2"
     assert manifest["fixtureId"] == track_assets["fixtureId"]
     manifest_driver_ids = {driver["id"] for driver in manifest["drivers"]}
     assert manifest_driver_ids
@@ -323,16 +343,16 @@ def test_replay_contract_invalid_manifest_format_is_rejected(contract_bundle, sc
         validate_instance(contract_bundle["schemas"]["manifest"], invalid_manifest, schema_registry)
 
 
-def test_replay_contract_accepts_legacy_manifest_without_capability_metadata(
+def test_replay_contract_accepts_v2_manifest_without_optional_capability_metadata(
     contract_bundle, schema_registry
 ):
     # Arrange
-    legacy_manifest = copy.deepcopy(contract_bundle["manifest"])
-    legacy_manifest.pop("seasonMetadata")
-    legacy_manifest.pop("telemetryCapabilities")
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest.pop("seasonMetadata")
+    manifest.pop("telemetryCapabilities")
 
     # Act / Assert
-    validate_instance(contract_bundle["schemas"]["manifest"], legacy_manifest, schema_registry)
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
 
 
 def test_replay_contract_accepts_2026_capability_metadata_without_new_telemetry_columns(
@@ -417,6 +437,7 @@ def test_browser_manifest_rejects_malformed_capability_metadata_at_serialization
     with pytest.raises(ValueError, match=message):
         BrowserManifest(
             "deterministic-race", "Deterministic Race", (manifest_driver(),),
+            session_mode="race",
             **capability_kwargs,
         )
 
@@ -435,7 +456,7 @@ def test_replay_contract_rejects_overtake_mode_as_chunk_telemetry(
 
 def timeline_summary_payload() -> dict[str, object]:
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
         "startMs": 0,
         "endMs": 4_000,
@@ -452,15 +473,16 @@ def timeline_summary_payload() -> dict[str, object]:
 def timeline_summary_reference() -> dict[str, str]:
     return {
         "path": "timeline-summary.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:timeline-summary",
         "sha256": "a" * 64,
     }
 
 
 def lap_sector_sidecar_payload() -> dict[str, object]:
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
+        "phaseBoundaries": [],
         "drivers": {
             "HAM": {
                 "lapNumber": [1],
@@ -473,6 +495,7 @@ def lap_sector_sidecar_payload() -> dict[str, object]:
                 "sector1SessionTimeMs": [30_000],
                 "sector2SessionTimeMs": [60_000],
                 "sector3SessionTimeMs": [100_000],
+                "qualifyingPhase": [None],
             },
         },
     }
@@ -488,7 +511,7 @@ def lap_sector_sidecar_reference() -> dict[str, str]:
 
 def stint_summary_payload() -> dict[str, object]:
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
         "drivers": {
             "HAM": {
@@ -517,7 +540,7 @@ def stint_summary_reference() -> dict[str, str]:
 
 def pit_loss_model_payload() -> dict[str, object]:
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
         "method": "global-prior-weighted-mean-v1",
         "baselineMs": 22_000,
@@ -531,7 +554,7 @@ def pit_loss_model_payload() -> dict[str, object]:
 def pit_loss_model_reference() -> dict[str, str]:
     return {
         "path": "pit-loss-model.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:pit-loss-model",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:pit-loss-model",
         "sha256": "a" * 64,
     }
 
@@ -544,7 +567,7 @@ WEATHER_ARRAY_NAMES = (
 
 def weather_sidecar_payload() -> dict[str, object]:
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
         "timeMs": [0, 1_000, 2_000],
         "airTempC": [21.5, None, 22.0],
@@ -561,6 +584,45 @@ def weather_sidecar_reference() -> dict[str, str]:
     return {
         "path": "weather-sidecar.json",
         "schemaId": WEATHER_SIDECAR_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def pit_loss_estimate_sidecar_payload() -> dict[str, object]:
+    """A race-only status-aware sidecar payload bound to the fixture track."""
+    return {
+        "contractVersion": "v2",
+        "fixtureId": "deterministic-race",
+        "trackId": "deterministic-short-loop",
+        "method": PIT_LOSS_ESTIMATE_METHOD,
+        "race": {
+            "timeMs": [0, 1_523_000],
+            "estimatedLossMs": [22_000, 21_867],
+            "observedSampleCount": [0, 1],
+        },
+    }
+
+
+def pit_loss_estimate_sidecar_sc_vsc_payload() -> dict[str, object]:
+    """A sidecar payload whose Safety Car and Virtual Safety Car both occur."""
+    payload = pit_loss_estimate_sidecar_payload()
+    payload["safetyCar"] = {
+        "timeMs": [0, 1_523_000],
+        "estimatedLossMs": [22_000, 22_250],
+        "observedSampleCount": [0, 1],
+    }
+    payload["virtualSafetyCar"] = {
+        "timeMs": [0, 1_678_000],
+        "estimatedLossMs": [22_000, 21_900],
+        "observedSampleCount": [0, 1],
+    }
+    return payload
+
+
+def pit_loss_estimate_sidecar_reference() -> dict[str, str]:
+    return {
+        "path": PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+        "schemaId": PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
         "sha256": "a" * 64,
     }
 
@@ -615,7 +677,7 @@ def test_replay_contract_lap_sector_sidecar_validates_and_is_optional(contract_b
 
 def test_replay_contract_penalty_sidecar_validates_and_is_optional(contract_bundle, schema_registry):
     sidecar = {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": "deterministic-race",
         "penaltyIssuances": [{
             "driverId": "HAM",
@@ -632,7 +694,7 @@ def test_replay_contract_penalty_sidecar_validates_and_is_optional(contract_bund
     manifest = copy.deepcopy(contract_bundle["manifest"])
     manifest["penaltySidecar"] = {
         "path": "penalty-sidecar.json",
-        "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar",
+        "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar",
         "sha256": "a" * 64,
     }
 
@@ -733,6 +795,94 @@ def test_replay_contract_weather_sidecar_rejects_duplicate_times(
         validate_instance(contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry)
 
 
+def test_replay_contract_pit_loss_estimate_sidecar_race_only_validates_and_is_optional(
+    contract_bundle, schema_registry
+):
+    # Arrange: a per-track sidecar carrying only the race-wide median.
+    sidecar = pit_loss_estimate_sidecar_payload()
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["pitLossEstimateSidecar"] = pit_loss_estimate_sidecar_reference()
+
+    # Act / Assert: the race-only payload and its manifest reference are v2-valid.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_sc_vsc_present_validates(
+    contract_bundle, schema_registry
+):
+    # Arrange: a sidecar whose Safety Car and Virtual Safety Car statuses occur.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+
+    # Act / Assert: both status-specific median timelines satisfy the schema.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_statuses_are_independently_optional(
+    contract_bundle, schema_registry
+):
+    # Arrange: start from a SC+VSC payload and drop one status estimate.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+    del sidecar["virtualSafetyCar"]
+
+    # Act / Assert: an absent status never forces the other status field.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+    assert "safetyCar" in sidecar
+    assert "virtualSafetyCar" not in sidecar
+
+
+def test_replay_contract_pit_loss_estimate_sidecar_unavailable_status_validates(
+    contract_bundle, schema_registry
+):
+    # Arrange: both statuses occur but no eligible sample exists for either.
+    sidecar = pit_loss_estimate_sidecar_payload()
+    sidecar["safetyCar"] = {"status": "unavailable"}
+    sidecar["virtualSafetyCar"] = {"status": "unavailable"}
+
+    # Act / Assert: explicit unavailability is a valid status estimate.
+    validate_instance(
+        contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("instance_path", "value"),
+    [
+        (("method",), "other-v1"),
+        (("contractVersion",), "v1"),
+        (("trackId",), "Deterministic_Short_Loop"),
+        (("fixtureId",), "Deterministic-Race"),
+        (("race", "timeMs"), []),
+        (("race", "estimatedLossMs"), [22_000, -1]),
+        (("race", "observedSampleCount"), [0, 1.5]),
+        (("safetyCar",), {"status": "normal"}),
+        (("safetyCar",), {"status": "unavailable", "extra": True}),
+        (("virtualSafetyCar",), {"timeMs": [0], "estimatedLossMs": [22_000]}),
+    ],
+)
+def test_replay_contract_pit_loss_estimate_sidecar_rejects_invalid_payloads(
+    contract_bundle, schema_registry, instance_path, value
+):
+    # Arrange: a structurally or semantically invalid sidecar payload.
+    sidecar = pit_loss_estimate_sidecar_sc_vsc_payload()
+    target = sidecar
+    for key in instance_path[:-1]:
+        target = target[key]
+    target[instance_path[-1]] = value
+
+    # Act / Assert: the sidecar schema fails closed on malformed estimates.
+    with pytest.raises(ValidationError):
+        validate_instance(
+            contract_bundle["schemas"]["pitLossEstimateSidecar"], sidecar, schema_registry,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -799,7 +949,7 @@ def test_replay_contract_weather_sidecar_rejects_non_finite_values(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:unsupported:wrong"),
         ("path", "not-weather-sidecar.json"),
         ("sha256", "not-a-sha256"),
     ],
@@ -812,8 +962,40 @@ def test_replay_contract_weather_sidecar_reference_rejects_invalid_schema_or_dig
     reference[field] = value
     manifest["weatherSidecar"] = reference
 
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", "pit-loss-model.json"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v2:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_replay_contract_pit_loss_estimate_sidecar_reference_rejects_invalid_schema_or_digest(
+    contract_bundle, schema_registry, field, value
+):
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    reference = pit_loss_estimate_sidecar_reference()
+    reference[field] = value
+    manifest["pitLossEstimateSidecar"] = reference
+
     with pytest.raises(ValidationError):
         validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+
+def test_replay_contract_accepts_manifest_without_pit_loss_estimate_sidecar(
+    contract_bundle, schema_registry
+):
+    # Arrange: a v2 manifest with the optional sidecar reference.
+    manifest = copy.deepcopy(contract_bundle["manifest"])
+    manifest["pitLossEstimateSidecar"] = pit_loss_estimate_sidecar_reference()
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
+
+    # Act: remove the optional reference.
+    del manifest["pitLossEstimateSidecar"]
+
+    # Assert: the v2 manifest remains valid without the sidecar.
+    validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
 
 
 def test_browser_manifest_serializes_optional_timeline_summary_reference():
@@ -827,9 +1009,10 @@ def test_browser_manifest_serializes_optional_timeline_summary_reference():
             "colorHex": "#00D2BE",
             "carNumber": "44",
         },),
+        session_mode="race",
         timeline_summary=BrowserTimelineSummaryReference(
             "timeline-summary.json",
-            "urn:f1-cache-replay:schema:replay-data:v1:timeline-summary",
+            "urn:f1-cache-replay:schema:replay-data:v2:timeline-summary",
             "a" * 64,
         ),
     )
@@ -848,6 +1031,7 @@ def test_browser_manifest_serializes_optional_lap_sector_sidecar_reference():
             "colorHex": "#00D2BE",
             "carNumber": "44",
         },),
+        session_mode="race",
         lap_sector_sidecar=BrowserLapSectorSidecarReference(
             "lap-sector-sidecar.json",
             BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
@@ -869,6 +1053,7 @@ def test_browser_manifest_serializes_optional_penalty_sidecar_reference():
             "colorHex": "#00D2BE",
             "carNumber": "44",
         },),
+        session_mode="race",
         penalty_sidecar=BrowserPenaltySidecarReference(
             "penalty-sidecar.json", PENALTY_SIDECAR_SCHEMA_ID, "a" * 64,
         ),
@@ -892,6 +1077,7 @@ def test_browser_manifest_serializes_optional_weather_sidecar_reference():
             "colorHex": "#00D2BE",
             "carNumber": "44",
         },),
+        session_mode="race",
         weather_sidecar=BrowserWeatherSidecarReference(
             "weather-sidecar.json", WEATHER_SIDECAR_SCHEMA_ID, "a" * 64,
         ),
@@ -900,10 +1086,32 @@ def test_browser_manifest_serializes_optional_weather_sidecar_reference():
     assert manifest.as_dict()["weatherSidecar"] == weather_sidecar_reference()
 
 
+def test_browser_manifest_serializes_optional_pit_loss_estimate_sidecar_reference():
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        ({
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Mercedes",
+            "colorHex": "#00D2BE",
+            "carNumber": "44",
+        },),
+        session_mode="race",
+        pit_loss_estimate_sidecar=BrowserPitLossEstimateSidecarReference(
+            PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+            PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+            "a" * 64,
+        ),
+    )
+
+    assert manifest.as_dict()["pitLossEstimateSidecar"] == pit_loss_estimate_sidecar_reference()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:unsupported:wrong"),
         ("sha256", "not-a-sha256"),
     ],
 )
@@ -922,7 +1130,7 @@ def test_replay_contract_timeline_summary_reference_rejects_invalid_schema_or_di
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("schemaId", "urn:f1-cache-replay:schema:replay-data:v1:wrong"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:unsupported:wrong"),
         ("sha256", "not-a-sha256"),
     ],
 )
@@ -991,7 +1199,7 @@ def test_replay_contract_schema_accepts_a_general_ordered_three_chunk_manifest(
         {
             "sequence": 3,
             "path": "chunks/chunk-003.json",
-            "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
             "startMs": 4000,
             "endMs": 6000,
             "overlapWithPreviousMs": 500,
@@ -1066,7 +1274,7 @@ def test_replay_contract_general_three_chunk_handoffs_preserve_order_and_ownersh
         {
             "sequence": 3,
             "path": third_chunk_path,
-            "schemaId": "urn:f1-cache-replay:schema:replay-data:v1:chunk",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
             "startMs": 4000,
             "endMs": 6000,
             "overlapWithPreviousMs": 500,
@@ -1303,3 +1511,447 @@ def test_replay_contract_sparse_events_remain_point_in_time_records(contract_bun
     assert event_at_2600[0]["eventType"] == "overtake_completed"
     assert event_at_2500 == []
     assert event_at_2700 == []
+
+
+def test_v2_manifest_schema_requires_session_mode_field():
+    # Arrange / Act: load the active v2 manifest schema.
+    manifest_schema = load_json(SCHEMA_ROOT / "manifest.schema.json")
+
+    # Assert: every active browser manifest identifies its session mode.
+    assert manifest_schema["properties"]["contractVersion"]["const"] == "v2"
+    assert "sessionMode" in manifest_schema["properties"]
+    assert "sessionMode" in manifest_schema["required"]
+    assert "sessionType" not in manifest_schema["properties"]
+    assert "goldenSnapshots" in manifest_schema["properties"]
+    assert manifest_schema["additionalProperties"] is False
+
+
+def test_v2_contract_schemas_are_valid_json_schema():
+    # Arrange / Act: load the v2 manifest and qualifying-summary schemas.
+    schemas = {
+        "manifest": load_json(V2_SCHEMA_ROOT / "manifest.schema.json"),
+        "qualifying-summary": load_json(V2_SCHEMA_ROOT / "qualifying-summary.schema.json"),
+    }
+
+    # Assert: every v2 schema is valid draft 2020-12 with a v2 identity.
+    for name, schema in schemas.items():
+        Draft202012Validator.check_schema(schema)
+        assert schema["$id"].startswith("urn:f1-cache-replay:schema:replay-data:v2:")
+    assert schemas["manifest"]["$id"] == V2_MANIFEST_SCHEMA_ID
+    assert schemas["qualifying-summary"]["$id"] == V2_QUALIFYING_SUMMARY_SCHEMA_ID
+
+
+def v2_manifest_payload(*, session_mode: str = "qualifying", qualifying_summary: bool = True) -> dict:
+    """Return a minimal schema-valid v2 manifest instance for mode semantics."""
+    manifest = {
+        "contractVersion": "v2",
+        "formatVersion": "browser-delivery-v2",
+        "sessionMode": session_mode,
+        "fixtureId": "2026-australian-qualifying",
+        "fixtureName": "Australian Grand Prix Qualifying",
+        "schemas": {
+            "manifest": V2_MANIFEST_SCHEMA_ID,
+            "chunk": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
+            "trackAssets": "urn:f1-cache-replay:schema:replay-data:v2:track-assets",
+        },
+        "trackAssets": {
+            "path": "track-assets.json",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:track-assets",
+        },
+        "chunks": [{
+            "sequence": 1,
+            "path": "chunks/chunk-001.json",
+            "schemaId": "urn:f1-cache-replay:schema:replay-data:v2:chunk",
+            "startMs": 0,
+            "endMs": 600_000,
+            "overlapWithPreviousMs": 0,
+        }],
+        "drivers": [{
+            "id": "HAM",
+            "displayName": "Lewis Hamilton",
+            "teamName": "Ferrari",
+            "colorHex": "#E8002D",
+            "carNumber": "44",
+        }],
+        "goldenSnapshots": {"path": "golden-snapshots.json"},
+    }
+    if qualifying_summary:
+        manifest["qualifyingSummary"] = {
+            "path": "qualifying-summary.json",
+            "schemaId": V2_QUALIFYING_SUMMARY_SCHEMA_ID,
+            "sha256": "a" * 64,
+        }
+    return manifest
+
+
+def test_v2_manifest_qualifying_summary_reference_is_restricted_to_qualifying_like_modes(
+    v2_schema_registry,
+):
+    # Arrange: build the schema and qualifying-like instances with summaries.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+
+    # Act / Assert: all qualifying-like modes permit a valid summary reference.
+    for mode in ("qualifying", "sprint-qualifying", "sprint-shootout"):
+        validate_instance(
+            manifest_schema,
+            v2_manifest_payload(session_mode=mode, qualifying_summary=True),
+            v2_schema_registry,
+        )
+
+    # Assert: race-shaped sessions must not publish a qualifying summary.
+    race_with_summary = v2_manifest_payload(session_mode="race", qualifying_summary=True)
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, race_with_summary, v2_schema_registry)
+
+    # Assert: a qualifying manifest with an invalid summary digest is rejected.
+    invalid_digest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    invalid_digest["qualifyingSummary"]["sha256"] = "not-a-sha256"
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, invalid_digest, v2_schema_registry)
+
+
+def test_v2_qualifying_summary_payload_validates_against_frozen_schema(v2_schema_registry):
+    # Arrange: a representative qualifying summary with null and populated segments.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-summary.schema.json")
+    payload = {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "drivers": {
+            "HAM": {
+                "qualifyingPosition": [1],
+                "q1TimeMs": [105_123],
+                "q2TimeMs": [104_567],
+                "q3TimeMs": [103_999],
+                "bestLapNumber": [3],
+                "bestLapTimeMs": [103_999],
+            },
+            "VER": {
+                "qualifyingPosition": [2],
+                "q1TimeMs": [105_200],
+                "q2TimeMs": [105_000],
+                "q3TimeMs": [None],
+                "bestLapNumber": [1],
+                "bestLapTimeMs": [105_200],
+            },
+        },
+    }
+
+    # Act / Assert: the populated payload validates against the v2 schema.
+    validate_instance(schema, payload, v2_schema_registry)
+
+    # Assert: a position below the declared minimum is rejected.
+    payload["drivers"]["HAM"]["qualifyingPosition"] = [0]
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)
+
+
+V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:browser-lap-sector-sidecar"
+
+
+def v2_browser_lap_sector_sidecar_payload(*, qualifying: bool = True) -> dict:
+    """Return a schema-valid v2 lap-sector sidecar with aligned phase columns."""
+    payload = {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "phaseBoundaries": (
+            [
+                {"phase": "Q1", "startMs": 0},
+                {"phase": "Q2", "startMs": 105_123},
+                {"phase": "Q3", "startMs": 210_000},
+            ]
+            if qualifying
+            else []
+        ),
+        "drivers": {
+            "HAM": {
+                "lapNumber": [1, 2, 3],
+                "lapStartMs": [0, 105_123, 210_000],
+                "lapEndMs": [105_123, 210_000, 313_999],
+                "lapDurationMs": [105_123, 104_877, 103_999],
+                "sector1DurationMs": [35_041, 34_959, 34_666],
+                "sector2DurationMs": [35_041, 34_959, 34_666],
+                "sector3DurationMs": [35_041, 34_959, 34_667],
+                "sector1SessionTimeMs": [35_041, 140_164, 244_666],
+                "sector2SessionTimeMs": [70_082, 175_123, 279_332],
+                "sector3SessionTimeMs": [105_123, 210_000, 313_999],
+                "qualifyingPhase": ["Q1", "Q2", "Q3"] if qualifying else [None, None, None],
+            },
+        },
+    }
+    return payload
+
+
+def test_v2_browser_lap_sector_sidecar_schema_is_valid_and_frozen(v2_schema_registry):
+    # Arrange / Act: load the v2 browser lap-sector sidecar schema.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+
+    # Assert: the schema is valid draft 2020-12 with the v2 sidecar identity and
+    # requires the qualifying phase column and boundary array.
+    Draft202012Validator.check_schema(schema)
+    assert schema["$id"] == V2_BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID
+    assert schema["properties"]["contractVersion"]["const"] == "v2"
+    assert "phaseBoundaries" in schema["required"]
+    assert "qualifyingPhase" in schema["$defs"]["columns"]["required"]
+
+
+def test_v2_browser_lap_sector_sidecar_with_phase_data_validates(v2_schema_registry):
+    # Arrange: a qualifying payload with per-lap phases and ordered boundaries.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=True)
+
+    # Act / Assert: the authoritative Q-phase sidecar payload validates.
+    validate_instance(schema, payload, v2_schema_registry)
+
+
+def test_v2_browser_lap_sector_sidecar_accepts_backward_safe_non_qualifying_payload(
+    v2_schema_registry,
+):
+    # Arrange: a race-shaped v2 sidecar with null phases and no boundaries.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=False)
+
+    # Act / Assert: non-qualifying payloads remain schema-valid (backward safe).
+    validate_instance(schema, payload, v2_schema_registry)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["drivers"]["HAM"].update(qualifyingPhase=["Q4", "Q2", "Q3"]),
+        lambda payload: payload["phaseBoundaries"].append({"phase": "Q4", "startMs": 400_000}),
+        lambda payload: payload["phaseBoundaries"].append({"phase": "Q1", "startMs": -1}),
+        lambda payload: payload["drivers"]["HAM"].pop("qualifyingPhase"),
+        lambda payload: payload.pop("phaseBoundaries"),
+    ],
+)
+def test_v2_browser_lap_sector_sidecar_rejects_invalid_phase_or_boundary_payloads(
+    v2_schema_registry, mutation,
+):
+    # Arrange: a valid qualifying payload with a targeted structural defect.
+    schema = load_json(V2_SCHEMA_ROOT / "browser-lap-sector-sidecar.schema.json")
+    payload = v2_browser_lap_sector_sidecar_payload(qualifying=True)
+    mutation(payload)
+
+    # Act / Assert: the frozen v2 schema rejects the malformed phase payload.
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)
+
+
+# ===========================================================================
+# V2 qualifying timeline contract
+# ===========================================================================
+
+V2_QUALIFYING_TIMELINE_SCHEMA_ID = "urn:f1-cache-replay:schema:replay-data:v2:qualifying-timeline"
+
+
+def qualifying_timeline_payload(
+    *, intervals=None, markers=None, start_ms=0, end_ms=600_000,
+) -> dict:
+    """Return a schema-valid v2 qualifying timeline payload."""
+    return {
+        "contractVersion": "v2",
+        "fixtureId": "2026-australian-qualifying",
+        "startMs": start_ms,
+        "endMs": end_ms,
+        "intervals": intervals if intervals is not None else [
+            {"kind": "yellow", "startMs": 10_000, "endMs": 20_000},
+            {"kind": "red", "startMs": 30_000, "endMs": 40_000},
+        ],
+        "incidentMarkers": markers if markers is not None else [{
+            "driverId": "HAM", "timeMs": 15_000,
+            "source": "race-control-car-event", "rawMessage": "CAR 44 CRASH",
+            "lapNumber": 7,
+        }],
+    }
+
+
+def qualifying_timeline_reference() -> dict[str, str]:
+    return {
+        "path": "qualifying-timeline.json",
+        "schemaId": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+        "sha256": "a" * 64,
+    }
+
+
+def assert_qualifying_timeline_semantics(payload):
+    """Semantic invariants the JSON schema cannot express directly."""
+    start_ms, end_ms = payload["startMs"], payload["endMs"]
+    assert start_ms < end_ms
+    assert "dnfMarkers" not in payload
+    assert "OUT" not in payload
+    for interval in payload["intervals"]:
+        assert start_ms <= interval["startMs"] < interval["endMs"] <= end_ms
+    assert payload["intervals"] == sorted(
+        payload["intervals"],
+        key=lambda item: (item["startMs"], item["endMs"], item["kind"]),
+    )
+    markers = payload["incidentMarkers"]
+    assert markers == sorted(
+        markers, key=lambda item: (item["timeMs"], item["driverId"], item["rawMessage"])
+    )
+    for marker in markers:
+        assert start_ms <= marker["timeMs"] < end_ms
+
+
+def test_v2_qualifying_timeline_schema_is_valid_and_frozen():
+    # Arrange / Act: load the v2 qualifying timeline schema.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+
+    # Assert: the schema is valid draft 2020-12 with the v2 identity, and it
+    # never represents race DNF/OUT/finish semantics.
+    Draft202012Validator.check_schema(schema)
+    assert schema["$id"] == V2_QUALIFYING_TIMELINE_SCHEMA_ID
+    assert schema["properties"]["contractVersion"]["const"] == "v2"
+    assert {
+        "contractVersion", "fixtureId", "startMs", "endMs",
+        "intervals", "incidentMarkers",
+    } <= set(schema["required"])
+    assert "dnfMarkers" not in schema["properties"]
+    assert "OUT" not in schema["properties"]
+
+
+def test_v2_qualifying_timeline_payload_validates(v2_schema_registry):
+    # Arrange
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload()
+
+    # Act / Assert: the populated payload validates and satisfies semantics.
+    validate_instance(schema, payload, v2_schema_registry)
+    assert_qualifying_timeline_semantics(payload)
+
+    # Assert: empty collections remain schema-valid; the artifact is omitted
+    # entirely at publication when there is nothing to publish (fail closed).
+    empty = qualifying_timeline_payload(intervals=[], markers=[])
+    validate_instance(schema, empty, v2_schema_registry)
+    assert_qualifying_timeline_semantics(empty)
+
+
+def test_v2_qualifying_timeline_accepts_red_flag_position_freeze_source(
+    v2_schema_registry,
+):
+    # Arrange: a schema-valid marker using the inferred freeze source.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "VER", "timeMs": 40_000, "source": "red-flag-position-freeze",
+         "rawMessage": "RED FLAG"},
+    ])
+
+    # Act / Assert: the new frozen source validates and passes semantics.
+    validate_instance(schema, payload, v2_schema_registry)
+    assert_qualifying_timeline_semantics(payload)
+
+
+def test_v2_qualifying_timeline_rejects_unknown_marker_source(v2_schema_registry):
+    # Arrange: a marker whose source is neither frozen value.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "HAM", "timeMs": 15_000, "source": "dnf", "rawMessage": "CAR 44 CRASH"},
+    ])
+
+    # Act / Assert: unknown sources fail closed at the schema boundary.
+    with pytest.raises(ValidationError):
+        validate_instance(schema, payload, v2_schema_registry)
+
+
+def test_v2_manifest_accepts_manifest_without_optional_qualifying_timeline(
+    v2_schema_registry,
+):
+    # Arrange: a v2 manifest without the optional qualifying timeline
+    # reference or schemas entry.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    legacy = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    assert "qualifyingTimeline" not in legacy
+
+    # Act / Assert: the backward-compatible manifest remains valid, and the
+    # optional artifact can be added without breaking the contract.
+    validate_instance(manifest_schema, legacy, v2_schema_registry)
+    with_timeline = dict(legacy)
+    with_timeline["qualifyingTimeline"] = qualifying_timeline_reference()
+    with_timeline["schemas"] = {
+        **legacy["schemas"], "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+    }
+    validate_instance(manifest_schema, with_timeline, v2_schema_registry)
+
+
+@pytest.mark.parametrize("mode", ["race", "sprint", "practice"])
+def test_v2_manifest_rejects_qualifying_timeline_for_non_qualifying_modes(
+    v2_schema_registry, mode,
+):
+    # Arrange: a non-qualifying manifest carrying a timeline reference.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode=mode, qualifying_summary=False)
+    manifest["qualifyingTimeline"] = qualifying_timeline_reference()
+
+    # Act / Assert: wrong-mode rejection at the schema boundary.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+    # Assert: a schemas-registry leak is rejected outside qualifying-like modes.
+    leaked = v2_manifest_payload(session_mode=mode, qualifying_summary=False)
+    leaked["schemas"] = {
+        **leaked["schemas"], "qualifyingTimeline": V2_QUALIFYING_TIMELINE_SCHEMA_ID,
+    }
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, leaked, v2_schema_registry)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", "other-timeline.json"),
+        ("schemaId", "urn:f1-cache-replay:schema:replay-data:unsupported:wrong"),
+        ("sha256", "not-a-sha256"),
+    ],
+)
+def test_v2_manifest_rejects_invalid_qualifying_timeline_reference(
+    v2_schema_registry, field, value,
+):
+    # Arrange: a qualifying manifest with a structurally invalid reference.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    reference = qualifying_timeline_reference()
+    reference[field] = value
+    manifest["qualifyingTimeline"] = reference
+
+    # Act / Assert: digest/path/schemaId validation fails closed.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+
+def test_v2_qualifying_timeline_requires_deterministic_marker_ordering(
+    v2_schema_registry,
+):
+    # Arrange: markers are schema-valid but out of deterministic order.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(markers=[
+        {"driverId": "VER", "timeMs": 30_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 1 STOPS"},
+        {"driverId": "HAM", "timeMs": 15_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 44 CRASH"},
+        {"driverId": "HAM", "timeMs": 15_000, "source": "race-control-car-event",
+         "rawMessage": "CAR 44 STALLED"},
+    ])
+
+    # Act / Assert: the JSON schema is order-agnostic...
+    validate_instance(schema, payload, v2_schema_registry)
+    # ...but the deterministic (timeMs, driverId, rawMessage) ordering is a
+    # mandatory semantic enforced by the pipeline and consumers.
+    with pytest.raises(AssertionError):
+        assert_qualifying_timeline_semantics(payload)
+
+
+def test_v2_qualifying_timeline_requires_deterministic_interval_ordering(
+    v2_schema_registry,
+):
+    # Arrange: intervals are schema-valid but out of deterministic order.
+    schema = load_json(V2_SCHEMA_ROOT / "qualifying-timeline.schema.json")
+    payload = qualifying_timeline_payload(intervals=[
+        {"kind": "red", "startMs": 30_000, "endMs": 40_000},
+        {"kind": "yellow", "startMs": 10_000, "endMs": 20_000},
+    ])
+
+    # Act / Assert: schema-valid, but the deterministic interval ordering
+    # (startMs, endMs, kind) semantic is mandatory.
+    validate_instance(schema, payload, v2_schema_registry)
+    with pytest.raises(AssertionError):
+        assert_qualifying_timeline_semantics(payload)

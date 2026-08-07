@@ -10,11 +10,11 @@ import {
 import { loadReplayIndex } from '../../../src/data/replay/loader'
 import type { ReplaySource } from '../../../src/data/replay/types'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v2/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
-const PENALTY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:penalty-sidecar'
+const PENALTY_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:penalty-sidecar'
 
 function penaltyIssuance(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -30,7 +30,7 @@ function penaltyIssuance(overrides: Record<string, unknown> = {}): Record<string
 
 function penaltyPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'deterministic-race',
     penaltyIssuances: [penaltyIssuance()],
     ...overrides,
@@ -81,7 +81,7 @@ describe('penalty sidecar guards', () => {
     expect(() => parsePenaltySidecar(payload)).toThrow('driverId is invalid')
   })
 
-  test('validates the optional manifest reference and preserves legacy manifests', async () => {
+  test('validates the optional manifest reference and preserves V2 manifests without it', async () => {
     const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
     expect(parseManifest(manifest)).not.toHaveProperty('penaltySidecar')
     expect(parsePenaltySidecarReference(penaltyReference())).toEqual(penaltyReference())

@@ -21,7 +21,7 @@ def test_service_runs_reader_assets_builder_and_publisher_in_order() -> None:
     snapshot = object()
     assets = {"fixtureId": "race"}
     delivery = object()
-    publication = SimpleNamespace(delivery_version="delivery-v1")
+    publication = SimpleNamespace(delivery_version="delivery-v2")
 
     def reader(path):
         calls.append(("reader", path))
@@ -46,7 +46,7 @@ def test_service_runs_reader_assets_builder_and_publisher_in_order() -> None:
         progress=progress.append,
     )
 
-    assert result.delivery_version == "delivery-v1"
+    assert result.delivery_version == "delivery-v2"
     assert [call[0] for call in calls] == ["reader", "assets", "builder", "publisher"]
     assert progress == [
         "canonical_snapshot_reading", "track_assets_generating", "browser_building", "browser_publishing",
@@ -56,12 +56,13 @@ def test_service_runs_reader_assets_builder_and_publisher_in_order() -> None:
         "delivery_version": request.delivery_version,
         "delivery": delivery,
         "schema_root": request.schema_root,
+        "contract_version": "v2",
     }
 
 
 def test_service_forwards_default_publisher_operation_boundaries(monkeypatch) -> None:
     progress: list[str | BrowserValidationProgress] = []
-    publication = SimpleNamespace(delivery_version="delivery-v1")
+    publication = SimpleNamespace(delivery_version="delivery-v2")
 
     def publisher(*, progress, **_keywords):
         progress("browser_payload_preparing")
@@ -132,5 +133,5 @@ def test_service_rejects_identical_canonical_and_browser_parents() -> None:
 
 def _request() -> BrowserPublishRequest:
     return BrowserPublishRequest(
-        Path("canonical"), Path("browser"), "delivery-v1", Path("schemas"),
+        Path("canonical"), Path("browser"), "delivery-v2", Path("schemas"),
     )

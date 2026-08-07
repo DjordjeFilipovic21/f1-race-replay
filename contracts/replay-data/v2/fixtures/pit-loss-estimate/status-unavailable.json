@@ -1,0 +1,17 @@
+{
+  "contractVersion": "v2",
+  "fixtureId": "deterministic-race",
+  "trackId": "deterministic-short-loop",
+  "method": "track-status-median-v1",
+  "race": {
+    "timeMs": [0, 120000],
+    "estimatedLossMs": [22000, 21800],
+    "observedSampleCount": [0, 1]
+  },
+  "safetyCar": {
+    "status": "unavailable"
+  },
+  "virtualSafetyCar": {
+    "status": "unavailable"
+  }
+}

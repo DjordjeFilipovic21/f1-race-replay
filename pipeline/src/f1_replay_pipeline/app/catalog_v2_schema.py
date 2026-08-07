@@ -7,21 +7,230 @@ import json
 import math
 from pathlib import PurePosixPath
 import re
+from types import MappingProxyType
+from collections.abc import Mapping, Sequence
+from typing import cast
 
-from f1_replay_pipeline.domain.generation_identity import validate_generation_id
+from f1_replay_pipeline.domain.canonical_contract import CANONICAL_PARQUET_V1, CANONICAL_PARQUET_V2
+from f1_replay_pipeline.domain.generation_identity import build_v2_generation_id, validate_generation_id
 
 
 CATALOG_SCHEMA_VERSION = 2
-CANONICAL_POINTER_FORMAT = "canonical-parquet-v1"
-BROWSER_POINTER_FORMAT = "browser-delivery-v1"
+CANONICAL_POINTER_FORMAT = CANONICAL_PARQUET_V2
+BROWSER_POINTER_FORMAT = "browser-delivery-v2"
+HISTORICAL_CANONICAL_POINTER_FORMAT = CANONICAL_PARQUET_V1
+HISTORICAL_BROWSER_POINTER_FORMAT = "browser-delivery-v1"
+REQUIRED_V2_CUTOVER_RACE_COUNT = 4
+V1_DEPRECATION_METADATA: Mapping[str, Mapping[str, object]] = MappingProxyType({
+    "canonical": MappingProxyType({
+        "format_version": HISTORICAL_CANONICAL_POINTER_FORMAT,
+        "active": False,
+        "deprecated": True,
+        "replacement": CANONICAL_POINTER_FORMAT,
+    }),
+    "browser": MappingProxyType({
+        "format_version": HISTORICAL_BROWSER_POINTER_FORMAT,
+        "active": False,
+        "deprecated": True,
+        "replacement": BROWSER_POINTER_FORMAT,
+    }),
+})
+HISTORICAL_V1_ARTIFACT_METADATA: Mapping[str, Mapping[str, object]] = MappingProxyType({
+    "canonical_manifest": MappingProxyType({
+        "format_version": HISTORICAL_CANONICAL_POINTER_FORMAT,
+        "schema_token": f"{HISTORICAL_CANONICAL_POINTER_FORMAT}:manifest",
+        "active": False,
+        "deprecated": True,
+    }),
+    "canonical_schema": MappingProxyType({
+        "format_version": HISTORICAL_CANONICAL_POINTER_FORMAT,
+        "active": False,
+        "deprecated": True,
+    }),
+    "browser_manifest": MappingProxyType({
+        "format_version": HISTORICAL_BROWSER_POINTER_FORMAT,
+        "schema_token": "urn:f1-cache-replay:schema:replay-data:v1:manifest",
+        "active": False,
+        "deprecated": True,
+    }),
+    "browser_schema": MappingProxyType({
+        "format_version": HISTORICAL_BROWSER_POINTER_FORMAT,
+        "active": False,
+        "deprecated": True,
+    }),
+    "historical_fixtures": MappingProxyType({
+        "format_version": "v1",
+        "count": 4,
+        "active": False,
+        "deprecated": True,
+    }),
+})
 _SUFFIX = re.compile(r"-(?:force|browser)-[0-9]+$")
 _RACE_ID = re.compile(r"^(?P<year>[0-9]{4})-round-(?P<round>[0-9]+)(?:-[A-Za-z0-9._-]+)?$")
 _GENERATION_ID = re.compile(r"^(?P<year>[0-9]{4})-round-(?P<round>[0-9]+)-(?P<session>.+)$")
+_V2_GENERATION_ID = re.compile(
+    r"^(?P<year>[0-9]{4})-round-(?P<round>[0-9]+)-session-"
+    r"(?P<identity>[A-Za-z0-9.-]+)-mode-"
+    r"(?P<mode>practice|qualifying|race|sprint|sprint-qualifying|sprint-shootout|testing)$"
+)
+_V2_SESSION_CODES = {
+    "practice-1": "fp1",
+    "practice-2": "fp2",
+    "practice-3": "fp3",
+    "qualifying": "q",
+    "race": "r",
+    "sprint": "s",
+    "sprint-qualifying": "sq",
+    "sprint-shootout": "ss",
+    "testing": "testing",
+}
 _SAFE_RELATIVE_POSIX_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
 
 
 def serialize_catalog_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
+
+
+@dataclass(frozen=True)
+class DeprecatedV1Reference:
+    """Metadata for an immutable v1 artifact retained only for history."""
+
+    artifact: str
+    path: str
+    active: bool = False
+    deprecated: bool = True
+
+    def __post_init__(self) -> None:
+        _require_text(self.artifact, "artifact")
+        _require_pointer(self.path, "path")
+        if self.active:
+            raise ValueError("v1 historical references must be inactive")
+        if not self.deprecated:
+            raise ValueError("v1 historical references must be deprecated")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "artifact": self.artifact,
+            "path": self.path,
+            "active": self.active,
+            "deprecated": self.deprecated,
+        }
+
+
+def validate_active_catalog(value: object) -> "CatalogV2Payload":
+    """Parse the only catalog shape eligible for active discovery."""
+    if not isinstance(value, Mapping):
+        raise ValueError("active catalog must be an object")
+    if value.get("schemaVersion") != CATALOG_SCHEMA_VERSION:
+        raise ValueError("active catalog requires schemaVersion 2; v1 catalogs are deprecated")
+    if set(value) - {"schemaVersion", "year", "atomicAcrossRaces", "races"}:
+        raise ValueError("active catalog contains unsupported or deprecated fields")
+    raw_races = value.get("races")
+    if not isinstance(raw_races, list):
+        raise ValueError("active catalog races must be an array")
+    races = tuple(_race_from_dict(item) for item in raw_races)
+    for race in races:
+        for session in race.sessions:
+            if session.generation_id is None:
+                continue
+            try:
+                expected_code = session_code_from_generation_id(session.generation_id, race.race_id)
+            except ValueError as error:
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} has mixed-version identity"
+                ) from error
+            if expected_code != session.session_code:
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} disagrees with generation_id"
+                )
+    return CatalogV2Payload(
+        cast(int, value.get("year")),
+        races,
+        atomic_across_races=cast(bool, value.get("atomicAcrossRaces")),
+    )
+
+
+def validate_v2_cutover_contract(
+    value: object,
+    required_race_ids: Sequence[str],
+) -> "CatalogV2Payload":
+    """Require every republished race before the active catalog is switched."""
+    try:
+        requested = tuple(required_race_ids)
+    except TypeError as error:
+        raise ValueError("v2 cutover race IDs must be a collection") from error
+    for race_id in requested:
+        try:
+            validate_generation_id(race_id)
+        except (TypeError, ValueError) as error:
+            raise ValueError("v2 cutover race IDs must be safe identifiers") from error
+    required = tuple(dict.fromkeys(requested))
+    if len(required) != REQUIRED_V2_CUTOVER_RACE_COUNT:
+        raise ValueError("v2 catalog cutover requires exactly four republished races")
+    catalog = validate_active_catalog(value)
+    records = {race.race_id: race for race in catalog.races}
+    missing = [race_id for race_id in required if race_id not in records]
+    if missing:
+        raise ValueError(f"v2 catalog cutover is incomplete; missing republished races: {', '.join(missing)}")
+    for race_id in required:
+        if not any(session.validated for session in records[race_id].sessions):
+            raise ValueError(f"v2 catalog cutover race {race_id} has no validated v2 session")
+    return catalog
+
+
+def _race_from_dict(value: object) -> "CatalogV2RaceRecord":
+    if not isinstance(value, Mapping):
+        raise ValueError("active catalog race must be an object")
+    raw_sessions = value.get("sessions")
+    if not isinstance(raw_sessions, list):
+        raise ValueError("active catalog race sessions must be an array")
+    visual = value.get("visual")
+    visual_values = visual if isinstance(visual, Mapping) else {}
+    if visual is not None and not isinstance(visual, Mapping):
+        raise ValueError("active catalog race visual metadata is malformed")
+    race = CatalogV2RaceRecord(
+        cast(str, value.get("race_id")), cast(int, value.get("round_number")), cast(str, value.get("event_name")),
+        tuple(_session_from_dict(item) for item in raw_sessions),
+        value.get("country"), value.get("location"), value.get("event_date"),
+        visual_values.get("latitude"), visual_values.get("longitude"), visual_values.get("circuitPreview"),
+    )
+    for session in race.sessions:
+        if session.validated:
+            expected_browser_suffix = f"/sessions/{session.session_code}/browser-current.json"
+            if (
+                session.browser_pointer is None
+                or not session.browser_pointer.startswith("browser/")
+                or not session.browser_pointer.endswith(expected_browser_suffix)
+            ):
+                raise ValueError(
+                    f"active catalog session {race.race_id}/{session.session_code} has a non-v2 browser pointer"
+                )
+            if session.canonical_pointer is not None:
+                expected_canonical_suffix = f"/sessions/{session.session_code}/current.json"
+                if (
+                    not session.canonical_pointer.startswith("canonical/")
+                    or not session.canonical_pointer.endswith(expected_canonical_suffix)
+                ):
+                    raise ValueError(
+                        f"active catalog session {race.race_id}/{session.session_code} has a non-v2 canonical pointer"
+                    )
+    return race
+
+
+def _session_from_dict(value: object) -> "CatalogV2SessionRecord":
+    if not isinstance(value, Mapping):
+        raise ValueError("active catalog session must be an object")
+    if set(value) != {
+        "session_code", "session_name", "generation_id", "delivery_version", "outcome",
+        "validated", "canonical_pointer", "browser_pointer",
+    }:
+        raise ValueError("active catalog session has deprecated or mixed-version fields")
+    return CatalogV2SessionRecord(
+        cast(str, value["session_code"]), cast(str, value["session_name"]),
+        cast(str | None, value["generation_id"]), cast(str | None, value["delivery_version"]),
+        cast(str, value["outcome"]), cast(bool, value["validated"]),
+        cast(str | None, value["canonical_pointer"]), cast(str | None, value["browser_pointer"]),
+    )
 
 
 def session_code_from_generation_id(generation_id: str, race_id: str) -> str:
@@ -37,6 +246,22 @@ def session_code_from_generation_id(generation_id: str, race_id: str) -> str:
         generation_match["year"], int(generation_match["round"]),
     ):
         raise ValueError("generation_id belongs to a different year or round")
+    v2_match = _V2_GENERATION_ID.fullmatch(base)
+    if v2_match is not None:
+        if (race_match["year"], int(race_match["round"])) != (
+            v2_match["year"], int(v2_match["round"]),
+        ):
+            raise ValueError("generation_id belongs to a different year or round")
+        identity = v2_match["identity"]
+        try:
+            expected = build_v2_generation_id(
+                int(v2_match["year"]), int(v2_match["round"]), identity,
+            )
+        except ValueError as error:
+            raise ValueError("generation_id has an invalid v2 session identity") from error
+        if expected != base or identity not in _V2_SESSION_CODES:
+            raise ValueError("generation_id has an invalid v2 session identity")
+        return _V2_SESSION_CODES[identity]
     return validate_generation_id(generation_match["session"]).casefold()
 
 
@@ -67,7 +292,12 @@ def _require_safe_text(value: object, label: str) -> str:
 def _require_pointer(value: object, label: str) -> str:
     text = _require_text(value, label)
     path = PurePosixPath(text)
-    if path.is_absolute() or "\\" in text or any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        _SAFE_RELATIVE_POSIX_PATH.fullmatch(text) is None
+        or path.is_absolute()
+        or "\\" in text
+        or any(part in {"", ".", ".."} for part in text.split("/"))
+    ):
         raise ValueError(f"{label} must be a safe relative POSIX path")
     return text
 
@@ -242,6 +472,10 @@ class CatalogV2Payload:
 
 __all__ = [
     "BROWSER_POINTER_FORMAT", "CANONICAL_POINTER_FORMAT", "CATALOG_SCHEMA_VERSION",
+    "DeprecatedV1Reference", "HISTORICAL_BROWSER_POINTER_FORMAT",
+    "HISTORICAL_CANONICAL_POINTER_FORMAT", "REQUIRED_V2_CUTOVER_RACE_COUNT",
+    "HISTORICAL_V1_ARTIFACT_METADATA", "V1_DEPRECATION_METADATA",
+    "validate_active_catalog", "validate_v2_cutover_contract",
     "CatalogV2Payload", "CatalogV2RaceRecord", "CatalogV2SessionRecord",
     "serialize_catalog_json", "session_code_from_generation_id", "strip_generation_suffix",
 ]

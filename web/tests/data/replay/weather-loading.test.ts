@@ -10,11 +10,11 @@ import {
 import { loadReplayData, loadReplayIndex } from '../../../src/data/replay/loader'
 import type { ReplaySource } from '../../../src/data/replay/types'
 
-const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v1/fixtures/deterministic-race')
+const fixtureRoot = resolve(import.meta.dirname, '../../../../contracts/replay-data/v2/fixtures/deterministic-race')
 const fixtureSource: ReplaySource = { read: (path) => readFile(resolve(fixtureRoot, path)) }
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
-const WEATHER_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar'
+const WEATHER_SCHEMA = 'urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar'
 const WEATHER_PATH = 'weather-sidecar.json'
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ const WEATHER_PATH = 'weather-sidecar.json'
 
 function weatherPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    contractVersion: 'v1',
+    contractVersion: 'v2',
     fixtureId: 'deterministic-race',
     timeMs: [0, 60_000, 120_000],
     airTempC: [21.5, 22.1, 22.8],
@@ -53,6 +53,7 @@ async function sourceWithWeather(options: {
   missingFile?: boolean
   omitReference?: boolean
   reference?: Record<string, unknown>
+  registrySchemaId?: string
   includeChunks?: boolean
 } = {}): Promise<{ source: ReplaySource; reads: string[]; payload: Uint8Array }> {
   const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
@@ -63,6 +64,10 @@ async function sourceWithWeather(options: {
 
   if (!options.omitReference) {
     manifest.weatherSidecar = options.reference ?? weatherReference(options.corruptDigest ? '0'.repeat(64) : await sha256Hex(payload))
+    if (options.registrySchemaId !== undefined) {
+      const schemas = manifest.schemas as Record<string, unknown>
+      schemas.weatherSidecar = options.registrySchemaId
+    }
   }
 
   const files = new Map<string, Uint8Array>([['track-assets.json', track]])
@@ -98,7 +103,7 @@ describe('parseWeatherSidecar', () => {
     const result = parseWeatherSidecar(payload)
 
     // Assert
-    expect(result.contractVersion).toBe('v1')
+    expect(result.contractVersion).toBe('v2')
     expect(result.fixtureId).toBe('deterministic-race')
     expect(result.timeMs).toEqual([0, 60_000, 120_000])
     expect(result.airTempC).toEqual([21.5, 22.1, 22.8])
@@ -165,10 +170,10 @@ describe('parseWeatherSidecar', () => {
 
   test('rejects a payload with the wrong contract version', () => {
     // Arrange
-    const payload = weatherPayload({ contractVersion: 'v2' })
+    const payload = weatherPayload({ contractVersion: 'v1' })
 
     // Act & Assert
-    expect(() => parseWeatherSidecar(payload)).toThrow('must be contract version v1')
+    expect(() => parseWeatherSidecar(payload)).toThrow('must be contract version v2')
   })
 
   test('rejects an invalid fixture id', () => {
@@ -282,7 +287,7 @@ describe('parseWeatherSidecarReference', () => {
 
   test('rejects a wrong schema identity', () => {
     // Arrange
-    const reference = { ...weatherReference(), schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:timeline-summary' }
+    const reference = { ...weatherReference(), schemaId: 'urn:f1-cache-replay:schema:replay-data:unsupported:weather-sidecar' }
 
     // Act & Assert
     expect(() => parseWeatherSidecarReference(reference)).toThrow('weather sidecar schema identity is unsupported')
@@ -325,8 +330,8 @@ describe('weather sidecar manifest reference', () => {
     expect(Object.isFrozen(parsed.weatherSidecar)).toBe(true)
   })
 
-  test('keeps legacy manifests without weatherSidecar loadable and property-free', async () => {
-    // Arrange — the published fixture manifest predates the weather artifact.
+  test('keeps v2 manifests without weatherSidecar loadable and property-free', async () => {
+    // Arrange — the published v2 fixture omits the optional weather artifact.
     const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
 
     // Act
@@ -357,7 +362,7 @@ describe('weather sidecar loader integration', () => {
     expect(index.weatherSidecar!.rainfall).toEqual([false, false, true])
   })
 
-  test('performs no weather fetch for a legacy manifest and remains loadable', async () => {
+  test('performs no weather fetch for a v2 manifest without weather and remains loadable', async () => {
     // Arrange
     const { source, reads } = await sourceWithWeather({ omitReference: true })
 
@@ -450,7 +455,7 @@ describe('weather sidecar loader integration', () => {
   test('treats an unsupported weather schema identity as unavailable while chunks remain usable', async () => {
     // Arrange — a bad optional reference must not relax strict core artifacts.
     const { source } = await sourceWithWeather({
-      reference: { ...weatherReference(), schemaId: 'urn:f1-cache-replay:schema:replay-data:v1:wrong' },
+      reference: { ...weatherReference(), schemaId: 'urn:f1-cache-replay:schema:replay-data:unsupported:weather-sidecar' },
       includeChunks: true,
     })
 
@@ -458,6 +463,18 @@ describe('weather sidecar loader integration', () => {
     const replay = await loadReplayData({ source })
 
     // Assert
+    expect(replay.weatherSidecar).toBeUndefined()
+    expect(replay.chunks).toHaveLength(2)
+  })
+
+  test('removes an invalid optional weather registry entry before core manifest parsing', async () => {
+    const { source } = await sourceWithWeather({
+      registrySchemaId: 'urn:f1-cache-replay:schema:replay-data:v2:wrong',
+      includeChunks: true,
+    })
+
+    const replay = await loadReplayData({ source })
+
     expect(replay.weatherSidecar).toBeUndefined()
     expect(replay.chunks).toHaveLength(2)
   })
@@ -525,8 +542,8 @@ async function pointerSourceWithWeather(): Promise<{ source: ReplaySource; reads
   const manifest = JSON.parse(decoder.decode(await fixtureSource.read('manifest.json'))) as Record<string, unknown>
   const track = await fixtureSource.read('track-assets.json')
   const payload = encoder.encode(JSON.stringify(weatherPayload()))
-  manifest.formatVersion = 'browser-delivery-v1'
-  manifest.deliveryVersion = 'demo-v1'
+  manifest.formatVersion = 'browser-delivery-v2'
+  manifest.deliveryVersion = 'demo'
   manifest.weatherSidecar = weatherReference(await sha256Hex(payload))
   const manifestBytes = encoder.encode(JSON.stringify(manifest))
   const files = new Map<string, Uint8Array>([
@@ -535,8 +552,8 @@ async function pointerSourceWithWeather(): Promise<{ source: ReplaySource; reads
     ['generations/demo/weather-sidecar.json', payload],
   ])
   files.set('browser-current.json', encoder.encode(JSON.stringify({
-    formatVersion: 'browser-delivery-v1',
-    deliveryVersion: 'demo-v1',
+    formatVersion: 'browser-delivery-v2',
+    deliveryVersion: 'demo',
     manifestPath: 'generations/demo/manifest.json',
     manifestSha256: await sha256Hex(manifestBytes),
   })))

@@ -6,7 +6,7 @@ import polars as pl
 from polars.testing import assert_frame_equal
 import pytest
 
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS, CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.storage.parquet_io import (
     CANONICAL_PARQUET_TABLE_NAMES,
     PARQUET_WRITE_SETTINGS,
@@ -15,6 +15,7 @@ from f1_replay_pipeline.storage.parquet_io import (
     parquet_byte_sha256,
     validate_canonical_frames,
     verify_canonical_parquet_round_trip,
+    write_canonical_parquet,
     write_canonical_parquet_tables,
 )
 from f1_replay_pipeline.domain.validators import CanonicalValidationError
@@ -78,6 +79,28 @@ def test_boundary_rejects_missing_extra_and_invalid_canonical_frames():
         validate_canonical_frames({**frames, "drivers": frames["drivers"].select("driver_id", "session_id", *frames["drivers"].columns[2:])})
 
 
+@pytest.mark.parametrize(
+    ("table_name", "changes", "message"),
+    [
+        ("session_metadata", {"session_mode": None}, "session_mode.*normalized"),
+        ("results", {"q1_time_ms": -1}, "qualifying times.*non-negative"),
+    ],
+)
+def test_v2_parquet_boundary_rejects_unsafe_nullable_and_qualifying_values(
+    tmp_path, table_name, changes, message,
+):
+    row: dict[str, object] = {column: None for column in CANONICAL_TABLE_SCHEMAS_V2[table_name]}
+    row.update(changes)
+    row["session_id"] = "2026-example-qualifying"
+    if table_name == "results":
+        row["driver_id"] = "HAM"
+
+    frame = pl.DataFrame([row], schema=dict(CANONICAL_TABLE_SCHEMAS_V2[table_name]), strict=True)
+
+    with pytest.raises(CanonicalValidationError, match=message):
+        write_canonical_parquet(table_name, frame, tmp_path / f"{table_name}.parquet", version="v2")
+
+
 def test_byte_sha256_is_the_exact_closed_artifact_digest_not_a_portability_claim(tmp_path):
     path = write_canonical_parquet_tables(_canonical_frames(), tmp_path)["drivers"]
 
@@ -131,12 +154,13 @@ def _row(table_name: str) -> dict[str, object]:
     values = {
         "session_metadata": {
             "year": 2026, "round_number": 1, "event_name": "Example Grand Prix",
-            "session_name": "Race", "session_type": "R", "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "session_name": "Race", "session_type": "R", "session_mode": "race",
+            "session_start_time_utc": datetime(2026, 1, 1, tzinfo=timezone.utc),
         },
         "drivers": {"source_driver_key": "44", "driver_number": 44, "full_name": "Lewis Hamilton"},
         "car_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "car"},
         "position_telemetry": {"source_driver_key": "44", "session_time_ms": 0, "source": "position"},
-        "laps": {"lap_number": 1, "lap_start_time_ms": 0},
+        "laps": {"lap_number": 1, "lap_start_time_ms": 0, "qualifying_phase": None},
         "stints": {"stint_number": 1, "start_lap_number": 1},
         "weather": {"session_time_ms": 0},
         "track_status_intervals": {"start_time_ms": 0, "status": "1"},

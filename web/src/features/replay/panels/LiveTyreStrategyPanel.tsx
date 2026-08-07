@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { DriverMetadata, StintSummary } from '../../../data/replay/types'
+import type { DriverMetadata, SessionMode, StintSummary } from '../../../data/replay/types'
 import type { ReplayController } from '../../../engine/replay'
 import { createThrottledReplayStore } from '../state/throttled-replay-store'
 import { TyreStrategyPanel } from './TyreStrategyPanel'
@@ -13,6 +13,7 @@ export interface LiveTyreStrategyPanelProps {
   readonly selectedDriverId: string | null
   readonly stintSummary?: StintSummary | null
   readonly totalLaps?: number | null
+  readonly sessionMode?: SessionMode
 }
 
 /**
@@ -29,6 +30,7 @@ export const LiveTyreStrategyPanel = memo(function LiveTyreStrategyPanel({
   selectedDriverId,
   stintSummary = null,
   totalLaps = null,
+  sessionMode = 'race',
 }: LiveTyreStrategyPanelProps) {
   const store = useMemo(
     () => createThrottledReplayStore(controller, STRATEGY_REFRESH_INTERVAL_MS),
@@ -47,6 +49,7 @@ export const LiveTyreStrategyPanel = memo(function LiveTyreStrategyPanel({
       snapshot={snapshot.replay}
       stintSummary={stintSummary}
       totalLaps={totalLaps}
+      sessionMode={sessionMode}
     />
   )
 })

@@ -16,6 +16,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     FASTF1_POSITION_UNITS_PER_METER,
     CanonicalGenerationSnapshot,
 )
+from f1_replay_pipeline.domain.session_modes import SessionMode, normalize_session_mode
 
 
 RAW_POSITION_UNITS_PER_METER = FASTF1_POSITION_UNITS_PER_METER
@@ -58,7 +59,7 @@ def generate_track_assets(
     _validate_options(visual_track_width_m, centerline_points, rotation_degrees)
     session = snapshot.frames["session_metadata"].row(0, named=True)
     fixture_id = cast(str, session["session_id"])
-    resolved_track_id = track_id or f"{fixture_id}-telemetry-layout-v1"
+    resolved_track_id = track_id or f"{fixture_id}-telemetry-layout-v2"
     if not _SAFE_ID.fullmatch(resolved_track_id):
         raise TrackAssetsGenerationError("track_id must be a lowercase kebab-case identifier")
     reference = select_reference_lap(snapshot)
@@ -75,7 +76,7 @@ def generate_track_assets(
         fixture_id, centerline, rotation_degrees,
     )
     return {
-        "contractVersion": "v1",
+        "contractVersion": "v2",
         "fixtureId": fixture_id,
         "trackId": resolved_track_id,
         "trackName": cast(str, session["event_name"]),
@@ -146,8 +147,11 @@ def _calibrate_start_finish_offset(
     length = _polyline_length(centerline)
     geometry = ProjectionGeometry(centerline, length)
     positions = _index_valid_position_rows(snapshot.frames["position_telemetry"].to_dicts())
+    mode = _asset_session_mode(snapshot)
     candidates: list[float] = []
-    for lap in _boundary_lap_candidates(snapshot.frames["laps"].to_dicts()):
+    for lap in _boundary_lap_candidates(
+        snapshot.frames["laps"].to_dicts(), mode,
+    ):
         samples = positions.get(cast(str, lap["driver_id"]), ())
         point = _interpolate_boundary_position(samples, cast(int, lap["lap_start_time_ms"]))
         if point is None:
@@ -155,15 +159,28 @@ def _calibrate_start_finish_offset(
         projection = project_meters(point[0], point[1], geometry)
         if projection is not None and math.isfinite(projection.track_distance_meters):
             candidates.append(projection.track_distance_meters)
+    if len(candidates) == 1 and mode not in {"race", "sprint"}:
+        # A solo practice/qualifying run has no grid consensus, but its exact
+        # lap boundary is still a deterministic visual origin.
+        return candidates[0] % length
     return _estimate_circular_offset(tuple(candidates), length)
 
 
-def _boundary_lap_candidates(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+def _asset_session_mode(snapshot: CanonicalGenerationSnapshot) -> SessionMode:
+    """Read mode when available; missing mode retains the historical race path."""
+    value = snapshot.frames["session_metadata"].row(0, named=True).get("session_mode")
+    return "race" if value is None else normalize_session_mode(value)
+
+
+def _boundary_lap_candidates(
+    rows: Sequence[Mapping[str, object]], mode: SessionMode = "race",
+) -> tuple[Mapping[str, object], ...]:
+    minimum_lap = 1 if mode not in {"race", "sprint"} else 2
     candidates = (
         row for row in rows
         if is_eligible_track_lap(row)
         and type(row.get("lap_number")) is int
-        and cast(int, row["lap_number"]) >= 2
+        and cast(int, row["lap_number"]) >= minimum_lap
         and type(row.get("lap_start_time_ms")) is int
     )
     return tuple(sorted(

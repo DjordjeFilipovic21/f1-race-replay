@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+
+BrowserDeliveryContractVersion = Literal["v2"]
 
 
 class BrowserDeliveryServiceError(RuntimeError):
@@ -16,6 +20,11 @@ class BrowserPublishRequest:
     browser_parent: Path
     delivery_version: str
     schema_root: Path
+    contract_version: BrowserDeliveryContractVersion = "v2"
+
+    def __post_init__(self) -> None:
+        if self.contract_version != "v2":
+            raise ValueError("contract_version must be v2")
 
 
 @dataclass(frozen=True)
@@ -25,4 +34,7 @@ class BrowserPublishResult:
     publication: object
 
 
-__all__ = ["BrowserDeliveryServiceError", "BrowserPublishRequest", "BrowserPublishResult"]
+__all__ = [
+    "BrowserDeliveryContractVersion", "BrowserDeliveryServiceError",
+    "BrowserPublishRequest", "BrowserPublishResult",
+]

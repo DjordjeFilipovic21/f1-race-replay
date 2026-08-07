@@ -7,7 +7,7 @@ from typing import cast
 
 import polars as pl
 
-from ...domain.canonical_schema import CAR_TELEMETRY_SCHEMA
+from ...domain.canonical_schema import CAR_TELEMETRY_SCHEMA_V2
 from ...domain.normalizers import (
     NormalizationError,
     normalize_nullable_scalar,
@@ -50,11 +50,11 @@ def adapt_car_telemetry(
     ]
     retained = sort_and_deduplicate_rows(
         rows,
-        column_order=tuple(CAR_TELEMETRY_SCHEMA),
+        column_order=tuple(CAR_TELEMETRY_SCHEMA_V2),
         measurement_fields=_MEASUREMENT_FIELDS,
     )
-    frame = pl.DataFrame(retained, schema=CAR_TELEMETRY_SCHEMA)
-    validate_canonical_table("car_telemetry", frame)
+    frame = pl.DataFrame(retained, schema=CAR_TELEMETRY_SCHEMA_V2)
+    validate_canonical_table("car_telemetry", frame, version="v2")
     return frame
 
 

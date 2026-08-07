@@ -1,0 +1,16 @@
+{
+  "format_version": "canonical-parquet-v2",
+  "manifest_version": 2,
+  "generation_id": "2026-07-15T120000Z-abc",
+  "tables": [
+    {
+      "name": "session_metadata",
+      "path": "tables/session_metadata.parquet",
+      "row_count": 0,
+      "schema": [{"name": "session_id", "dtype": "String"}],
+      "logical_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "byte_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "writer_settings": {}
+}
