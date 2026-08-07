@@ -65,7 +65,19 @@ def _publication_source(tmp_path: Path) -> R2PublicationSource:
     generation.mkdir(parents=True)
     track_payload = _json_bytes({"track": "melbourne"})
     chunk_payload = _json_bytes({"sequence": 1})
+    qualifying_summary_payload = _json_bytes({"qualifying": "summary"})
+    qualifying_lap_status_payload = _json_bytes({"qualifying": "lap-status"})
+    qualifying_timeline_payload = _json_bytes({"qualifying": "timeline"})
+    weather_payload = _json_bytes({"weather": "dry"})
+    pit_loss_estimate_payload = _json_bytes({"pitLossEstimate": []})
     (generation / "track-assets.json").write_bytes(track_payload)
+    (generation / "qualifying-summary.json").write_bytes(qualifying_summary_payload)
+    (generation / "qualifying-lap-status.json").write_bytes(qualifying_lap_status_payload)
+    (generation / "qualifying-timeline.json").write_bytes(qualifying_timeline_payload)
+    (generation / "weather-sidecar.json").write_bytes(weather_payload)
+    (generation / "pit-loss-estimate-sidecar.json").write_bytes(
+        pit_loss_estimate_payload,
+    )
     chunks = generation / "chunks"
     chunks.mkdir()
     (chunks / "chunk-001.json").write_bytes(chunk_payload)
@@ -78,6 +90,26 @@ def _publication_source(tmp_path: Path) -> R2PublicationSource:
         "trackAssets": {
             "path": "track-assets.json",
             "sha256": hashlib.sha256(track_payload).hexdigest(),
+        },
+        "qualifyingSummary": {
+            "path": "qualifying-summary.json",
+            "sha256": hashlib.sha256(qualifying_summary_payload).hexdigest(),
+        },
+        "qualifyingLapStatus": {
+            "path": "qualifying-lap-status.json",
+            "sha256": hashlib.sha256(qualifying_lap_status_payload).hexdigest(),
+        },
+        "qualifyingTimeline": {
+            "path": "qualifying-timeline.json",
+            "sha256": hashlib.sha256(qualifying_timeline_payload).hexdigest(),
+        },
+        "weatherSidecar": {
+            "path": "weather-sidecar.json",
+            "sha256": hashlib.sha256(weather_payload).hexdigest(),
+        },
+        "pitLossEstimateSidecar": {
+            "path": "pit-loss-estimate-sidecar.json",
+            "sha256": hashlib.sha256(pit_loss_estimate_payload).hexdigest(),
         },
         "chunks": [{
             "path": "chunks/chunk-001.json",
@@ -167,7 +199,19 @@ def test_plan_contains_only_validated_browser_sessions_and_public_dependencies(
         "2024-round-03-australian-grand-prix",
     ]
     assert catalog["races"][0]["sessions"][0]["canonical_pointer"] is None
-    assert len(plan.immutable) == 3
+    assert len(plan.immutable) == 8
+    assert {
+        "seasons/2024/browser/2024-round-03-australian-grand-prix/"
+        "generations/2024-round-03-r/weather-sidecar.json",
+        "seasons/2024/browser/2024-round-03-australian-grand-prix/"
+        "generations/2024-round-03-r/pit-loss-estimate-sidecar.json",
+        "seasons/2024/browser/2024-round-03-australian-grand-prix/"
+        "generations/2024-round-03-r/qualifying-summary.json",
+        "seasons/2024/browser/2024-round-03-australian-grand-prix/"
+        "generations/2024-round-03-r/qualifying-lap-status.json",
+        "seasons/2024/browser/2024-round-03-australian-grand-prix/"
+        "generations/2024-round-03-r/qualifying-timeline.json",
+    } <= {spec.key for spec in plan.immutable}
     assert len(plan.visuals) == 1
     assert len(plan.pointers) == 1
     assert all(spec.cache_control == IMMUTABLE_CACHE_CONTROL for spec in plan.immutable)

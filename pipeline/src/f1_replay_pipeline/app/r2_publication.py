@@ -40,6 +40,11 @@ _REFERENCE_FIELDS = (
     "lapSectorSidecar",
     "stintSummary",
     "pitLossModel",
+    "qualifyingSummary",
+    "qualifyingLapStatus",
+    "qualifyingTimeline",
+    "weatherSidecar",
+    "pitLossEstimateSidecar",
     "penaltySidecar",
 )
 

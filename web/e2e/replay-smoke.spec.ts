@@ -4,8 +4,8 @@ import { resolve } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
 const fixtureRoot = resolve(import.meta.dirname, '../../contracts/replay-data/v2/fixtures/deterministic-race')
-const raceId = '2024-round-1-deterministic-race'
-const generationId = '2024-round-1-session-race-mode-race'
+const raceId = '2026-round-1-deterministic-race'
+const generationId = '2026-round-1-session-race-mode-race'
 
 test('loads deterministic replay and supports its critical controls', async ({ page }) => {
   const { recover } = await installReplayRoutes(page)
@@ -102,10 +102,10 @@ test('renders globe with reduced-motion preference', async ({ browser }) => {
 async function installReplayRoutes(page: Page, initiallyUnavailable = false): Promise<{ readonly recover: () => void }> {
   const manifest = JSON.parse(await readFile(resolve(fixtureRoot, 'manifest.json'), 'utf8')) as Record<string, unknown>
   const deliveryVersion = 'e2e-delivery'
-  const browserRoot = `/replay-data/seasons/2024/browser/${raceId}/`
+  const browserRoot = `/replay-data/seasons/2026/browser/${raceId}/`
   const catalog = {
     schemaVersion: 2,
-    year: 2024,
+    year: 2026,
     atomicAcrossRaces: true,
     races: [{
       race_id: raceId,
@@ -143,8 +143,8 @@ async function installReplayRoutes(page: Page, initiallyUnavailable = false): Pr
     manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
   }))
   const assets = new Map<string, Buffer>([
-    ['/replay-data/seasons/2024/catalog.json', Buffer.from(JSON.stringify(catalog))],
-    ['/replay-data/seasons/2024/previews/deterministic-circuit.json', Buffer.from(circuitPreview)],
+    ['/replay-data/seasons/2026/catalog.json', Buffer.from(JSON.stringify(catalog))],
+    ['/replay-data/seasons/2026/previews/deterministic-circuit.json', Buffer.from(circuitPreview)],
     [`${browserRoot}sessions/r/browser-current.json`, pointerBytes],
     [`${browserRoot}generations/${deliveryVersion}/manifest.json`, manifestBytes],
     [`${browserRoot}generations/${deliveryVersion}/track-assets.json`, await readFile(resolve(fixtureRoot, 'track-assets.json'))],

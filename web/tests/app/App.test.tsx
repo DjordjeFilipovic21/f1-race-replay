@@ -46,7 +46,7 @@ const index = {
 
 const catalog: CatalogV2 = {
   schemaVersion: 2,
-  year: 2024,
+  year: 2026,
   atomicAcrossRaces: false,
   races: [{
     race_id: 'race-1',
@@ -116,6 +116,7 @@ test('loads the catalog and renders the race library without entering replay', a
   expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
   expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
   expect(screen.getByRole('option', { name: '2026' })).toBeTruthy()
+  expect(screen.queryByRole('option', { name: '2024' })).toBeNull()
   expect(loadReplayIndex).not.toHaveBeenCalled()
 })
 
@@ -128,7 +129,7 @@ test('keeps landing selection local until Open Workspace writes the complete URL
   expect(window.location.search).toBe('')
 
   fireEvent.click(screen.getByRole('button', { name: 'Open replay workspace' }))
-  expect(window.location.search).toBe('?year=2024&race=race-1&session=r')
+  expect(window.location.search).toBe('?year=2026&race=race-1&session=r')
   expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
   expect(loadReplayIndex).toHaveBeenCalledWith({
     source: expect.anything(),
@@ -170,7 +171,7 @@ test('uses directional transitions between the library, race details, and worksp
 })
 
 test('shows an actionable message for an invalid URL and never loads its pointer', async () => {
-  window.history.replaceState(null, '', '/?trajectory=linear&year=2024&race=unknown&session=r')
+  window.history.replaceState(null, '', '/?trajectory=linear&year=2026&race=unknown&session=r')
   render(<App />)
 
   expect(await screen.findByRole('alert', { name: 'Replay Selection Unavailable' })).toBeTruthy()
@@ -180,7 +181,7 @@ test('shows an actionable message for an invalid URL and never loads its pointer
   fireEvent.click(screen.getByRole('button', { name: /Bahrain Grand Prix/ }))
   fireEvent.click(screen.getByRole('radio', { name: /Race/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Open replay workspace' }))
-  expect(window.location.search).toBe('?trajectory=linear&year=2024&race=race-1&session=r')
+  expect(window.location.search).toBe('?trajectory=linear&year=2026&race=race-1&session=r')
 })
 
 test('shows an actionable message for a malformed year parameter', async () => {
@@ -193,7 +194,7 @@ test('shows an actionable message for a malformed year parameter', async () => {
 })
 
 test('shows an actionable message for malformed race and session parameters', async () => {
-  window.history.replaceState(null, '', '/?trajectory=linear&year=2024&race=../bahrain&session=')
+  window.history.replaceState(null, '', '/?trajectory=linear&year=2026&race=../bahrain&session=')
   render(<App />)
 
   expect(await screen.findByRole('alert', { name: 'Replay Selection Unavailable' })).toBeTruthy()
@@ -202,18 +203,18 @@ test('shows an actionable message for malformed race and session parameters', as
 })
 
 test('loads a valid year-only URL without showing a selection error', async () => {
-  window.history.replaceState(null, '', '/?trajectory=linear&year=2024')
+  window.history.replaceState(null, '', '/?trajectory=linear&year=2026')
   render(<App />)
 
   expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
   expect(screen.queryByRole('alert', { name: 'Replay Selection Unavailable' })).toBeNull()
   expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
   expect(screen.queryByRole('combobox', { name: 'Change circuit' })).toBeNull()
-  expect(window.location.search).toBe('?trajectory=linear&year=2024')
+  expect(window.location.search).toBe('?trajectory=linear&year=2026')
 })
 
 test('change session returns to the selected race, preserves unrelated query values, and disposes replay', async () => {
-  window.history.replaceState(null, '', '/?trajectory=linear&year=2024&race=race-1&session=r')
+  window.history.replaceState(null, '', '/?trajectory=linear&year=2026&race=race-1&session=r')
   const controller = createController()
   vi.mocked(createReplayController).mockReturnValue(controller)
   render(<App />)
@@ -232,7 +233,7 @@ test('switches screens on browser navigation while retaining StrictMode stale-lo
   const firstLoad = createDeferred<ReplayIndex>()
   const activeLoad = createDeferred<ReplayIndex>()
   const activeController = createController()
-  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=r')
+  window.history.replaceState(null, '', '/?year=2026&race=race-1&session=r')
   vi.mocked(loadReplayIndex).mockReturnValueOnce(firstLoad.promise).mockReturnValueOnce(activeLoad.promise)
   vi.mocked(createReplayController).mockReturnValue(activeController)
 
@@ -269,7 +270,7 @@ test('uses directional transitions for browser back and forward navigation', asy
       } as unknown as ViewTransition
     },
   })
-  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=r')
+  window.history.replaceState(null, '', '/?year=2026&race=race-1&session=r')
   render(<App />)
   expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
 
@@ -280,7 +281,7 @@ test('uses directional transitions for browser back and forward navigation', asy
   expect(await screen.findByRole('heading', { name: 'Bahrain Grand Prix' })).toBeTruthy()
 
   act(() => {
-    window.history.pushState(null, '', '/?year=2024&race=race-1&session=r')
+    window.history.pushState(null, '', '/?year=2026&race=race-1&session=r')
     window.dispatchEvent(new PopStateEvent('popstate'))
   })
   expect(await screen.findByRole('group', { name: 'Race status timeline' })).toBeTruthy()
@@ -288,7 +289,7 @@ test('uses directional transitions for browser back and forward navigation', asy
 })
 
 test('opens a qualifying session workspace with truthful classification labels', async () => {
-  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=q')
+  window.history.replaceState(null, '', '/?year=2026&race=race-1&session=q')
   const qualifyingIndex = {
     ...index,
     manifest: { ...index.manifest, sessionMode: 'qualifying' },
@@ -323,7 +324,7 @@ test('opens a qualifying session workspace with truthful classification labels',
 })
 
 test('opens a practice session workspace without race-only panels', async () => {
-  window.history.replaceState(null, '', '/?year=2024&race=race-1&session=fp1')
+  window.history.replaceState(null, '', '/?year=2026&race=race-1&session=fp1')
   const practiceIndex = {
     ...index,
     manifest: { ...index.manifest, sessionMode: 'practice' },
