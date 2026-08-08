@@ -150,7 +150,7 @@ def test_canonical_v1_pointer_is_not_eligible_for_active_catalog(
         ),
     )
 
-    with pytest.raises(ValueError, match="canonical-parquet-v1.*deprecated"):
+    with pytest.raises(ValueError, match="current-pointer format_version must be canonical-parquet-v2"):
         migration._authoritative_canonical(root)
 
 
@@ -208,7 +208,7 @@ def test_recovery_rejects_journal_pointer_that_would_restore_v1(tmp_path: Path) 
     }
     (tmp_path / ".catalog-v2-migration-journal.json").write_text(json.dumps(journal), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="historical canonical pointer"):
+    with pytest.raises(ValueError, match="current-pointer format_version must be canonical-parquet-v2"):
         migration.recover_catalog_migration(tmp_path)
 
 

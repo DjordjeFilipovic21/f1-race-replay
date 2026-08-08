@@ -15,12 +15,15 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     PIT_LOSS_ESTIMATE_METHOD,
     PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
     PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+    PIT_LOSS_MODEL_SCHEMA_ID,
     STINT_SUMMARY_SCHEMA_ID,
+    TIMELINE_SUMMARY_SCHEMA_ID,
     WEATHER_SIDECAR_SCHEMA_ID,
     BrowserLapSectorSidecarReference,
     BrowserManifest,
     BrowserPenaltySidecarReference,
     BrowserPitLossEstimateSidecarReference,
+    BrowserStintSummaryReference,
     BrowserTimelineSummaryReference,
     BrowserWeatherSidecarReference,
 )
@@ -961,6 +964,9 @@ def test_replay_contract_weather_sidecar_reference_rejects_invalid_schema_or_dig
     reference = weather_sidecar_reference()
     reference[field] = value
     manifest["weatherSidecar"] = reference
+
+    with pytest.raises(ValidationError):
+        validate_instance(contract_bundle["schemas"]["manifest"], manifest, schema_registry)
 
 
 @pytest.mark.parametrize(
@@ -1955,3 +1961,196 @@ def test_v2_qualifying_timeline_requires_deterministic_interval_ordering(
     validate_instance(schema, payload, v2_schema_registry)
     with pytest.raises(AssertionError):
         assert_qualifying_timeline_semantics(payload)
+
+
+# ===========================================================================
+# V2-only contract/security boundary: frozen V1 identities cannot be selected
+# ===========================================================================
+#
+# The V2-only decision in AGENTS.md is authoritative.  These focused tests
+# prove that the active browser/manifest/weather boundaries accept only v2
+# identities, that V1 identities (including the frozen v1 fixture material
+# under contracts/replay-data/v1/) are rejected rather than selected, and
+# that no V1 compatibility path is exposed by the active delivery models.
+# Frozen V1 fixtures are read-only referenced here solely to assert
+# rejection/non-selection; they are never activated or modified.
+
+V1_SCHEMA_PREFIX = "urn:f1-cache-replay:schema:replay-data:v1:"
+
+
+def test_active_browser_manifest_rejects_v1_contract_version():
+    # Arrange: a v2-shaped manifest whose contract version claims v1.
+    # Act / Assert: the active browser manifest model cannot select v1.
+    with pytest.raises(ValueError, match="contract_version must be v2"):
+        BrowserManifest(
+            "deterministic-race",
+            "Deterministic Race",
+            (manifest_driver(),),
+            session_mode="race",
+            contract_version="v1",  # type: ignore[arg-type]
+        )
+
+
+def test_active_browser_manifest_rejects_v1_artifact_reference_identity():
+    # Arrange: a weather sidecar reference carrying the frozen v1 schema identity.
+    # Act / Assert: the manifest boundary fails closed instead of accepting v1.
+    with pytest.raises(ValueError, match="schema_id is invalid"):
+        BrowserManifest(
+            "deterministic-race",
+            "Deterministic Race",
+            (manifest_driver(),),
+            session_mode="race",
+            weather_sidecar={
+                "path": "weather-sidecar.json",
+                "schemaId": f"{V1_SCHEMA_PREFIX}weather-sidecar",
+                "sha256": "a" * 64,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("reference_type", "path", "v1_schema_id"),
+    [
+        (
+            BrowserTimelineSummaryReference,
+            "timeline-summary.json",
+            f"{V1_SCHEMA_PREFIX}timeline-summary",
+        ),
+        (
+            BrowserLapSectorSidecarReference,
+            "lap-sector-sidecar.json",
+            f"{V1_SCHEMA_PREFIX}browser-lap-sector-sidecar",
+        ),
+        (
+            BrowserPenaltySidecarReference,
+            "penalty-sidecar.json",
+            f"{V1_SCHEMA_PREFIX}penalty-sidecar",
+        ),
+        (
+            BrowserStintSummaryReference,
+            "stint-summary.json",
+            f"{V1_SCHEMA_PREFIX}stint-summary",
+        ),
+        (
+            BrowserPitLossEstimateSidecarReference,
+            PIT_LOSS_ESTIMATE_SIDECAR_FILENAME,
+            f"{V1_SCHEMA_PREFIX}pit-loss-estimate-sidecar",
+        ),
+        (
+            BrowserWeatherSidecarReference,
+            "weather-sidecar.json",
+            f"{V1_SCHEMA_PREFIX}weather-sidecar",
+        ),
+    ],
+)
+def test_active_browser_reference_models_reject_v1_schema_identities(
+    reference_type, path, v1_schema_id,
+):
+    # Arrange: every active manifest reference type is bound to one exact v2
+    # schema identity; the frozen v1 identity is a different namespace.
+    # Act / Assert: constructing the reference with a v1 identity fails closed.
+    with pytest.raises(ValueError, match="schema_id is invalid"):
+        reference_type(path, v1_schema_id, "a" * 64)
+
+
+def test_v2_manifest_schema_rejects_v1_contract_identity(v2_schema_registry):
+    # Arrange: a schema-valid v2 manifest whose identity claims v1.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    manifest["contractVersion"] = "v1"
+
+    # Act / Assert: the active v2 manifest schema rejects the v1 identity.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+
+def test_v2_manifest_schema_rejects_v1_weather_sidecar_reference(v2_schema_registry):
+    # Arrange: a v2 manifest carrying a weather sidecar reference with the v1 identity.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    manifest = v2_manifest_payload(session_mode="qualifying", qualifying_summary=True)
+    manifest["weatherSidecar"] = {
+        "path": "weather-sidecar.json",
+        "schemaId": f"{V1_SCHEMA_PREFIX}weather-sidecar",
+        "sha256": "a" * 64,
+    }
+
+    # Act / Assert: v1 weather references are invalid at the manifest boundary.
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, manifest, v2_schema_registry)
+
+
+def test_replay_contract_weather_sidecar_rejects_v1_contract_identity(
+    contract_bundle, schema_registry,
+):
+    # Arrange: a structurally valid weather sidecar claiming the v1 contract.
+    sidecar = weather_sidecar_payload()
+    sidecar["contractVersion"] = "v1"
+
+    # Act / Assert: the active v2 weather schema fails closed on v1 identities.
+    with pytest.raises(ValidationError):
+        validate_instance(
+            contract_bundle["schemas"]["weatherSidecar"], sidecar, schema_registry,
+        )
+
+
+def test_replay_contract_frozen_v1_fixture_manifest_is_not_selectable(
+    v2_schema_registry,
+):
+    # Arrange: the frozen v1 fixture manifest, referenced read-only and never
+    # activated; it remains historical material under contracts/replay-data/v1/.
+    v1_manifest_path = (
+        REPO_ROOT / "contracts" / "replay-data" / "v1" / "fixtures"
+        / "deterministic-race" / "manifest.json"
+    )
+    v1_manifest = load_json(v1_manifest_path)
+    assert v1_manifest["contractVersion"] == "v1"
+
+    # Act / Assert: the active v2 manifest schema rejects the frozen v1 fixture.
+    manifest_schema = load_json(V2_SCHEMA_ROOT / "manifest.schema.json")
+    with pytest.raises(ValidationError):
+        validate_instance(manifest_schema, v1_manifest, v2_schema_registry)
+
+
+def test_active_browser_delivery_schema_identities_are_exclusively_v2():
+    # Arrange: every schema identity the active browser delivery boundary exposes.
+    active_schema_ids = (
+        V2_MANIFEST_SCHEMA_ID,
+        WEATHER_SIDECAR_SCHEMA_ID,
+        TIMELINE_SUMMARY_SCHEMA_ID,
+        BROWSER_LAP_SECTOR_SIDECAR_SCHEMA_ID,
+        PENALTY_SIDECAR_SCHEMA_ID,
+        STINT_SUMMARY_SCHEMA_ID,
+        PIT_LOSS_MODEL_SCHEMA_ID,
+        PIT_LOSS_ESTIMATE_SIDECAR_SCHEMA_ID,
+    )
+
+    # Act / Assert: no active identity carries the v1 contract namespace, so no
+    # V1 compatibility path is exposed by the browser delivery models.
+    for schema_id in active_schema_ids:
+        assert schema_id.startswith("urn:f1-cache-replay:schema:replay-data:v2:")
+        assert not schema_id.startswith(V1_SCHEMA_PREFIX)
+
+
+def test_active_browser_manifest_serializes_only_v2_contract_identity():
+    # Arrange: a v2 manifest bound to the active weather sidecar reference.
+    manifest = BrowserManifest(
+        "deterministic-race",
+        "Deterministic Race",
+        (manifest_driver(),),
+        session_mode="race",
+        weather_sidecar=BrowserWeatherSidecarReference(
+            "weather-sidecar.json", WEATHER_SIDECAR_SCHEMA_ID, "a" * 64,
+        ),
+    )
+
+    # Act
+    payload = manifest.as_dict()
+
+    # Assert: the emitted manifest identity is exclusively v2.
+    assert payload["contractVersion"] == "v2"
+    assert payload["formatVersion"] == "browser-delivery-v2"
+    assert all(
+        str(schema_id).startswith("urn:f1-cache-replay:schema:replay-data:v2:")
+        for schema_id in cast(dict[str, object], payload["schemas"]).values()
+    )
+    assert cast(dict[str, object], payload["weatherSidecar"])["schemaId"] == WEATHER_SIDECAR_SCHEMA_ID

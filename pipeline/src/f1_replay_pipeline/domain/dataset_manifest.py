@@ -1,4 +1,10 @@
-"""Immutable, deterministic metadata models for canonical Parquet generations."""
+"""Immutable, deterministic metadata models for canonical Parquet generations.
+
+The active manifest, schema-reference, and pointer boundary is
+canonical-parquet-v2 only.  Frozen canonical-parquet-v1 identities remain
+addressable solely as historical constants for error messages and fixtures;
+every active constructor and loader rejects them.
+"""
 
 from __future__ import annotations
 
@@ -19,15 +25,17 @@ from f1_replay_pipeline.domain.canonical_contract import (
     get_canonical_contract,
     schema_dtype_token,
 )
-from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V1, CANONICAL_TABLE_SCHEMAS_V2
+from f1_replay_pipeline.domain.canonical_schema import CANONICAL_TABLE_SCHEMAS_V2
 from f1_replay_pipeline.domain.generation_identity import GenerationIdentityError, validate_generation_id
 
+# Historical V1 identities are frozen and NOT selectable by any active
+# manifest, schema-reference, or pointer boundary.  They exist only so error
+# messages and frozen fixtures can name the deprecated contract.
 FORMAT_VERSION_V1 = CANONICAL_PARQUET_V1
 MANIFEST_VERSION_V1 = 1
+# The active V2 contract is the sole selectable identity.
 FORMAT_VERSION_V2 = CANONICAL_PARQUET_V2
 MANIFEST_VERSION_V2 = 2
-# Unversioned names are the active V2 contract. Historical V1 manifests must
-# opt into the frozen format explicitly when they are parsed or inspected.
 FORMAT_VERSION = FORMAT_VERSION_V2
 MANIFEST_VERSION = MANIFEST_VERSION_V2
 CANONICAL_MANIFEST_TABLE_NAMES = (
@@ -87,8 +95,8 @@ class TableManifestEntry:
         _validate_sha256("logical_sha256", self.logical_sha256)
         _validate_sha256("byte_sha256", self.byte_sha256)
         version = self.schema_version if self.schema_version is not None else _infer_schema_version(self.name, self.schema)
-        if not isinstance(version, str) or version not in {"v1", "v2"}:
-            raise ManifestValidationError("table schema_version must be v1 or v2")
+        if version != "v2":
+            raise ManifestValidationError("table schema_version must be exactly v2")
         _validate_schema(self.name, self.schema, version)
         object.__setattr__(self, "schema_version", version)
 
@@ -157,8 +165,8 @@ class CurrentPointer:
     extensions: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
-        if self.format_version not in {FORMAT_VERSION_V1, FORMAT_VERSION_V2}:
-            raise ManifestValidationError("unsupported current-pointer format_version")
+        if self.format_version != FORMAT_VERSION_V2:
+            raise ManifestValidationError("current-pointer format_version must be canonical-parquet-v2")
         _validate_generation_id(self.generation_id)
         _validate_sha256("manifest_sha256", self.manifest_sha256)
         expected_path = f"generations/{self.generation_id}/manifest.json"
@@ -197,13 +205,18 @@ def schema_tokens_for(
 def schema_tokens_for_version(
     table_name: str, version: ContractVersion | str = "v2",
 ) -> tuple[SchemaToken, ...]:
-    """Return exact, versioned dtype tokens in canonical column order."""
+    """Return exact, versioned dtype tokens in canonical column order.
+
+    The schema-reference boundary is v2-only: historical v1 identities are
+    rejected because no active manifest may select them.
+    """
     _validate_table_name(table_name)
     contract = get_canonical_contract(version)
-    schemas = CANONICAL_TABLE_SCHEMAS_V1 if contract.version == "v1" else CANONICAL_TABLE_SCHEMAS_V2
+    if contract.version != "v2":
+        raise ManifestValidationError("schema tokens are only available for canonical-parquet-v2")
     return tuple(
         SchemaToken(name, schema_dtype_token(_dtype_token(dtype), contract.version))
-        for name, dtype in schemas[table_name].items()
+        for name, dtype in CANONICAL_TABLE_SCHEMAS_V2[table_name].items()
     )
 
 
@@ -365,21 +378,15 @@ def _validate_format_versions(format_version: object, manifest_version: object) 
 def _version_from_format(format_version: object, manifest_version: object) -> ContractVersion:
     if type(manifest_version) is not int:
         raise ValueError("manifest_version must be an integer")
-    if format_version == FORMAT_VERSION_V1 and manifest_version == MANIFEST_VERSION_V1:
-        return "v1"
     if format_version == FORMAT_VERSION_V2 and manifest_version == MANIFEST_VERSION_V2:
         return "v2"
-    raise ValueError("manifest format_version and manifest_version are unsupported or mixed")
+    raise ValueError("manifest format_version and manifest_version must identify canonical-parquet-v2")
 
 
 def _infer_schema_version(name: str, schema: tuple[SchemaToken, ...]) -> ContractVersion:
-    matches = tuple(
-        version for version in ("v1", "v2")
-        if schema == schema_tokens_for_version(name, version)
-    )
-    if len(matches) != 1:
-        raise ManifestValidationError(f"{name} schema must match exactly one canonical contract version")
-    return cast(ContractVersion, matches[0])
+    if schema != schema_tokens_for_version(name, "v2"):
+        raise ManifestValidationError(f"{name} schema must match the canonical v2 contract schema")
+    return "v2"
 
 
 def _validate_table_name(name: object) -> None:

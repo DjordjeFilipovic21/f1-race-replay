@@ -321,8 +321,8 @@ selected row has no surviving measurements.
 
 FastF1 can turn missing or malformed numeric channels into zero. Its raw
 rainfall parser also maps non-`'1'` source values to `false`. The sidecar
-producer applies the fail-closed zero-sentinel policy from
-[ADR-003](adr/003-weather-sidecar-and-replay-panel.md): sentinel-prone
+producer applies the fail-closed zero-sentinel policy described in this
+section: sentinel-prone
 temperature and pressure zeros become `null`; zero humidity, wind direction,
 and wind speed are retained only with corroborating measurements; explicit
 rainfall `false` remains the source's dry/unknown limitation, while canonical or
@@ -334,12 +334,13 @@ Parquet are unchanged. A v2 manifest may omit `weatherSidecar`, and an empty or
 unavailable canonical weather table produces no reference; consumers must
 render weather as unavailable rather than treating absence as an error.
 
-**Frozen v1 compatibility boundary:**
-`urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar`, the v1 payload
-shape, and historical v1 fixtures remain compatibility references only. They
-are not adapted in place and must never appear in a v2 manifest, v2 fixture, or
-v2 publication. The active v2 reader rejects v1 pointers, manifests, and
-sidecars; v1 compatibility is limited to the frozen historical surface
+**V1 weather is historical-only:**
+weather-sidecar identity is exclusively v2
+(`urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar`); the frozen v1
+baseline contains no v1 weather-sidecar schema or fixture. No v1 payload shape
+is adapted in place, and v1 weather material must never appear in a v2
+manifest, v2 fixture, or v2 publication. The active v2 reader rejects v1
+weather references; v1 material is limited to the frozen historical surface
 described in [V1 frozen baseline and catalog cutover](#v1-frozen-baseline-and-catalog-cutover).
 
 ### Optional stint summary
@@ -670,10 +671,21 @@ SC     9300 ms  (Safety Car, code 4)
   deterministic bytes, and SHA-256 digest. Delivery never touches
   `templates/`, and R2 publication behavior is unchanged.
 
-**Method identifiers and v2-only boundary.** The sidecar schema accepts the
-`curated-track-baseline-v1` and `track-status-median-v1` methods; the `-v1`
-suffix is a method identifier, not a contract version. A curated sidecar uses
-`curated-track-baseline-v1` (catalog-backed). A race-derived
+**Method identifiers and contract versions.** Algorithm method identifiers
+that end in `-v1` — `global-prior-weighted-mean-v1` (pit-loss model),
+`curated-track-baseline-v1` and `track-status-median-v1` (pit-loss estimate
+sidecar), `projection-quality-gate-v1` and `geometric-wrap-v1` (delivery
+geometry) — are **method identifiers, not contract versions**. A `-v1` suffix
+never denotes a v1 contract, a v1 schema identity, or a v1 compatibility
+path. Contract versions are expressed only by `contractVersion` (`v2`),
+`formatVersion` (`browser-delivery-v2`), and schema IDs under
+`urn:f1-cache-replay:schema:replay-data:v2:*`: v2 is the sole supported
+browser/replay contract, and v1 is historical-only and non-runtime (see [V1
+frozen baseline and catalog cutover](#v1-frozen-baseline-and-catalog-cutover)).
+
+The pit-loss estimate sidecar schema accepts the
+`curated-track-baseline-v1` and `track-status-median-v1` methods. A curated
+sidecar uses `curated-track-baseline-v1` (catalog-backed). A race-derived
 `track-status-median-v1` sidecar aggregates eligible current-race All Clear
 observations into its replay-start `race` median, emits
 `safetyCar`/`virtualSafetyCar` only when those statuses occurred, and marks an
