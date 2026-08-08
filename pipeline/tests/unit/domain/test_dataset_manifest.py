@@ -71,7 +71,10 @@ def test_manifest_golden_bytes_and_digest_are_exact():
 
     assert parsed == manifest
     assert serialize_manifest(parsed) == golden
-    assert manifest_sha256(manifest) == hashlib.sha256(serialize_manifest(manifest)).hexdigest()
+    # Anchor the digest to the committed golden payload bytes rather than
+    # re-hashing the model under test: manifest_sha256 is itself sha256 of the
+    # model serialization, so hashing serialize_manifest again is tautological.
+    assert manifest_sha256(parsed) == hashlib.sha256(golden).hexdigest()
 
 
 def test_manifest_normalizes_reordered_mapping_to_contract_table_order():

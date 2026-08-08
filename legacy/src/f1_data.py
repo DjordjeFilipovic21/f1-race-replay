@@ -161,17 +161,32 @@ def _open_legacy_cache_file(cache_path, cache_root, mode, create_parents=False):
                 | os.O_NONBLOCK
             )
         file_fd = os.open(final, flags, 0o666, dir_fd=parent_fd)
+        try:
+            # O_NOFOLLOW rejects symlinks and O_NONBLOCK prevents blocking on
+            # FIFOs during open; fstat on the descriptor itself closes the
+            # remaining special-file cases (directory, FIFO, device, socket).
+            info = os.fstat(file_fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(errno.EINVAL, "cache target is not a regular file")
 
-        # O_NOFOLLOW rejects symlinks and O_NONBLOCK prevents blocking on FIFOs
-        # during open; fstat on the descriptor itself closes the remaining
-        # special-file cases (directory, FIFO, device, socket).
-        info = os.fstat(file_fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise OSError(errno.EINVAL, "cache target is not a regular file")
-
-        for fd in open_fds[:-1]:
-            os.close(fd)
-        return os.fdopen(file_fd, mode)
+            # Success: close every directory descriptor acquired along the
+            # walk, including the deepest parent used as dir_fd for the final
+            # open; os.fdopen then takes ownership of file_fd, so the returned
+            # file object releases it exactly once.
+            for fd in open_fds:
+                os.close(fd)
+            return os.fdopen(file_fd, mode)
+        except Exception:
+            # file_fd is not tracked in open_fds, so release it once here on
+            # any failure below — fstat/regular-file rejection, a directory
+            # close error, or an fdopen failure before ownership transfer —
+            # without masking the original error. The outer handler closes the
+            # directory descriptors.
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+            raise
     except Exception:
         for fd in reversed(open_fds):
             try:

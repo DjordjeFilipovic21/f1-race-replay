@@ -15,6 +15,7 @@ is not a V1 replay compatibility path; it only re-enables the legacy
 application's own computed-data cache.
 """
 
+import errno
 import os
 import pickle
 import sys
@@ -40,6 +41,7 @@ try:
         _legacy_cache_root,
         _legacy_pickle_cache_allowed,
         _load_legacy_pickle_cache,
+        _open_legacy_cache_file,
         _write_legacy_pickle_cache,
     )
 except ModuleNotFoundError as exc:
@@ -378,3 +380,73 @@ def test_legacy_cache_root_defaults_to_computed_data(monkeypatch):
     )
 
     assert _legacy_cache_root() == Path("computed_data").resolve()
+
+
+def _count_open_fds():
+    """Count live descriptors via /proc; skip when the platform hides them."""
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        pytest.skip("cannot enumerate open FDs on this platform")
+
+
+def test_open_success_closes_all_parent_directory_fds(tmp_path):
+    """Every directory FD acquired during the walk is closed on success.
+
+    Regression guard for the deepest parent directory FD that was excluded
+    from the success-path close loop (``open_fds[:-1]``) and leaked.
+    """
+    root = tmp_path
+    target = root / "nested" / "deeper" / "event_telemetry.pkl"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"payload")
+
+    before = _count_open_fds()
+    with _open_legacy_cache_file(
+        "nested/deeper/event_telemetry.pkl", str(root), "rb"
+    ) as f:
+        assert f.read() == b"payload"
+    after = _count_open_fds()
+
+    assert after == before
+
+
+def test_open_non_regular_target_failure_closes_file_fd(monkeypatch, tmp_path):
+    """file_fd is released when regular-file validation rejects the target.
+
+    Regression guard for the descriptor leaked when the S_ISREG check raises;
+    also proves the OSError(EINVAL) rejection is preserved.
+    """
+    root = tmp_path
+    (root / "dir.pkl").mkdir()
+
+    before = _count_open_fds()
+    with pytest.raises(OSError) as excinfo:
+        _open_legacy_cache_file("dir.pkl", str(root), "rb")
+    after = _count_open_fds()
+
+    assert excinfo.value.errno == errno.EINVAL
+    assert after == before
+
+
+def test_open_fstat_failure_closes_file_fd(monkeypatch, tmp_path):
+    """file_fd is released when os.fstat raises during final-file validation.
+
+    Regression guard for the descriptor leaked when fstat itself raises; the
+    original error is preserved rather than masked by cleanup.
+    """
+    root = tmp_path
+    (root / "ok.pkl").write_bytes(b"payload")
+
+    def _raise_fstat(fd):
+        raise OSError(errno.EIO, "simulated fstat failure")
+
+    monkeypatch.setattr(os, "fstat", _raise_fstat)
+
+    before = _count_open_fds()
+    with pytest.raises(OSError) as excinfo:
+        _open_legacy_cache_file("ok.pkl", str(root), "rb")
+    after = _count_open_fds()
+
+    assert excinfo.value.errno == errno.EIO
+    assert after == before

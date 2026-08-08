@@ -335,7 +335,7 @@ unavailable canonical weather table produces no reference; consumers must
 render weather as unavailable rather than treating absence as an error.
 
 **V1 weather is historical-only:**
-weather-sidecar identity is exclusively v2
+Weather-sidecar identity is exclusively v2
 (`urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar`); the frozen v1
 baseline contains no v1 weather-sidecar schema or fixture. No v1 payload shape
 is adapted in place, and v1 weather material must never appear in a v2
