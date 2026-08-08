@@ -21,7 +21,7 @@ from f1_replay_pipeline.domain.dataset_manifest import (
     serialize_manifest,
 )
 from f1_replay_pipeline.storage.generation_publication import (
-    CANONICAL_TABLE_NAMES, FORMAT_VERSION, GenerationPublicationError,
+    CANONICAL_TABLE_NAMES, FORMAT_VERSION, FORMAT_VERSION_V1, GenerationPublicationError,
     LocalFilesystem, LocalRecoveryLock, STAGING_PREFIX, recover_stale_staging,
     PublicationCleanupError, PublicationDurabilityUncertainError,
     RecoveryLock, RecoveryOwnershipError, deterministic_pointer_bytes,
@@ -100,6 +100,52 @@ def test_unqualified_pointer_serialization_uses_active_v2_identity() -> None:
     assert pointer["format_version"] == "canonical-parquet-v2"
 
 
+def test_pointer_publication_rejects_v1_format_version(tmp_path: Path) -> None:
+    """The active publication boundary refuses to publish a v1 pointer."""
+    with pytest.raises(GenerationPublicationError, match="active generation publication requires canonical-parquet-v2"):
+        _write_generation(
+            target_parent=tmp_path,
+            generation_id="v1",
+            materialize=_materialize("v1"),
+            validate_manifest=_validate_test_manifest,
+            format_version=FORMAT_VERSION_V1,
+        )
+
+    assert not (tmp_path / "current.json").exists()
+    assert not (tmp_path / "generations").exists()
+
+
+@pytest.mark.parametrize("unknown", ["canonical-parquet-v3", "", None])
+def test_pointer_serialization_rejects_unknown_format_versions(unknown: Any) -> None:
+    """Only the known contract identities are serializable; v2 is the active one."""
+    with pytest.raises(GenerationPublicationError, match="unsupported current-pointer format_version"):
+        deterministic_pointer_bytes("safe", "a" * 64, format_version=unknown)
+
+
+def test_resolve_rejects_a_v1_current_pointer(tmp_path: Path) -> None:
+    """A frozen historical v1 pointer cannot be selected at the storage boundary."""
+    published = _publish(tmp_path, "one")
+    v1_pointer = deterministic_pointer_bytes(
+        "one", published.manifest_sha256, format_version=FORMAT_VERSION_V1,
+    )
+    (tmp_path / "current.json").write_bytes(v1_pointer)
+
+    with pytest.raises(GenerationPublicationError, match="invalid current pointer"):
+        resolve_current_generation(tmp_path, validate_manifest=_validate_test_manifest)
+
+
+def test_recovery_fails_closed_on_a_v1_current_pointer(tmp_path: Path) -> None:
+    """Recovery never resolves or removes a generation behind a v1 pointer."""
+    published = _publish(tmp_path, "one")
+    v1_pointer = deterministic_pointer_bytes(
+        "one", published.manifest_sha256, format_version=FORMAT_VERSION_V1,
+    )
+    (tmp_path / "current.json").write_bytes(v1_pointer)
+
+    assert recover_stale_staging(tmp_path, validate_manifest=_validate_test_manifest) is None
+    assert published.generation_path.exists()
+
+
 @pytest.mark.parametrize("failure", ["before_write:tables/session_metadata.parquet", "after_file_fsync:tables/session_metadata.parquet", "after_generation_rename", "before_pointer_replace"])
 def test_injected_failures_never_make_an_incomplete_generation_current(tmp_path: Path, failure: str) -> None:
     previous = _publish(tmp_path, "previous")
@@ -153,10 +199,6 @@ class FailingFilesystem(LocalFilesystem):
         self._fail("mkdir")
         super().mkdir(path, parents=parents, exist_ok=exist_ok)
 
-    def open_exclusive(self, path: Path, flags: int, mode: int) -> int:
-        self._fail("exclusive create")
-        return super().open_exclusive(path, flags, mode)
-
     def write_file(self, descriptor: int, data: bytes) -> int:
         self._fail("write")
         return super().write_file(descriptor, data)
@@ -164,12 +206,6 @@ class FailingFilesystem(LocalFilesystem):
     def fsync_file(self, descriptor: int) -> None:
         self._fail("file fsync")
         super().fsync_file(descriptor)
-
-    def replace(self, source: Path, destination: Path) -> None:
-        if destination.name == "current.json":
-            self._fail("pointer replace")
-        self._fail("rename")
-        super().replace(source, destination)
 
     def fsync_directory(self, path: Path) -> bool:
         self._fail("directory fsync")
@@ -596,22 +632,8 @@ def test_publication_rejects_an_escaping_symlink_ancestor_without_writing_extern
     assert not (external / "dataset").exists()
 
 
-class PointerTempCollisionFilesystem(LocalFilesystem):
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def open_exclusive(self, path: Path, flags: int, mode: int) -> int:
-        self.calls += 1
-        assert flags & os.O_CREAT
-        assert flags & os.O_EXCL
-        if self.calls == 1:
-            path.write_bytes(b"collision")
-            raise FileExistsError(path)
-        return super().open_exclusive(path, flags, mode)
-
-
 def test_pointer_temporary_retries_exclusive_creation_collision_and_preserves_current(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     previous = _publish(tmp_path, "previous")
     names = iter((f"{STAGING_PREFIX}pointer-collision", f"{STAGING_PREFIX}pointer-retry"))
@@ -628,6 +650,27 @@ def test_pointer_temporary_retries_exclusive_creation_collision_and_preserves_cu
     assert result.generation_path.name == "next"
     assert (tmp_path / f"{STAGING_PREFIX}pointer-collision").read_bytes() == b"collision"
     assert previous.generation_path.exists()
+
+
+def test_exclusive_pointer_temporary_fails_closed_when_every_name_collides(tmp_path: Path) -> None:
+    """The descriptor-relative exclusive-create seam exhausts and preserves current."""
+    previous = _publish(tmp_path, "previous")
+    pointer_before = previous.pointer_path.read_bytes()
+    collision = f"{STAGING_PREFIX}pointer-always-collides"
+    (tmp_path / collision).write_bytes(b"collision")
+
+    with pytest.raises(GenerationPublicationError, match="unable to create an exclusive pointer temporary"):
+        _write_generation(
+            target_parent=tmp_path,
+            generation_id="next",
+            materialize=_materialize("next"),
+            validate_manifest=_validate_test_manifest,
+            pointer_temp_name=lambda: collision,
+        )
+
+    assert previous.pointer_path.read_bytes() == pointer_before
+    assert (tmp_path / collision).read_bytes() == b"collision"
+    assert (tmp_path / "generations" / "next").exists()
 
 
 def test_staging_file_writes_remain_in_the_retained_directory_after_parent_swap(
@@ -653,6 +696,42 @@ def test_staging_file_writes_remain_in_the_retained_directory_after_parent_swap(
         )
 
     assert not list(external.iterdir())
+
+
+def test_early_publication_root_replacement_fails_closed_after_identity_pin(tmp_path: Path) -> None:
+    """A root replaced by a different directory after the identity pin fails closed.
+
+    The swap is injected at the earliest checkpoint after the initial root
+    identity is pinned and before the first path-based mutation.  The root is
+    renamed away and replaced by a fresh real directory, so the no-follow
+    symlink checks cannot reject it; only the pinned device/inode identity
+    comparison can, and it must fire before any mutation or publication under
+    the replacement path.
+    """
+    root = tmp_path / "dataset"
+    previous = _publish(root, "previous")
+    previous_pointer = previous.pointer_path.read_bytes()
+    moved = tmp_path / "moved-dataset"
+
+    def swap_root(event: str) -> None:
+        if event == "before_mkdir:target_parent":
+            root.rename(moved)
+            root.mkdir()
+
+    with pytest.raises(GenerationPublicationError, match="publication root changed during publication"):
+        _write_generation(
+            target_parent=root,
+            generation_id="next",
+            materialize=_materialize("next"),
+            checkpoint=swap_root,
+            validate_manifest=_validate_test_manifest,
+        )
+
+    assert not (root / "current.json").exists()
+    assert not (root / "generations").exists()
+    assert not list(root.glob(f"{STAGING_PREFIX}*"))
+    assert (moved / "current.json").read_bytes() == previous_pointer
+    assert (moved / "generations" / "previous").exists()
 
 
 def test_publication_cleanup_and_ambiguous_commit_reconciliation_stay_on_retained_parent(

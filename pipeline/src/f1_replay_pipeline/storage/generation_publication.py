@@ -1,5 +1,12 @@
 """Atomic, filesystem-only publication for canonical dataset generations.
 
+The pointer publication and selection boundary is canonical-parquet-v2 only.
+``write_generation`` refuses any non-v2 format before touching the filesystem,
+and ``resolve_current_generation`` (and therefore recovery) fail closed when
+``current.json`` names a v1 or mixed-version pointer.  The frozen v1 identity
+is retained solely so historical fixture bytes can be constructed and proven
+rejected; no active publish or select path accepts them.
+
 The module deliberately knows neither Polars nor the manifest model.  Callers
 materialize validated table bytes through :class:`StagedGenerationWriter` and
 may inject their manifest validator for schema, row-count, and logical-hash
@@ -20,9 +27,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import stat
-import tempfile
 from typing import Literal, Protocol, cast
 import uuid
 
@@ -41,7 +46,8 @@ from f1_replay_pipeline.domain.generation_identity import GenerationIdentityErro
 FORMAT_VERSION_V1 = CANONICAL_PARQUET_V1
 FORMAT_VERSION_V2 = CANONICAL_PARQUET_V2
 # The unqualified publication API is the active v2 boundary.  The v1 constant
-# remains available solely for parsing/serializing frozen historical records.
+# remains available solely for parsing/serializing frozen historical records;
+# active publication and selection reject it (see module docstring).
 FORMAT_VERSION = FORMAT_VERSION_V2
 STAGING_PREFIX = ".canonical-parquet-staging-"
 CANONICAL_TABLE_NAMES = (
@@ -110,18 +116,20 @@ class GuardedFile:
 
 
 class Filesystem(Protocol):
-    """Injectable filesystem operations used by publication and recovery."""
+    """Injectable filesystem operations used by publication and recovery.
+
+    Every declared operation is used by a production code path.  Operations
+    that must stay descriptor-relative (exclusive create, rename, owned
+    removal, staging creation) are intentionally NOT exposed here; they are
+    invoked through retained directory descriptors so a swapped pathname
+    cannot redirect them.
+    """
 
     def mkdir(self, path: Path, *, parents: bool = False, exist_ok: bool = False) -> None: ...
-    def mkdtemp(self, *, prefix: str, directory: Path) -> Path: ...
-    def replace(self, source: Path, destination: Path) -> None: ...
-    def remove_tree(self, path: Path) -> None: ...
-    def remove_file(self, path: Path) -> None: ...
     def remove_tree_at(self, directory_descriptor: int, name: str, identity: tuple[int, int]) -> None: ...
     def remove_file_at(self, directory_descriptor: int, name: str, identity: tuple[int, int]) -> None: ...
     def fsync_file(self, descriptor: int) -> None: ...
     def fsync_directory(self, path: Path) -> bool: ...
-    def open_exclusive(self, path: Path, flags: int, mode: int) -> int: ...
     def write_file(self, descriptor: int, data: bytes) -> int: ...
 
 
@@ -205,22 +213,17 @@ def _acquire_recovery_lease(lock: RecoveryLock, target_parent: Path) -> Recovery
 
 
 class LocalFilesystem:
-    """Production filesystem seam; false means directory fsync is unsupported."""
+    """Production filesystem seam; false means directory fsync is unsupported.
+
+    Descriptor-relative operations (exclusive create, rename, owned removal,
+    staging creation) are deliberately not routed through path-based methods:
+    production calls ``os.open``/``os.replace``/``os.mkdir`` with ``dir_fd``
+    against retained directory descriptors so a swapped pathname cannot
+    redirect a mutation.
+    """
 
     def mkdir(self, path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
         path.mkdir(parents=parents, exist_ok=exist_ok)
-
-    def mkdtemp(self, *, prefix: str, directory: Path) -> Path:
-        return Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
-
-    def replace(self, source: Path, destination: Path) -> None:
-        os.replace(source, destination)
-
-    def remove_tree(self, path: Path) -> None:
-        shutil.rmtree(path)
-
-    def remove_file(self, path: Path) -> None:
-        path.unlink()
 
     def remove_tree_at(self, directory_descriptor: int, name: str, identity: tuple[int, int]) -> None:
         _remove_owned_tree_at(directory_descriptor, name, identity)
@@ -249,9 +252,6 @@ class LocalFilesystem:
         finally:
             os.close(descriptor)
         return True
-
-    def open_exclusive(self, path: Path, flags: int, mode: int) -> int:
-        return os.open(path, flags, mode)
 
     def write_file(self, descriptor: int, data: bytes) -> int:
         return os.write(descriptor, data)
@@ -338,12 +338,14 @@ def _verify_directory_entry(directory_descriptor: int, name: str, identity: tupl
         raise GenerationPublicationError("trusted directory entry changed before commit")
 
 
-def _verify_directory_path_identity(path: Path, identity: tuple[int, int], label: str) -> None:
+def _verify_directory_path_identity(
+    path: Path, identity: tuple[int, int], label: str, *, phase: str = "recovery",
+) -> None:
     """Ensure a lexical path still names the retained directory before reopening it."""
     try:
         descriptor = _open_directory_no_follow(path)
     except OSError as error:
-        raise GenerationPublicationError(f"{label} changed during recovery") from error
+        raise GenerationPublicationError(f"{label} changed during {phase}") from error
     try:
         metadata = os.fstat(descriptor)
     except BaseException:
@@ -351,7 +353,31 @@ def _verify_directory_path_identity(path: Path, identity: tuple[int, int], label
         raise
     os.close(descriptor)
     if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
-        raise GenerationPublicationError(f"{label} changed during recovery")
+        raise GenerationPublicationError(f"{label} changed during {phase}")
+
+
+def _pin_directory_identity(path: Path, label: str) -> tuple[int, int]:
+    """Open one directory without following symlinks and return its identity."""
+    try:
+        descriptor = _open_directory_no_follow(path)
+    except OSError as error:
+        raise GenerationPublicationError(f"{label} must be a non-symlink directory") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise GenerationPublicationError(f"{label} must be a non-symlink directory")
+        return (metadata.st_dev, metadata.st_ino)
+    finally:
+        os.close(descriptor)
+
+
+def _verify_directory_descriptor_identity(
+    directory_descriptor: int, identity: tuple[int, int], label: str, *, phase: str = "publication",
+) -> None:
+    """Fail closed when a retained descriptor no longer names the pinned directory."""
+    metadata = os.fstat(directory_descriptor)
+    if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
+        raise GenerationPublicationError(f"{label} changed during {phase}")
 
 
 def _require_safe_directory(path: Path, label: str) -> Path:
@@ -745,7 +771,12 @@ def deterministic_pointer_bytes(
     *,
     format_version: str = FORMAT_VERSION,
 ) -> bytes:
-    """Return the exact bytes written to ``current.json`` for a generation."""
+    """Return the exact bytes written to ``current.json`` for a generation.
+
+    The unqualified path serializes the active v2 identity.  The v1 branch is
+    retained only for constructing frozen historical fixture bytes; every
+    active publication and selection boundary rejects v1 pointers.
+    """
     generation_id = _safe_generation_id(generation_id)
     _require_sha256(manifest_sha256, "manifest_sha256")
     if format_version not in {FORMAT_VERSION_V1, FORMAT_VERSION_V2}:
@@ -950,12 +981,20 @@ def write_generation(
     target_parent = _absolute_path(target_parent)
     _require_safe_existing_ancestors(target_parent, "publication root")
     target_parent_existed = target_parent.exists()
+    target_parent_identity: tuple[int, int] | None = None
     if target_parent_existed:
-        _require_safe_directory(target_parent, "publication root")
+        # Pin the existing root before the first path-based mutation so a
+        # replacement by a different directory (not just a symlink) is
+        # detected when the path is re-verified after the mkdir.
+        target_parent_identity = _pin_directory_identity(target_parent, "publication root")
     checkpoint("before_mkdir:target_parent")
     filesystem.mkdir(target_parent, parents=True, exist_ok=True)
     checkpoint("after_mkdir:target_parent")
     target_parent = _require_safe_directory(target_parent, "publication root")
+    if target_parent_identity is None:
+        target_parent_identity = _pin_directory_identity(target_parent, "publication root")
+    else:
+        _verify_directory_path_identity(target_parent, target_parent_identity, "publication root", phase="publication")
     if not target_parent_existed:
         _fsync_directory(
             target_parent.parent,
@@ -966,15 +1005,25 @@ def write_generation(
         )
     generations_path = target_parent / "generations"
     checkpoint("before_mkdir:generations")
+    _verify_directory_path_identity(target_parent, target_parent_identity, "publication root", phase="publication")
     filesystem.mkdir(generations_path, parents=True, exist_ok=True)
     checkpoint("after_mkdir:generations")
     _require_safe_directory(generations_path, "generations directory")
+    _verify_directory_path_identity(target_parent, target_parent_identity, "publication root", phase="publication")
     _fsync_directory(target_parent, "target_parent_after_generations", filesystem, checkpoint, directory_fsyncs)
     generation_path = generations_path / generation_id
     if os.path.lexists(generation_path):
         raise GenerationPublicationError("refusing to overwrite an existing generation")
     recovery_lock = recovery_lock or LocalRecoveryLock()
+    _verify_directory_path_identity(target_parent, target_parent_identity, "publication root", phase="publication")
     lease = _acquire_recovery_lease(recovery_lock, target_parent)
+    try:
+        _verify_directory_path_identity(target_parent, target_parent_identity, "publication root", phase="publication")
+    except BaseException:
+        try:
+            lease.release()
+        finally:
+            raise
     if os.path.lexists(generation_path):
         conflict_error = GenerationPublicationError("refusing to overwrite an existing generation")
         try:
@@ -1000,6 +1049,9 @@ def write_generation(
     try:
         checkpoint("before_mkdtemp:staging")
         target_parent_descriptor = _open_directory_no_follow(target_parent)
+        _verify_directory_descriptor_identity(
+            target_parent_descriptor, target_parent_identity, "publication root",
+        )
         staging_path = _create_staging_directory(target_parent, target_parent_descriptor)
         checkpoint("after_mkdtemp:staging")
         _fsync_directory(target_parent, "target_parent_after_staging", filesystem, checkpoint, directory_fsyncs)

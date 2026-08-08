@@ -1,9 +1,12 @@
+import errno
 import math
 import os
 import pickle
+import stat
 import sys
 from datetime import timedelta, date
 from multiprocessing import Pool, cpu_count
+from pathlib import Path, PurePath
 
 import fastf1
 import fastf1.plotting
@@ -29,6 +32,215 @@ def enable_cache():
 
 FPS = 25
 DT = 1 / FPS
+
+
+# ---------------------------------------------------------------------------
+# Quarantined legacy pickle cache boundary
+#
+# The legacy computed-data cache is stored as pickle. Unpickling data from
+# untrusted files can execute arbitrary code, so both reading and writing the
+# cache are quarantined behind an explicit, non-runtime opt-in:
+#
+#     F1_LEGACY_ALLOW_PICKLE_CACHE=1
+#
+# The default runtime path never reaches pickle.load()/pickle.dump(); telemetry
+# is recomputed from scratch unless the operator explicitly opts in. This is a
+# historical boundary for the legacy application only; it is not a V1 replay
+# compatibility path and no default runtime traffic routes to it.
+#
+# When the boundary is open, cache files are still constrained to a trusted
+# cache root (the configured ``computed_data_location``) and opened through a
+# race-resistant, descriptor-relative walk:
+#   - ``cache_path`` must be a relative path with no ".." parts or NUL bytes,
+#     so traversal is rejected before any filesystem access;
+#   - every directory component is opened relative to its validated parent
+#     descriptor with O_DIRECTORY|O_NOFOLLOW, so a component cannot be swapped
+#     for a symlink after validation;
+#   - the final component is opened with O_NOFOLLOW (and O_NONBLOCK so special
+#     files cannot block the process) and must be a regular file, verified on
+#     the descriptor itself via fstat.
+# The cache root itself is trusted operator configuration; the untrusted input
+# is only the relative cache file path beneath it.
+# ---------------------------------------------------------------------------
+LEGACY_PICKLE_CACHE_ENV = "F1_LEGACY_ALLOW_PICKLE_CACHE"
+
+
+def _legacy_pickle_cache_allowed():
+    """Return True only when the legacy pickle cache opt-in is set to "1"."""
+    return os.environ.get(LEGACY_PICKLE_CACHE_ENV) == "1"
+
+
+def _legacy_cache_root():
+    """Absolute trusted root for the legacy computed-data pickle cache.
+
+    The root is the application's configured computed-data location (default
+    ``computed_data`` in the working directory), matching the legacy cache
+    layout for default settings. The root itself is trusted configuration;
+    untrusted input is the relative cache file path beneath it.
+    """
+    configured = get_settings().get("computed_data_location") or "computed_data"
+    return Path(configured).expanduser().resolve()
+
+
+def _warn_legacy_cache_rejected(cache_path, exc):
+    """Report a rejected opt-in cache access (fail-closed, runtime continues)."""
+    print(f"Warning: refusing legacy pickle cache access to {cache_path!r}: {exc}")
+
+
+def _open_legacy_cache_file(cache_path, cache_root, mode, create_parents=False):
+    """Open ``cache_path`` beneath the trusted ``cache_root`` without symlinks.
+
+    ``mode`` is "rb" or "wb". ``create_parents`` lets the writer create missing
+    parent directories under the root, preserving the legacy first-run cache
+    creation behavior.
+
+    Returns an open binary file object. Raises:
+    - ``ValueError`` for traversal, absolute, or NUL-containing cache paths
+      (rejected before any filesystem access);
+    - ``FileNotFoundError`` for genuinely missing files (or missing parents
+      unless ``create_parents``);
+    - ``OSError`` for unsafe topology: symlinked components, non-directory
+      parents, or non-regular final targets.
+    """
+    if mode not in ("rb", "wb"):
+        raise ValueError(f"unsupported cache open mode: {mode!r}")
+
+    # Fail closed on platforms that cannot provide no-follow semantics; do not
+    # claim protection the implementation cannot deliver.
+    if not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")):
+        raise OSError("no-follow cache boundary unavailable on this platform")
+
+    root = Path(cache_root)
+    if not root.is_absolute():
+        root = root.resolve()
+
+    # Lexical containment of the untrusted path before any filesystem access.
+    if not isinstance(cache_path, str):
+        cache_path = str(cache_path)
+    if "\x00" in cache_path:
+        raise ValueError("cache path contains a NUL byte")
+    parts = PurePath(cache_path).parts
+    if not parts or PurePath(cache_path).is_absolute() or any(
+        part == ".." for part in parts
+    ):
+        raise ValueError("cache path escapes the cache root")
+
+    if create_parents:
+        os.makedirs(str(root), exist_ok=True)
+    root_fd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    open_fds = [root_fd]
+    try:
+        parent_fd = root_fd
+        for part in parts[:-1]:
+            try:
+                parent_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                if not create_parents:
+                    raise
+                os.mkdir(part, dir_fd=parent_fd)
+                parent_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            open_fds.append(parent_fd)
+
+        final = parts[-1]
+        if mode == "rb":
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        else:
+            flags = (
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_TRUNC
+                | os.O_NOFOLLOW
+                | os.O_NONBLOCK
+            )
+        file_fd = os.open(final, flags, 0o666, dir_fd=parent_fd)
+        try:
+            # O_NOFOLLOW rejects symlinks and O_NONBLOCK prevents blocking on
+            # FIFOs during open; fstat on the descriptor itself closes the
+            # remaining special-file cases (directory, FIFO, device, socket).
+            info = os.fstat(file_fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(errno.EINVAL, "cache target is not a regular file")
+
+            # Success: close every directory descriptor acquired along the
+            # walk, including the deepest parent used as dir_fd for the final
+            # open; os.fdopen then takes ownership of file_fd, so the returned
+            # file object releases it exactly once.
+            for fd in open_fds:
+                os.close(fd)
+            return os.fdopen(file_fd, mode)
+        except Exception:
+            # file_fd is not tracked in open_fds, so release it once here on
+            # any failure below — fstat/regular-file rejection, a directory
+            # close error, or an fdopen failure before ownership transfer —
+            # without masking the original error. The outer handler closes the
+            # directory descriptors.
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+            raise
+    except Exception:
+        for fd in reversed(open_fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
+
+
+def _load_legacy_pickle_cache(cache_path, cache_root=None):
+    """Load a legacy computed-data pickle cache inside the quarantined boundary.
+
+    Returns the unpickled payload, or None when the boundary is closed, the
+    cache file is missing, the path is unsafe (traversal, symlink, non-regular
+    file), or ``--refresh-data`` is requested — in which case the caller
+    recomputes telemetry from scratch. The default runtime path never reaches
+    ``pickle.load``.
+    """
+    if not _legacy_pickle_cache_allowed():
+        return None
+    if "--refresh-data" in sys.argv:
+        return None
+    if cache_root is None:
+        cache_root = _legacy_cache_root()
+    try:
+        with _open_legacy_cache_file(cache_path, cache_root, "rb") as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        # Genuine cache miss (file or parent absent): recompute from scratch.
+        return None
+    except (OSError, ValueError) as exc:
+        _warn_legacy_cache_rejected(cache_path, exc)
+        return None
+
+
+def _write_legacy_pickle_cache(cache_path, payload, cache_root=None):
+    """Write a legacy computed-data pickle cache inside the quarantined boundary.
+
+    No-op when the boundary is closed, so the default runtime path never
+    creates or writes pickle cache files. Unsafe targets (traversal, symlinked
+    or non-regular files, symlinked parents) are rejected without touching the
+    filesystem, so the opt-in cannot be used to write arbitrary files.
+    """
+    if not _legacy_pickle_cache_allowed():
+        return
+    if cache_root is None:
+        cache_root = _legacy_cache_root()
+    try:
+        with _open_legacy_cache_file(
+            cache_path, cache_root, "wb", create_parents=True
+        ) as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except (OSError, ValueError) as exc:
+        _warn_legacy_cache_rejected(cache_path, exc)
 
 
 def _process_single_driver(args):
@@ -550,19 +762,16 @@ def get_race_telemetry(session, session_type="R"):
     event_name = str(session).replace(" ", "_")
     cache_suffix = "sprint" if session_type == "S" else "race"
 
-    # Check if this data has already been computed
-
-    try:
-        if "--refresh-data" not in sys.argv:
-            with open(
-                f"computed_data/{event_name}_{cache_suffix}_telemetry.pkl", "rb"
-            ) as f:
-                frames = pickle.load(f)
-                print(f"Loaded precomputed {cache_suffix} telemetry data.")
-                print("The replay should begin in a new window shortly!")
-                return frames
-    except FileNotFoundError:
-        pass  # Need to compute from scratch
+    # Check if this data has already been computed. The legacy pickle cache is
+    # quarantined (see _load_legacy_pickle_cache): the default runtime path
+    # never reaches pickle.load and recomputes from scratch.
+    frames = _load_legacy_pickle_cache(
+        f"{event_name}_{cache_suffix}_telemetry.pkl"
+    )
+    if frames is not None:
+        print(f"Loaded precomputed {cache_suffix} telemetry data.")
+        print("The replay should begin in a new window shortly!")
+        return frames
 
     drivers = session.drivers
 
@@ -921,23 +1130,22 @@ def get_race_telemetry(session, session_type="R"):
     # 5d. Compute Safety Car positions for each frame
     _compute_safety_car_positions(frames, formatted_track_statuses, session)
     print("completed telemetry extraction...")
-    print("Saving to cache file...")
-    # If computed_data/ directory doesn't exist, create it
-    if not os.path.exists("computed_data"):
-        os.makedirs("computed_data")
 
-    # Save using pickle (10-100x faster than JSON)
-    with open(f"computed_data/{event_name}_{cache_suffix}_telemetry.pkl", "wb") as f:
-        pickle.dump({
+    # Quarantined legacy cache write (see _write_legacy_pickle_cache): the
+    # default runtime path returns computed data without touching pickle; only
+    # the explicit F1_LEGACY_ALLOW_PICKLE_CACHE=1 opt-in persists the cache.
+    _write_legacy_pickle_cache(
+        f"{event_name}_{cache_suffix}_telemetry.pkl",
+        {
             "frames": frames,
             "driver_colors": get_driver_colors(session),
             "track_statuses": formatted_track_statuses,
             "race_control_messages": formatted_rc_messages,
             "total_laps": int(max_lap_number),
             "max_tyre_life": max_tyre_life_map,
-        }, f, protocol=pickle.HIGHEST_PROTOCOL)
+        },
+    )
 
-    print("Saved Successfully!")
     print("The replay should begin in a new window shortly")
     return {
         "frames": frames,
@@ -1341,18 +1549,16 @@ def get_quali_telemetry(session, session_type="Q"):
     event_name = str(session).replace(" ", "_")
     cache_suffix = "sprintquali" if session_type == "SQ" else "quali"
 
-    # Check if this data has already been computed
-    try:
-        if "--refresh-data" not in sys.argv:
-            with open(
-                f"computed_data/{event_name}_{cache_suffix}_telemetry.pkl", "rb"
-            ) as f:
-                data = pickle.load(f)
-                print(f"Loaded precomputed {cache_suffix} telemetry data.")
-                print("The replay should begin in a new window shortly!")
-                return data
-    except FileNotFoundError:
-        pass  # Need to compute from scratch
+    # Check if this data has already been computed. The legacy pickle cache is
+    # quarantined (see _load_legacy_pickle_cache): the default runtime path
+    # never reaches pickle.load and recomputes from scratch.
+    data = _load_legacy_pickle_cache(
+        f"{event_name}_{cache_suffix}_telemetry.pkl"
+    )
+    if data is not None:
+        print(f"Loaded precomputed {cache_suffix} telemetry data.")
+        print("The replay should begin in a new window shortly!")
+        return data
 
     qualifying_results = get_qualifying_results(session)
 
@@ -1387,22 +1593,18 @@ def get_quali_telemetry(session, session_type="Q"):
         if result["min_speed"] < min_speed or min_speed == 0.0:
             min_speed = result["min_speed"]
 
-    # Save to the compute_data directory
-
-    if not os.path.exists("computed_data"):
-        os.makedirs("computed_data")
-
-    with open(f"computed_data/{event_name}_{cache_suffix}_telemetry.pkl", "wb") as f:
-        pickle.dump(
-            {
-                "results": qualifying_results,
-                "telemetry": telemetry_data,
-                "max_speed": max_speed,
-                "min_speed": min_speed,
-            },
-            f,
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
+    # Quarantined legacy cache write (see _write_legacy_pickle_cache): only the
+    # explicit F1_LEGACY_ALLOW_PICKLE_CACHE=1 opt-in persists the cache; the
+    # default runtime path never touches pickle.
+    _write_legacy_pickle_cache(
+        f"{event_name}_{cache_suffix}_telemetry.pkl",
+        {
+            "results": qualifying_results,
+            "telemetry": telemetry_data,
+            "max_speed": max_speed,
+            "min_speed": min_speed,
+        },
+    )
 
     return {
         "results": qualifying_results,

@@ -61,7 +61,7 @@ def test_active_generation_validation_rejects_the_frozen_v1_golden_manifest(tmp_
     generation.mkdir()
     (generation / "manifest.json").write_bytes(golden.read_bytes())
 
-    with pytest.raises(ValueError, match="canonical-parquet-v2.*deprecated"):
+    with pytest.raises(ValueError, match="manifest format_version and manifest_version must identify canonical-parquet-v2"):
         validate_complete_canonical_generation(
             generation,
             expected_generation_id=generation.name,

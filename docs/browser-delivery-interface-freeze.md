@@ -211,8 +211,8 @@ fail-closed guarantees.
 Weather is delivered as an independent optional artifact. The manifest may
 carry a `weatherSidecar` reference (`path`, `schemaId`, `sha256`) pointing to
 `weather-sidecar.json` with schema ID
-`urn:f1-cache-replay:schema:replay-data:v1:weather-sidecar`. The payload uses
-the exact v1 names `contractVersion`, `fixtureId`, `timeMs`, `airTempC`,
+`urn:f1-cache-replay:schema:replay-data:v2:weather-sidecar`. The payload uses
+the exact v2 names `contractVersion`, `fixtureId`, `timeMs`, `airTempC`,
 `humidityPct`, `pressureMbar`, `rainfall`, `trackTempC`, `windDirectionDeg`,
 and `windSpeedMps`; all measurement arrays are nullable and aligned to native
 canonical weather rows.
@@ -223,23 +223,24 @@ sample. A weather panel uses the latest observation at or before the replay
 cursor; observations more than 90,000 ms old, rows with no surviving
 measurement, pre-first-sample time, and a missing manifest reference all
 render the same fail-closed unavailable state. Wind direction is the
-meteorological from-direction in degrees; the v1 UI may show a cautious
+meteorological from-direction in degrees; the v2 UI may show a cautious
 from-direction arrow, but the payload does not encode a flow-toward transform.
 
-The producer applies ADR-003's FastF1 zero-sentinel audit before publication.
+The producer applies the fail-closed FastF1 zero-sentinel audit before publication.
 Sentinel-prone zeros become null, while genuine-zero-capable values require
 row corroboration. Explicit FastF1 rainfall `false` remains its dry/unknown
 source limitation; canonical or adapted rainfall `null` remains null and
 renders unavailable. This does not alter canonical Parquet. Deterministic JSON, aligned/strictly ordered
 arrays, schema validation, fixture identity, and SHA-256 verification remain
-publication-boundary checks. See [Replay Data Contract — Optional weather
-sidecar](replay-data-contract.md#optional-weather-sidecar) and
-[ADR-003](adr/003-weather-sidecar-and-replay-panel.md) for the complete policy.
+publication-boundary checks. See [Replay Data Contract — Optional v2 weather
+sidecar](replay-data-contract.md#optional-v2-weather-sidecar) for the complete
+policy, including the fail-closed zero-sentinel rules.
 
-**Backward compatibility:** core chunks and `browser-delivery-v1` are
-unchanged. Strict consumers must allow manifests without `weatherSidecar`;
-old generations remain valid and replayable and simply show weather as
-unavailable.
+**Backward compatibility:** core v2 chunks are unchanged. Strict consumers
+must allow manifests without `weatherSidecar`; existing v2 generations remain
+valid and replayable and simply show weather as unavailable. The frozen v1
+(`browser-delivery-v1`) surface is historical and non-runtime: it is excluded
+from the active catalog and never loaded by the v2-only reader.
 
 ## 10. Optional pit-loss model
 

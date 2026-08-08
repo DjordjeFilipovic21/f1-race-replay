@@ -1,8 +1,12 @@
 # Canonical Parquet writer contract
 
-This is the normative v1 contract for writing the ten validated canonical
+This is the normative v2 contract for writing the ten validated canonical
 tables from [ADR-001](adr/001-canonical-pipeline-foundation.md). It is separate
 from the Phase 0 browser manifest and browser chunks.
+
+The v1 canonical contract (`canonical-parquet-v1`) is a deprecated historical
+reference: the active writer publishes only v2 generations, and active readers
+reject v1 pointers and manifests.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative.
 
@@ -55,7 +59,7 @@ directory. A generation MUST contain exactly one entry for each canonical table.
 `current.json` MUST be compact deterministic JSON with at least this object:
 
 ```json
-{"format_version":"canonical-parquet-v1","generation_id":"2026-07-15T120000Z-abc","manifest_path":"generations/2026-07-15T120000Z-abc/manifest.json","manifest_sha256":"<64 lowercase hex characters>"}
+{"format_version":"canonical-parquet-v2","generation_id":"2026-07-15T120000Z-abc","manifest_path":"generations/2026-07-15T120000Z-abc/manifest.json","manifest_sha256":"<64 lowercase hex characters>"}
 ```
 
 Readers MUST reject a pointer when its JSON is invalid, fields are missing or
@@ -85,16 +89,16 @@ The writer MUST NOT pass undocumented `maintain_order` to this API and MUST NOT
 require or implicitly select PyArrow. Input order is already canonical; the
 writer MUST NOT use an unstable output-order option to define identity.
 
-These settings describe the v1 writer configuration and MUST be recorded in
+These settings describe the v2 writer configuration and MUST be recorded in
 the manifest. They do not make Parquet bytes portable across Polars/Arrow
 versions, operating systems, or storage environments.
 
-## 4. Logical hash v1
+## 4. Logical hash v2
 
 The logical table hash is `sha256(wire_bytes)`, where `wire_bytes` is exactly:
 
 ```text
-ASCII("F1RP-LOGICAL-TABLE\0v1\0")
+ASCII("F1RP-LOGICAL-TABLE\0v2\0")
 U64BE(table-name-byte-length) + table-name UTF-8 bytes
 U64BE(column-count)
 repeat column-count:
@@ -107,8 +111,11 @@ repeat rows in declared canonical order:
 
 `U64BE` is an unsigned 64-bit big-endian integer. Every length and count MUST
 fit that representation. Tokens MUST be ASCII-compatible UTF-8 and identify
-the exact declared Polars dtype, for example `String`, `Int16`, `Int64`,
-`Float64`, `Boolean`, and `Datetime[ms,UTC]`.
+the exact declared Polars dtype. The active v2 contract prefixes each token
+with the contract identity, for example `canonical-parquet-v2:String`,
+`canonical-parquet-v2:Int16`, `canonical-parquet-v2:Int64`,
+`canonical-parquet-v2:Float64`, `canonical-parquet-v2:Boolean`, and
+`canonical-parquet-v2:Datetime[ms,UTC]`.
 
 Each cell begins with one tag:
 
@@ -144,7 +151,7 @@ canonical table order above. Each entry MUST contain:
   "name": "car_telemetry",
   "path": "tables/car_telemetry.parquet",
   "row_count": 0,
-  "schema": [{"name":"session_id","dtype":"String"}],
+  "schema": [{"name":"session_id","dtype":"canonical-parquet-v2:String"}],
   "logical_sha256": "<64 lowercase hex characters>",
   "byte_sha256": "<64 lowercase hex characters>"
 }
@@ -257,7 +264,7 @@ validation separately from raw Parquet loading. A consumer may then use native
 Polars `read_parquet`/`scan_parquet` only after pointer, manifest, schema, row
 count, and hash validation succeeds.
 
-Memory-streaming optimization is explicitly deferred: v1 materializes the
-validated in-memory frames and closed Parquet bytes. The writer requires native
+Memory-streaming optimization is explicitly deferred: the v2 writer
+materializes the validated in-memory frames and closed Parquet bytes. The writer requires native
 Polars (`use_pyarrow=False`), does not load FastF1, and does not alter the Phase 0
 browser manifest, browser chunks, or the `legacy/src/` application.
