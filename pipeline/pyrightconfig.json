@@ -1,0 +1,8 @@
+{
+  "include": ["src", "tests"],
+  "extraPaths": ["src", "tests"],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": "none"
+}
