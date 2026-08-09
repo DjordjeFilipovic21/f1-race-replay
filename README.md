@@ -37,6 +37,13 @@ Pipeline and web tests mirror these boundaries beneath `pipeline/tests/` and
 
 ## Setup and validation
 
+The supported Python matrix is 3.11–3.13. Python installs consume the committed
+pip-tools constraints artifacts (`pipeline/constraints.txt` and
+`legacy/constraints.txt`), which are intentionally committed generated
+reproducibility artifacts pinning the resolved dependency set for the lowest
+supported matrix member (Python 3.11); the canonical install, test, and
+constraint regeneration commands are in [`docs/Testing.md`](docs/Testing.md).
+
 - Modern Python checks and test commands: [`docs/Testing.md`](docs/Testing.md).
 - Production browser-delivery publication:
   [`docs/r2-production-publishing.md`](docs/r2-production-publishing.md).
@@ -45,6 +52,9 @@ Pipeline and web tests mirror these boundaries beneath `pipeline/tests/` and
   `.venv/bin/python legacy/main.py`.
 - Install the pipeline from [`pipeline/`](pipeline/) and use its README for
   canonical generation commands.
+
+v2 is the sole supported browser/replay delivery contract; canonical Parquet
+remains unchanged and is never rewritten at the delivery boundary.
 
 The lightweight modern suite is offline and covers `tests/contracts` and
 `pipeline/tests`. Legacy tests are run separately with

@@ -27,21 +27,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: pipeline/pyproject.toml
+          cache-dependency-path: |
+            pipeline/pyproject.toml
+            pipeline/constraints.txt
+            pipeline/test-constraints.txt
 
       - name: Install lightweight test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-mock "jsonschema[format-nongpl]>=4.26,<5"
+          python -m pip install --constraint pipeline/constraints.txt --constraint pipeline/test-constraints.txt pytest pytest-mock "jsonschema[format-nongpl]>=4.26,<5"
           python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheelhouse" ./pipeline
-          python -m pip install "$RUNNER_TEMP"/wheelhouse/*.whl
+          python -m pip install --constraint pipeline/constraints.txt "$RUNNER_TEMP"/wheelhouse/*.whl
 
       - name: Smoke-test installed pipeline entry points outside the repository
         working-directory: ${{ runner.temp }}
@@ -65,16 +68,19 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
             legacy/requirements.txt
             legacy/requirements-dev.txt
+            legacy/constraints.txt
+            pipeline/pyproject.toml
+            pipeline/constraints.txt
 
       - name: Install system dependencies
         run: |
@@ -89,9 +95,9 @@ jobs:
       - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r legacy/requirements-dev.txt
+          python -m pip install --constraint legacy/constraints.txt -r legacy/requirements-dev.txt
           python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheelhouse" ./pipeline
-          python -m pip install "$RUNNER_TEMP"/wheelhouse/*.whl
+          python -m pip install --constraint legacy/constraints.txt --constraint pipeline/constraints.txt "$RUNNER_TEMP"/wheelhouse/*.whl
 
       - name: Smoke-test installed pipeline entry points outside the repository
         working-directory: ${{ runner.temp }}

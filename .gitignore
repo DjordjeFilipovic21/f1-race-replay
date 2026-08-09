@@ -21,6 +21,9 @@ __pycache__/
 .codegraph/
 .tmp/
 
+# Untracked browser-delivery generation-time directory (never committed)
+/templates/
+
 # Local FastF1/cache/generated data (root and legacy desktop runtime)
 .fastf1-cache/
 legacy/.fastf1-cache/
@@ -36,6 +39,10 @@ still_frame.png
 /web/public/
 /web/playwright-report/
 /web/test-results/
+
+# Node dependencies and Wrangler local state (root and web)
+node_modules/
+.wrangler/
 
 # OS / IDE files
 .DS_Store

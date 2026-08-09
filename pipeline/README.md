@@ -9,12 +9,27 @@ legacy desktop application and its `legacy/src/` modules.
 From this directory:
 
 ```bash
-python -m pip install .
+../.venv/bin/python -m pip install --constraint constraints.txt .
 ```
 
-The package requires Python 3.11+ and installs FastF1 3.8.x, Polars 1.x,
+The package supports Python 3.11–3.13 and installs FastF1 3.8.x, Polars 1.x,
 the local browser-publication schema engine `jsonschema-rs` 0.48.x, and
-`boto3` for opt-in Cloudflare R2 publication.
+`boto3` for opt-in Cloudflare R2 publication. The install consumes the
+committed pip-tools constraints artifact `pipeline/constraints.txt`, which pins
+the exact resolver result for the lowest supported matrix member (Python 3.11)
+without changing the declared ranges in `pipeline/pyproject.toml`.
+
+Regenerate the constraints artifact with pip-tools whenever the declared
+dependency ranges or the supported matrix change (from the repository root):
+
+```bash
+.venv/bin/python -m pip install --upgrade pip-tools
+.venv/bin/python -m piptools compile --resolver=backtracking \
+  --output-file=pipeline/constraints.txt pipeline/pyproject.toml
+```
+
+`pipeline/constraints.txt` is a constraints file, not a replacement for
+`pipeline/pyproject.toml`.
 
 ## FastF1 2026 compatibility
 
@@ -125,7 +140,7 @@ command and testing-session API, never through ordinary round lookup.
 Install the package from `pipeline/` first:
 
 ```bash
-python -m pip install .
+../.venv/bin/python -m pip install --constraint constraints.txt .
 ```
 
 The installed console command and the module entry point accept the same
