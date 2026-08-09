@@ -170,14 +170,15 @@ def test_adapt_results_rejects_unknown_driver_with_actionable_context():
         adapt_results([{"DriverNumber": "99"}], DRIVERS, "2026-03-race")
 
 
+@pytest.mark.filterwarnings("error::DeprecationWarning")
 def test_adapt_results_converts_qualifying_times_and_preserves_missing_segments():
     frame = adapt_results(
         [
             {
                 "DriverNumber": "44",
-                "Q1": pd.Timedelta("1.2345s"),
+                "Q1": timedelta(microseconds=1_234_500),
                 "Q2": pd.NaT,
-                "Q3": pd.Timedelta("1.0005s"),
+                "Q3": timedelta(microseconds=1_000_500),
             },
             {"DriverNumber": "1"},
         ],

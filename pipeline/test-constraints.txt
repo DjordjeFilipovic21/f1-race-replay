@@ -1,0 +1,38 @@
+# Generated dependency constraints for the Python 3.11 resolver.
+# The supported CI matrix is Python 3.11-3.13; refresh and review this file
+# whenever the declared dependency ranges or supported matrix changes.
+#
+# These pins cover the contract-unit test extras only: pytest, pytest-mock,
+# and jsonschema[format-nongpl]. They mirror the exact pins in
+# legacy/constraints.txt; refresh this file whenever legacy/constraints.txt is
+# regenerated and keep the pins in sync.
+#
+# Regenerate with pip-tools (then copy the test-extras pins over):
+#   .venv/bin/python -m pip install --upgrade pip-tools
+#   .venv/bin/python -m piptools compile --resolver=backtracking \
+#     --output-file=legacy/constraints.txt legacy/requirements-dev.txt
+#
+# This is a constraints file, not a replacement for pipeline/pyproject.toml
+# or pipeline/constraints.txt.
+
+attrs==26.1.0
+fqdn==1.5.1
+idna==3.18
+iniconfig==2.3.0
+isoduration==20.11.0
+jsonpointer==3.1.1
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+packaging==26.3
+pluggy==1.6.0
+python-dateutil==2.9.0.post0
+pytest==9.1.1
+pytest-mock==3.15.1
+referencing==0.37.0
+rfc3339-validator==0.1.4
+rfc3986-validator==0.1.1
+rfc3987-syntax==1.1.0
+rpds-py==2026.6.3
+six==1.17.0
+uri-template==1.3.0
+webcolors==25.10.0

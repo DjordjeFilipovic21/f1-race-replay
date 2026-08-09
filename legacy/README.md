@@ -77,16 +77,22 @@ Recently added support for Qualifying session replays with telemetry visualizati
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11–3.13 (the supported CI matrix)
 - [FastF1](https://github.com/theOehrly/Fast-F1)
 - [Arcade](https://api.arcade.academy/en/latest/)
 - numpy
 
 ## Replay Data Contract (Phase 0)
 
-Phase 0 adds committed replay contract artifacts under `../contracts/replay-data/v1/`.
-They are deterministic, offline fixtures shared by the Python contract tests and future
-TypeScript replay tests.
+Phase 0 added committed replay contract artifacts under
+`../contracts/replay-data/v1/`. These v1 fixtures are **frozen historical
+reference material only**: they document the Phase 0 contract history and are
+not loaded by any runtime reader. There are no v1 runtime readers, fallbacks,
+adapters, publishers, or mixed-version payloads; the active browser/replay
+data contract is v2 (see
+[`../docs/replay-data-contract.md`](../docs/replay-data-contract.md)). Contract
+tests reference the frozen v1 fixture read-only only to assert that v1
+identities are rejected.
 
 - `fixtures/deterministic-race/manifest.json`
 - `fixtures/deterministic-race/track-assets.json`
@@ -95,14 +101,33 @@ TypeScript replay tests.
 - `fixtures/deterministic-race/golden-snapshots.json`
 
 See [`../docs/replay-data-contract.md`](../docs/replay-data-contract.md) for the exact timing, interpolation, and
-boundary semantics. These artifacts document the contract; they do not imply any
-runtime replay behavior change.
+boundary semantics. These artifacts document the contract history; they do not
+imply any runtime replay behavior change.
 
-Install dependencies:
+Install dependencies with the committed pip-tools constraints artifact:
 ```bash
-pip install -r legacy/requirements.txt
+.venv/bin/python -m pip install --constraint legacy/constraints.txt -r legacy/requirements.txt
 ```
-When already inside `legacy/`, use `pip install -r requirements.txt` instead.
+When already inside `legacy/`, use
+`../.venv/bin/python -m pip install --constraint constraints.txt -r requirements.txt` instead.
+For development and running the tests, install the dev manifest the same way:
+```bash
+.venv/bin/python -m pip install --constraint legacy/constraints.txt -r legacy/requirements-dev.txt
+```
+
+`legacy/constraints.txt` pins the resolver result for the lowest supported
+matrix member (Python 3.11). Regenerate it with pip-tools whenever
+`legacy/requirements*.txt` or the supported matrix changes (from the repository
+root):
+
+```bash
+.venv/bin/python -m pip install --upgrade pip-tools
+.venv/bin/python -m piptools compile --resolver=backtracking \
+  --output-file=legacy/constraints.txt legacy/requirements-dev.txt
+```
+
+`legacy/constraints.txt` is a constraints file, not a replacement for
+`legacy/requirements*.txt`.
 
 FastF1 cache folder will be created automatically on first run. If it is not created, you can manually create a folder named `.fastf1-cache` in the `legacy/` directory.
 > **First Run Notice:** Loading a session for the first time may take noticeably longer because telemetry data must be downloaded, processed, and cached locally. Subsequent launches of the same session are significantly faster..
@@ -133,16 +158,11 @@ To get started with this project locally, you can follow these steps:
        ```
 3. **Install Dependencies:**
     ```bash
-    pip install -r legacy/requirements.txt
+    .venv/bin/python -m pip install --constraint legacy/constraints.txt -r legacy/requirements.txt
     ```
 
 4. **Run the Application:**
     You can now run the application using the instructions in the Usage section below.
-## Troubleshooting
-If the pull data proccess fails, run:
-```bash
-pip install --upgrade fastf1
-```
 
 ## Usage
 
