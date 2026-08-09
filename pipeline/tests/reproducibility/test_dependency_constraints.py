@@ -2,14 +2,17 @@
 
 The pipeline and legacy dependency manifests declare top-level version ranges,
 while pipeline/constraints.txt and legacy/constraints.txt pin the exact resolver
-result. These tests parse the committed artifacts only (never the network, pip,
-or a subprocess) and assert:
+result. pipeline/test-constraints.txt mirrors the contract-unit test-extras pins
+from legacy/constraints.txt exactly. These tests parse the committed artifacts
+only (never the network, pip, or a subprocess) and assert:
 
-- every pinned version satisfies the range declared for the same package, and
-- every top-level declared package appears in its constraints artifact.
+- every pinned version satisfies the range declared for the same package,
+- every top-level declared package appears in its constraints artifact, and
+- every pipeline test-extras pin matches the exact legacy/constraints.txt pin.
 
 Refreshing a constraints file with pip-tools must therefore keep every pin
-inside the declared range and must not drop a declared top-level package.
+inside the declared range, must not drop a declared top-level package, and must
+keep pipeline/test-constraints.txt aligned with the legacy pins.
 
 Scope boundary: these offline checks prove declared-range pinning and
 top-level coverage only. Python-version resolver/installability is owned by
@@ -31,6 +34,7 @@ from packaging.version import Version
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_PYPROJECT = PROJECT_ROOT / "pipeline" / "pyproject.toml"
 PIPELINE_CONSTRAINTS = PROJECT_ROOT / "pipeline" / "constraints.txt"
+PIPELINE_TEST_CONSTRAINTS = PROJECT_ROOT / "pipeline" / "test-constraints.txt"
 LEGACY_REQUIREMENTS = (
     PROJECT_ROOT / "legacy" / "requirements.txt",
     PROJECT_ROOT / "legacy" / "requirements-dev.txt",
@@ -118,6 +122,20 @@ def _coverage_gaps(
     return [name for name in sorted(declared) if name not in pins]
 
 
+def _pin_mismatches(
+    pipeline_pins: dict[str, Version], legacy_pins: dict[str, Version]
+) -> list[str]:
+    """Return pipeline test-extras pins that differ from the legacy pins."""
+    mismatches: list[str] = []
+    for name, pinned in sorted(pipeline_pins.items()):
+        legacy_pin = legacy_pins.get(name)
+        if legacy_pin is None:
+            mismatches.append(f"{name}=={pinned} missing from legacy/constraints.txt")
+        elif pinned != legacy_pin:
+            mismatches.append(f"{name}=={pinned} differs from legacy pin {legacy_pin}")
+    return mismatches
+
+
 def _pipeline_declared() -> dict[str, SpecifierSet]:
     with PIPELINE_PYPROJECT.open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)
@@ -170,3 +188,17 @@ def test_legacy_declared_dependencies_are_pinned_in_constraints() -> None:
 
     # Assert
     assert gaps == []
+
+
+def test_pipeline_test_constraints_match_legacy_constraints() -> None:
+    # Arrange
+    pipeline_pins = _parse_constraints(
+        PIPELINE_TEST_CONSTRAINTS.read_text(encoding="utf-8")
+    )
+    legacy_pins = _parse_constraints(LEGACY_CONSTRAINTS.read_text(encoding="utf-8"))
+
+    # Act
+    mismatches = _pin_mismatches(pipeline_pins, legacy_pins)
+
+    # Assert
+    assert mismatches == []

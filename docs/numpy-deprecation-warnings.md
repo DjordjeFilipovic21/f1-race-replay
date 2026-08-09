@@ -15,6 +15,12 @@ The local environment was Python 3.14.6. Results:
 - Modern contract and pipeline suite: **2192 passed, 2 warnings**.
 - Legacy suite: **94 passed, 0 warnings**.
 
+The 2192 count is the historical baseline from this discovery run and predates
+the reproducibility tests in
+`pipeline/tests/reproducibility/test_dependency_constraints.py`: those four
+tests were added after the warning discovery and are not part of the baseline
+count.
+
 Both modern warnings came from the same test input construction in
 `pipeline/tests/adapters/fastf1/test_messages_results.py`, where
 `pandas.Timedelta("1.2345s")` and `pandas.Timedelta("1.0005s")` exercised
@@ -45,9 +51,19 @@ runtime separately.
 After the remediation, the same warning-discovery runs report **zero**
 `DeprecationWarning`s from NumPy or any other source:
 
-- Modern contract and pipeline suite: **2192 passed, 0 warnings**.
+- Modern contract and pipeline suite: **2197 passed, 0 warnings**.
 - Legacy suite: **94 passed, 0 warnings**.
 
-The test counts match the baseline (2192 modern, 94 legacy): the focused
-boundary fix removed the two warnings without changing test coverage, and no
-blanket suppression was introduced.
+The modern count grows from the 2192-test baseline by the tests added since
+the discovery run:
+
+- 2192 + 4 = 2196: the four reproducibility tests in
+  `pipeline/tests/reproducibility/test_dependency_constraints.py`, added after
+  the baseline run.
+- 2196 + 1 = 2197: the offline constraints-alignment test added with this
+  evidence update.
+
+The focused boundary fix removed the two warnings without changing test
+coverage, and no blanket suppression was introduced. The counts above document
+the current suite arithmetic; this update does not claim a new warning-discovery
+runtime run.

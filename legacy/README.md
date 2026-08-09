@@ -91,7 +91,7 @@ not loaded by any runtime reader. There are no v1 runtime readers, fallbacks,
 adapters, publishers, or mixed-version payloads; the active browser/replay
 data contract is v2 (see
 [`../docs/replay-data-contract.md`](../docs/replay-data-contract.md)). Contract
-tests reference the frozen v1 fixture read-only only to assert that v1
+tests reference the frozen v1 fixture read-only to assert that v1
 identities are rejected.
 
 - `fixtures/deterministic-race/manifest.json`
