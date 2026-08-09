@@ -56,7 +56,10 @@ CANONICAL_TABLE_NAMES = (
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UNSUPPORTED_DIRECTORY_FSYNC = {errno.EINVAL, errno.ENOTSUP, errno.EBADF}
-_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# ``O_NOFOLLOW`` must not silently degrade to 0 on platforms that lack the
+# flag: no-follow reads reject up front instead of following a symlink.
+_NO_FOLLOW_SUPPORTED = hasattr(os, "O_NOFOLLOW")
+_NO_FOLLOW = os.O_NOFOLLOW if _NO_FOLLOW_SUPPORTED else 0
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _POINTER_TEMP_ATTEMPTS = 16
 _STAGING_DIRECTORY_ATTEMPTS = 16
@@ -300,7 +303,9 @@ def _safe_relative_path(value: object) -> PurePosixPath:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise GenerationPublicationError("metadata path must be a safe relative POSIX path")
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or "." in path.parts:
+    # pathlib collapses a bare "." to the empty path, so its "." component never
+    # appears in ``path.parts``; reject the raw current-directory name instead.
+    if path.is_absolute() or value == "." or ".." in path.parts or "." in path.parts:
         raise GenerationPublicationError("metadata path escapes its generation")
     return path
 
@@ -312,6 +317,8 @@ def _absolute_path(path: Path) -> Path:
 
 def _open_directory_no_follow(path: Path) -> int:
     """Open every directory component without permitting a symlink traversal."""
+    if not _NO_FOLLOW_SUPPORTED:
+        raise GenerationPublicationError("no-follow directory reads are unsupported on this platform")
     absolute = _absolute_path(path)
     descriptor = os.open(absolute.anchor, os.O_RDONLY | _DIRECTORY)
     try:
@@ -411,6 +418,10 @@ def _open_regular_file_no_follow(path: Path, label: str) -> int:
     Opening the parent and leaf relative to that descriptor closes the usual
     inspect-then-open race for pointer, manifest, and table reads.
     """
+    if not _NO_FOLLOW_SUPPORTED:
+        raise GenerationPublicationError(
+            f"no-follow {label} reads are unsupported on this platform"
+        )
     try:
         parent = _open_directory_no_follow(path.parent)
         try:

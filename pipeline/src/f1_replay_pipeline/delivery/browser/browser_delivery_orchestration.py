@@ -60,7 +60,11 @@ from f1_replay_pipeline.delivery.browser.browser_pit_loss_observation import (
     extract_eligible_pit_loss_observations,
 )
 from f1_replay_pipeline.delivery.browser.browser_stint_summary import build_stint_summary
-from f1_replay_pipeline.delivery.browser.browser_weather_sidecar import build_weather_sidecar
+from f1_replay_pipeline.delivery.browser.browser_weather_sidecar import (
+    WeatherSidecarClassification,
+    WeatherSidecarCorruptionError,
+    build_weather_sidecar,
+)
 from f1_replay_pipeline.analysis.live_position.live_position_progress import (
     ProgressMode,
     ProgressState,
@@ -185,7 +189,24 @@ class BrowserDeliveryBuild:
 
 
 class BrowserDeliveryBuildError(ValueError):
-    """An expected failure deriving browser artifacts from canonical data."""
+    """An expected failure deriving browser artifacts from canonical data.
+
+    ``classification`` is populated only for failures that originate at the
+    weather-sidecar derivation boundary, so callers can distinguish corrupt
+    canonical weather (fail-closed) from other derivation failures and from
+    optional weather absence, which never raises.
+    """
+
+    classification: WeatherSidecarClassification | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        classification: WeatherSidecarClassification | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.classification = classification
 
 
 def build_browser_delivery(
@@ -303,7 +324,17 @@ def build_browser_delivery(
             build_qualifying_timeline(snapshot, replay_start_ms, timeline[-1] + 1)
             if session_mode in _QUALIFYING_SESSION_MODES else None
         )
-        weather_sidecar = build_weather_sidecar(snapshot)
+        try:
+            weather_sidecar = build_weather_sidecar(snapshot)
+        except WeatherSidecarCorruptionError as error:
+            # Corrupt/invalid canonical weather fails the build closed while
+            # keeping the classified cause diagnosable: the wrapped error
+            # carries the corruption classification and the weather boundary
+            # remains visible through the cause chain.
+            raise BrowserDeliveryBuildError(
+                f"weather sidecar derivation failed closed: {error}",
+                classification=error.classification,
+            ) from error
         stint_summary = build_stint_summary(snapshot)
         if race_semantics and assessment is not None:
             observations = extract_eligible_pit_loss_observations(
@@ -362,6 +393,8 @@ def build_browser_delivery(
             telemetry_capabilities=telemetry_capabilities,
         )
     except ValueError as error:
+        if isinstance(error, BrowserDeliveryBuildError):
+            raise
         raise BrowserDeliveryBuildError(str(error)) from error
     return BrowserDeliveryBuild(
         snapshot, manifest, track_assets, chunks, assessment, timeline_summary, lap_sector_sidecar,
@@ -373,11 +406,14 @@ def build_browser_delivery(
 
 
 def _session_mode(session: Mapping[str, object]) -> SessionMode:
-    """Normalize the canonical mode, retaining legacy direct race snapshots."""
-    value = session.get("session_mode")
-    if value is None:
-        return "race"
-    return normalize_session_mode(value)
+    """Normalize the canonical session mode, failing closed when absent.
+
+    A V2-labeled delivery must never be derived from incomplete or
+    V1-shaped session metadata, so a missing or unsupported
+    ``session_mode`` raises a ``NormalizationError`` here; the caller's
+    delivery error boundary wraps it as ``BrowserDeliveryBuildError``.
+    """
+    return normalize_session_mode(session.get("session_mode"))
 
 
 def _session_start_time_ms(snapshot: CanonicalGenerationSnapshot, mode: SessionMode) -> int:

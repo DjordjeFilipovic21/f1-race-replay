@@ -22,3 +22,14 @@ f1-replay-pipeline = "f1_replay_pipeline.app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Minimal lint configuration (Phase 3): ruff with its default rule set
+# (E4/E7/E9/F) pinned explicitly so the gate is deterministic across ruff
+# releases. No new dev dependencies are added; ruff is a standalone developer
+# tool installed on demand (see docs/Testing.md). target-version is the lowest
+# supported matrix member (Python 3.11), matching the constraints resolver.
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

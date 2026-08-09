@@ -56,6 +56,29 @@ jobs:
       - name: Run contract, unit, and pipeline tests
         run: python -m pytest tests/contracts pipeline/tests
 
+      - name: Lint and type-check Phase 3 touched surface (ruff + pyright)
+        run: |
+          python -m pip install ruff==0.16.2 pyright==1.1.411
+          python -m ruff check \
+            pipeline/src/f1_replay_pipeline/delivery/browser/browser_delivery_orchestration.py \
+            pipeline/src/f1_replay_pipeline/delivery/browser/browser_weather_sidecar.py \
+            pipeline/src/f1_replay_pipeline/storage/generation_publication.py \
+            pipeline/tests/delivery/browser/test_browser_weather_diagnostics.py \
+            pipeline/tests/delivery/browser/test_browser_weather_delivery_diagnostics.py \
+            pipeline/tests/storage/test_pointer_manifest_integrity.py \
+            pipeline/tests/storage/test_recovery_lease_boundaries.py \
+            pipeline/tests/storage/test_symlink_path_traversal_defenses.py
+          PY_EXE="$(python -c 'import sys; print(sys.executable)')"
+          python -m pyright -p pipeline/pyrightconfig.json --pythonpath "$PY_EXE" \
+            pipeline/src/f1_replay_pipeline/delivery/browser/browser_delivery_orchestration.py \
+            pipeline/src/f1_replay_pipeline/delivery/browser/browser_weather_sidecar.py \
+            pipeline/src/f1_replay_pipeline/storage/generation_publication.py \
+            pipeline/tests/delivery/browser/test_browser_weather_diagnostics.py \
+            pipeline/tests/delivery/browser/test_browser_weather_delivery_diagnostics.py \
+            pipeline/tests/storage/test_pointer_manifest_integrity.py \
+            pipeline/tests/storage/test_recovery_lease_boundaries.py \
+            pipeline/tests/storage/test_symlink_path_traversal_defenses.py
+
   full-suite:
     name: Full project suite (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

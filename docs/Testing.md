@@ -42,6 +42,106 @@ them whenever the declared dependency ranges or the supported matrix changes:
 Commit the refreshed constraints files; they are constraints, not replacements
 for `pipeline/pyproject.toml` or `legacy/requirements*.txt`.
 
+## Python lint and type-check
+
+Phase 3 adds minimal, scoped static validation for the pipeline package only.
+The gate checks the explicit Phase 3 touched Python surface (the three changed
+sources and five new integrity tests listed under "Commands" below), not the
+whole `pipeline/` tree; untouched pipeline lint/type debt is intentionally
+outside this Phase 3 gate. The supported Python matrix remains 3.11–3.13;
+commands are deterministic and run from the repository root against `.venv/bin`.
+
+### Tool selection (evidence-based)
+
+The repository had **no existing lint or type-check configuration** before this
+change: no `ruff.toml`, `pyrightconfig.json`, `mypy.ini`, `setup.cfg`,
+`.flake8`, or `tox.ini` anywhere, and no lint/type-check step in CI. Two tools
+were selected because they are the minimal pair that gives both a fast syntax
+and import-sanity gate and a real type gate for the heavily annotated pipeline
+package:
+
+- **ruff** for linting, using ruff's default rule set (`E4`, `E7`, `E9`, `F`)
+  pinned explicitly in `pipeline/pyproject.toml` so the gate is deterministic
+  across ruff releases. The default set (pycodestyle errors + Pyflakes) was
+  verified against the current pipeline sources: no bare `except:`, no
+  `== None`/`== True` comparisons, no `import *`, and no lambda assignments.
+- **pyright** for type-checking, via `pipeline/pyrightconfig.json` covering
+  `pipeline/src` and `pipeline/tests` (with `extraPaths` pointing back at both
+  `src` and `tests` so package and test modules resolve), `typeCheckingMode:
+  "basic"` (a real type gate without strict-mode churn), and
+  `reportMissingTypeStubs: "none"` so third-party libraries without stubs
+  (polars, fastf1, boto3) do not fail the gate.
+
+mypy was considered and rejected: the selected pair covers the need with less
+tooling, and current external guidance (fetched 2026-08-09 into
+`.tmp/external-context/ruff-phase3.md` and `pyright-phase3.md`) already
+documents the exact scoped config and CLI flags for ruff and pyright.
+
+**No new dev dependencies were added.** ruff and pyright are standalone
+developer tools installed on demand, not pipeline runtime or test extras, so
+`pipeline/constraints.txt` and `pipeline/test-constraints.txt` are unchanged
+and were not regenerated. They are deliberately not added to the pip-tools
+constraints artifacts: `pipeline/test-constraints.txt` mirrors
+`legacy/constraints.txt` pins exactly (enforced by
+`pipeline/tests/reproducibility/test_dependency_constraints.py`), and the
+legacy desktop package is out of scope for this static-validation work.
+
+**Legacy scope decision:** `legacy/` is out of scope for lint/type-check. The
+legacy desktop application has its own dependency manifest
+(`legacy/requirements-dev.txt`) and constraints artifact; no evidence requires
+extending static validation there in Phase 3, and doing so would add churn to
+an already-separate package.
+
+### Install the lint/type-check tools
+
+The tools are installed into the existing project virtual environment (not
+declared as project dependencies):
+
+    .venv/bin/python -m pip install ruff==0.16.2 pyright==1.1.411
+
+### Commands (single source of truth)
+
+Scope: the explicit Phase 3 touched Python surface only — the three changed
+sources and the five new integrity tests listed below. Untouched pipeline
+lint/type debt is intentionally outside this Phase 3 gate; widening the gate
+back to the whole `pipeline/` tree is a separate follow-up. Run both from the
+repository root:
+
+    .venv/bin/python -m ruff check \
+      pipeline/src/f1_replay_pipeline/delivery/browser/browser_delivery_orchestration.py \
+      pipeline/src/f1_replay_pipeline/delivery/browser/browser_weather_sidecar.py \
+      pipeline/src/f1_replay_pipeline/storage/generation_publication.py \
+      pipeline/tests/delivery/browser/test_browser_weather_diagnostics.py \
+      pipeline/tests/delivery/browser/test_browser_weather_delivery_diagnostics.py \
+      pipeline/tests/storage/test_pointer_manifest_integrity.py \
+      pipeline/tests/storage/test_recovery_lease_boundaries.py \
+      pipeline/tests/storage/test_symlink_path_traversal_defenses.py
+
+    PY_EXE="$(.venv/bin/python -c 'import sys; print(sys.executable)')"
+    .venv/bin/python -m pyright -p pipeline/pyrightconfig.json --pythonpath "$PY_EXE" \
+      pipeline/src/f1_replay_pipeline/delivery/browser/browser_delivery_orchestration.py \
+      pipeline/src/f1_replay_pipeline/delivery/browser/browser_weather_sidecar.py \
+      pipeline/src/f1_replay_pipeline/storage/generation_publication.py \
+      pipeline/tests/delivery/browser/test_browser_weather_diagnostics.py \
+      pipeline/tests/delivery/browser/test_browser_weather_delivery_diagnostics.py \
+      pipeline/tests/storage/test_pointer_manifest_integrity.py \
+      pipeline/tests/storage/test_recovery_lease_boundaries.py \
+      pipeline/tests/storage/test_symlink_path_traversal_defenses.py
+
+`ruff check` reads `[tool.ruff]` from `pipeline/pyproject.toml` (the closest
+config for every file under `pipeline/`); the ruff rule set is unchanged.
+`pyright -p` reads `pipeline/pyrightconfig.json` for settings, while the
+explicit file arguments override the config's `include`, limiting analysis to
+the Phase 3 touched surface. Both forms are literally module-based
+(`python -m ruff` / `python -m pyright`) and pass the active interpreter to
+pyright's `--pythonpath` as the value of `sys.executable` (`$PY_EXE` above), so
+pyright resolves the interpreter's environment (pytest, polars, fastf1, boto3)
+instead of guessing from `PATH`. Both commands must exit 0; the CI wiring in
+`.github/workflows/tests.yml` (Phase 3) mirrors exactly this file list, the
+pinned install (`ruff==0.16.2`, `pyright==1.1.411`), and this semantics, using
+the matrix interpreter in place of `.venv/bin/python` for the `python -m`
+invocations and the same `sys.executable`-derived `--pythonpath`.
+
 ## Run the test suite
 
 Run all modern tests with:
