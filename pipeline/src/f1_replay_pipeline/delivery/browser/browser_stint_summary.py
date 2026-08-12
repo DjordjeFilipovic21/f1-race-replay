@@ -9,6 +9,7 @@ from f1_replay_pipeline.delivery.browser.browser_delivery_models import (
     BrowserDriverStintSummary,
     BrowserStintSummary,
     CanonicalGenerationSnapshot,
+    MAX_INT64,
 )
 
 
@@ -82,7 +83,7 @@ def _map_pit_events(
     rows: Sequence[Mapping[str, object]],
     stints_by_key: Mapping[_StintKey, Mapping[str, object]],
 ) -> dict[_StintKey, _PitTimes]:
-    mapped: dict[_StintKey, _PitTimes] = {}
+    candidates: dict[_StintKey, tuple[set[int], set[int]]] = {}
     for row in rows:
         if row["pit_in_time_ms"] is None and row["pit_out_time_ms"] is None:
             continue
@@ -107,22 +108,30 @@ def _map_pit_events(
             raise ValueError(
                 f"pit event for driver {driver_id} on lap {lap_number} lies outside canonical stint {stint_number} range"
             )
-        current = mapped.get(key, (None, None))
-        pit_in_time_ms = cast(int | None, row["pit_in_time_ms"])
-        pit_out_time_ms = cast(int | None, row["pit_out_time_ms"])
-        if pit_in_time_ms is not None and current[0] is not None:
-            raise ValueError(
-                f"multiple pit-in candidates map to driver {driver_id} stint {stint_number}"
-            )
-        if pit_out_time_ms is not None and current[1] is not None:
-            raise ValueError(
-                f"multiple pit-out candidates map to driver {driver_id} stint {stint_number}"
-            )
-        mapped[key] = (
-            pit_in_time_ms if pit_in_time_ms is not None else current[0],
-            pit_out_time_ms if pit_out_time_ms is not None else current[1],
+        pit_in_time_ms = _pit_time(row["pit_in_time_ms"], "pit-in")
+        pit_out_time_ms = _pit_time(row["pit_out_time_ms"], "pit-out")
+        pit_in_candidates, pit_out_candidates = candidates.setdefault(key, (set(), set()))
+        if pit_in_time_ms is not None:
+            pit_in_candidates.add(pit_in_time_ms)
+        if pit_out_time_ms is not None:
+            pit_out_candidates.add(pit_out_time_ms)
+    return {
+        key: (None, None)
+        if len(pit_in_candidates) > 1 or len(pit_out_candidates) > 1
+        else (
+            next(iter(pit_in_candidates), None),
+            next(iter(pit_out_candidates), None),
         )
-    return mapped
+        for key, (pit_in_candidates, pit_out_candidates) in candidates.items()
+    }
+
+
+def _pit_time(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or not 0 <= value <= MAX_INT64:
+        raise ValueError(f"{label} event has an invalid time")
+    return value
 
 
 def _event_lap_number(row: Mapping[str, object]) -> int:

@@ -64,6 +64,7 @@ CHINESE_GP_RUS_LAP_ADVISORY = (
 CHINESE_GP_HAM_LAP_ADVISORY = (
     "CAR 44 (HAM) LAP DELETED - TRACK LIMITS AT TURN 14 LAP 7 15:13:18"
 )
+BRAZIL_GP_BOT_DOUBLE_YELLOW_ADVISORY = "CAR 77 (BOT) LAP DELETED - DOUBLE YELLOW AT TURN 12"
 
 
 def _lap(
@@ -304,6 +305,17 @@ class TestParseDeletionAndReinstatement:
         assert has_qualifying_lap_status_messages(messages)
         assert len(events) == 1
         assert events[0].raw_message == DELETED_MESSAGE
+
+    def test_ignores_brazil_gp_non_timed_double_yellow_advisory(self) -> None:
+        """✅ Positive: Brazil's non-timed double-yellow advisory is ignored."""
+        # Arrange
+        messages = [_message(185_000, BRAZIL_GP_BOT_DOUBLE_YELLOW_ADVISORY)]
+
+        # Act
+        events = parse_race_control_lap_status_events(messages, _canonical_laps(), DRIVER_METADATA)
+
+        # Assert
+        assert events == ()
 
     def test_advisory_only_input_has_no_actionable_status_evidence(self) -> None:
         """✅ Positive: advisory-only input does not trigger sidecar publication."""
@@ -661,6 +673,15 @@ class TestUnsupportedMessageForms:
         """❌ Negative: a status word without the TIME pattern fails closed."""
         # Arrange
         messages = [_message(185_000, "CAR 44 (HAM) LAP 2 DELETED - TRACK LIMITS")]
+
+        # Act / Assert
+        with pytest.raises(LapStatusReconciliationError, match="unsupported message form"):
+            parse_race_control_lap_status_events(messages, _canonical_laps(), DRIVER_METADATA)
+
+    def test_unknown_non_timed_lap_deleted_form_still_fails_closed(self) -> None:
+        """❌ Negative: an unknown non-timed advisory form remains unsupported."""
+        # Arrange
+        messages = [_message(185_000, "CAR 77 (BOT) LAP DELETED - UNKNOWN AT TURN 12")]
 
         # Act / Assert
         with pytest.raises(LapStatusReconciliationError, match="unsupported message form"):
