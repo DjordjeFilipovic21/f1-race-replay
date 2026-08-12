@@ -72,7 +72,7 @@ afterEach(() => {
 test('does not publish playing snapshot changes before 1 second', () => {
   vi.useFakeTimers()
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   render(
     <LiveTyreStrategyPanel
@@ -104,7 +104,7 @@ test('does not publish playing snapshot changes before 1 second', () => {
 test('publishes playing snapshot changes at 1 second', () => {
   vi.useFakeTimers()
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   render(
     <LiveTyreStrategyPanel
@@ -129,7 +129,7 @@ test('publishes playing snapshot changes at 1 second', () => {
 test('flushes immediately when refreshKey changes', () => {
   vi.useFakeTimers()
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   const { rerender } = render(
     <LiveTyreStrategyPanel
@@ -165,7 +165,7 @@ test('flushes immediately when refreshKey changes', () => {
 test('driver-selection changes render from the latest retained throttled snapshot', () => {
   vi.useFakeTimers()
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: true, replay: replay(60_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(60_000, 10), crossedEvents: [], error: null })
 
   const { rerender } = render(
     <LiveTyreStrategyPanel
@@ -201,7 +201,7 @@ test('driver-selection changes render from the latest retained throttled snapsho
 
 test('labels practice stint data as Tyre runs without race claims', () => {
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, replay: replay(60_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(60_000, 10), crossedEvents: [], error: null })
 
   render(
     <LiveTyreStrategyPanel
@@ -226,7 +226,7 @@ test('labels practice stint data as Tyre runs without race claims', () => {
 
 test('keeps race labels when the session mode is explicitly race', () => {
   const stintSummary = createStintSummary()
-  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, replay: replay(60_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(60_000, 10), crossedEvents: [], error: null })
 
   render(
     <LiveTyreStrategyPanel

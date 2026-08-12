@@ -16,7 +16,7 @@ import { describeTrackStatus } from '../../../../src/features/replay/panels/trac
 const event = (sessionTimeMs: number, eventType: string, description: string): ReplayEvent => ({ sessionTimeMs, eventType, description })
 
 const baseSnapshot: ReplayControllerSnapshot = {
-  status: 'ready', timeMs: 1_000, speed: 1, isPlaying: true, crossedEvents: [], error: null,
+  status: 'ready', timeMs: 1_000, speed: 1, isPlaying: true, committedSeekRevision: 0, crossedEvents: [], error: null,
   replay: { sessionTimeMs: 1_000, leaderboardOrder: null, trackStatusCode: null, weatherState: null, events: [], drivers: {} },
 }
 

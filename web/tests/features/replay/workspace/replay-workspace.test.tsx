@@ -61,6 +61,7 @@ vi.mock('@dnd-kit/react/sortable', () => ({
 
 import { animateReplayPanelFlip, computeReplayPanelFlipKeyframes, ReplayWorkspace, type ReplayWorkspacePanel } from '../../../../src/features/replay/workspace/ReplayWorkspace'
 import { REPLAY_WORKSPACE_PREFERENCES_STORAGE_KEY, type ReplayWorkspaceStorage } from '../../../../src/features/replay/workspace/replay-workspace-preferences'
+import { LOCAL_VIDEO_PANEL_ID } from '../../../../src/features/replay/workspace/replay-panel-layout'
 
 const appWorkspaceStyles = readFileSync(resolve(process.cwd(), 'src/styles/app-workspace.css'), 'utf8')
 const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8')
@@ -79,6 +80,11 @@ const panels: readonly ReplayWorkspacePanel[] = [
 const panelsWithWeather: readonly ReplayWorkspacePanel[] = [
   ...panels,
   { id: 'weather', label: 'Weather', columns: 1, element: <p>Weather content</p> },
+]
+
+const panelsWithLocalVideo: readonly ReplayWorkspacePanel[] = [
+  ...panels,
+  { id: LOCAL_VIDEO_PANEL_ID, label: 'Local video', columns: 2, element: <p>Local video content</p> },
 ]
 
 afterEach(() => {
@@ -340,6 +346,31 @@ test('marks persisted panel choices as custom and resets them to default', () =>
   expect(screen.getByText('5/5 panels')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Player' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Reset layout' }).hasAttribute('disabled')).toBe(true)
+})
+
+test('keeps local video available in Panel Manager while unpinned and enables it on demand', () => {
+  const storage = memoryStorage(JSON.stringify({
+    version: 1,
+    layout: [
+      { id: 'player', pinned: false, desktopColumnStart: 3 },
+      { id: 'driver', pinned: true, desktopColumnStart: 4 },
+      { id: 'removed-panel', pinned: true, desktopColumnStart: 1 },
+    ],
+    mode: 'unlocked',
+  }))
+
+  render(<ReplayWorkspace panels={panelsWithLocalVideo} storage={storage} />)
+
+  expect(screen.queryByRole('region', { name: 'Local video' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Player' })).toBeNull()
+  expect(screen.getByRole('region', { name: 'Driver' }).style.getPropertyValue('--replay-panel-desktop-column')).toBe('4')
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  const manager = screen.getByRole('dialog', { name: 'Panel Manager' })
+  const pinLocalVideo = within(manager).getByRole('button', { name: 'Pin Local video panel' })
+  expect(pinLocalVideo.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(pinLocalVideo)
+
+  expect(screen.getByRole('region', { name: 'Local video' }).getAttribute('data-panel-id')).toBe(LOCAL_VIDEO_PANEL_ID)
 })
 
 test('animates visible panels from a custom layout back to their default positions', () => {
@@ -630,7 +661,7 @@ test('collapses only locked drag chrome while retaining semantic panel content',
 })
 
 test('swaps drag chrome for internal gradient headers across workspace modes', () => {
-  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header, .weather-panel__header)'
+  const gradientHeaders = ':is(.race-control-panel__header, .driver-telemetry-panel__header, .lap-analysis-panel__header, .tyre-strategy-panel__header, .pit-loss-position-panel__header, .weather-panel__header, .local-video-panel__header)'
   const unlockedHeaderScope = ":is(.replay-workspace, .replay-panel-drag-snapshot)[data-workspace-mode='unlocked']"
 
   expect(appWorkspaceStyles).toContain(`${unlockedHeaderScope} ${gradientHeaders} { max-height: 0; opacity: 0;`)
