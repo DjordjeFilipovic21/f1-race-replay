@@ -44,9 +44,10 @@
 .driver-telemetry-panel__gear tspan { font-size: 15px; font-weight: 900; }
 .driver-telemetry-panel__empty { color: var(--text-muted); font-size: .9rem; padding: .75rem; }
 .race-control-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; display: grid; gap: .75rem; min-width: 0; overflow: hidden; padding-bottom: .75rem; }
-.race-control-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
+.race-control-panel__header, .local-video-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }
 .race-control-panel__eyebrow { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
-.race-control-panel__header h2 { font-size: 1rem; line-height: 1.2; }
+.race-control-panel__header h2, .local-video-panel__header h2 { font-size: 1rem; line-height: 1.2; }
+.local-video-panel__header { gap: .25rem; }
 .race-control-panel__status { display: grid; gap: .4rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 .75rem; }
 .race-control-panel__status-item { background: #1a2025; border-left: 2px solid #3a434c; min-width: 0; padding: .5rem; }
 .race-control-panel__status-item dt { color: var(--text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -137,6 +138,39 @@
 .lap-analysis-panel__history-toggle:hover { background: #242b31; color: #f4f5f6; }
 .lap-analysis-panel__history-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .lap-analysis-panel__history { overflow: auto; }
+
+.local-video-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
+.local-video-panel__file-name, .local-video-panel__placeholder { color: var(--text-muted); }
+.local-video-panel__body { display: grid; gap: .7rem; padding: .75rem; }
+.local-video-panel__import { display: grid; gap: .4rem; }
+.local-video-panel__file-button, .local-video-panel__actions button, .local-video-panel__fine-adjust button { align-items: center; background: var(--interactive); border: 1px solid var(--border-strong); color: #f4f5f6; cursor: pointer; display: inline-flex; font: inherit; font-size: .72rem; font-weight: 800; justify-content: center; letter-spacing: .03em; min-height: 44px; padding: .5rem .7rem; text-align: center; }
+.local-video-panel__file-button { background: var(--focus); color: #17110e; }
+.local-video-panel__file-button:hover, .local-video-panel__actions button:hover:not(:disabled), .local-video-panel__fine-adjust button:hover:not(:disabled) { background: var(--interactive-hover); border-color: #83909a; }
+.local-video-panel__file-button:hover { background: #ffd16f; border-color: #ffd16f; }
+.local-video-panel__file-input { block-size: 1px; clip: rect(0 0 0 0); clip-path: inset(50%); inline-size: 1px; overflow: hidden; position: absolute; white-space: nowrap; }
+.local-video-panel__file-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.local-video-panel__file-name { font-size: .68rem; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
+.local-video-panel__file-name strong { color: #f4f5f6; }
+.local-video-panel__stage { align-items: center; aspect-ratio: 16 / 9; background: #080a0c; border: 1px solid var(--border); display: flex; justify-content: center; min-height: 8rem; overflow: hidden; position: relative; }
+.local-video-panel__video { display: block; height: 100%; object-fit: contain; width: 100%; }
+.local-video-panel__placeholder { font-size: .78rem; left: 1rem; margin: 0; position: absolute; right: 1rem; text-align: center; }
+.local-video-panel__status { border-left: 2px solid var(--border-strong); display: grid; gap: .2rem; padding: .55rem .65rem; }
+.local-video-panel__status strong { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; }
+.local-video-panel__status span { color: var(--text-muted); font-size: .72rem; line-height: 1.4; }
+.local-video-panel__status--success { border-left-color: var(--accent); }
+.local-video-panel__status--success strong { color: var(--accent); }
+.local-video-panel__status--warning { border-left-color: #f0bc53; }
+.local-video-panel__status--warning strong { color: #f0bc53; }
+.local-video-panel__status--error { background: rgb(132 20 25 / 18%); border-left-color: var(--danger); }
+.local-video-panel__status--error strong { color: #ff8c90; }
+.local-video-panel__actions, .local-video-panel__fine-adjust { display: grid; gap: .45rem; }
+.local-video-panel__actions { grid-template-columns: minmax(0, 1fr); }
+.local-video-panel__primary-action { background: var(--focus) !important; border-color: var(--focus) !important; color: #17110e !important; }
+.local-video-panel__primary-action:hover:not(:disabled) { background: #ffd16f !important; border-color: #ffd16f !important; }
+.local-video-panel__fine-adjust > span { font-size: .62rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.local-video-panel__fine-adjust > div { display: flex; flex-wrap: wrap; gap: .3rem; }
+.local-video-panel__fine-adjust button { flex: 1 1 3.6rem; min-width: 44px; }
+.local-video-panel__actions button:focus-visible, .local-video-panel__fine-adjust button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .tyre-strategy-panel { background: #101316; border: 1px solid var(--border); color: #f4f5f6; min-width: 0; overflow: hidden; }
 .tyre-strategy-panel__header { background: linear-gradient(105deg, #171c20, #101316); display: grid; gap: .15rem; padding: .7rem; }

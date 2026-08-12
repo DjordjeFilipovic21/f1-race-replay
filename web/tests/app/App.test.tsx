@@ -86,7 +86,7 @@ const catalog: CatalogV2 = {
 
 function createController(): ReplayController {
   const snapshot: ReplayControllerSnapshot = {
-    status: 'loading', timeMs: 0, speed: 1, isPlaying: false, replay: null, crossedEvents: [], error: null,
+    status: 'loading', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: null, crossedEvents: [], error: null,
   }
   return {
     getSnapshot: () => snapshot,
@@ -116,7 +116,7 @@ test('loads the catalog and renders the race library without entering replay', a
   expect(await screen.findByRole('heading', { name: 'Race Replay Library' })).toBeTruthy()
   expect(screen.getByRole('button', { name: /Bahrain Grand Prix/ })).toBeTruthy()
   expect(screen.getByRole('option', { name: '2026' })).toBeTruthy()
-  expect(screen.queryByRole('option', { name: '2024' })).toBeNull()
+  expect(screen.getByRole('option', { name: '2024' })).toBeTruthy()
   expect(loadReplayIndex).not.toHaveBeenCalled()
 })
 

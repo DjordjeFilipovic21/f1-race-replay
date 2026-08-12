@@ -36,7 +36,7 @@ function snapshot(): ReplaySnapshot {
 afterEach(cleanup)
 
 function createController(replay: ReplaySnapshot | null) {
-  let current: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay, crossedEvents: [], error: null }
+  let current: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay, crossedEvents: [], error: null }
   const listeners = new Set<() => void>()
   let unsubscribeCalls = 0
   const controller: ReplayController = {

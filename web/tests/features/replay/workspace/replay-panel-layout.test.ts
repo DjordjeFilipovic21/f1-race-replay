@@ -5,6 +5,7 @@ import {
   defaultReplayPanelColumn,
   isDefaultReplayPanelLayout,
   isReplayPanelId,
+  LOCAL_VIDEO_PANEL_ID,
   REPLAY_PANEL_DEFAULT_LAYOUT,
   replayPanelColumns,
   reconcileReplayPanelLayout,
@@ -33,6 +34,7 @@ test('validates sortable IDs against the registered panel IDs', () => {
   expect(isReplayPanelId('lap-analysis')).toBe(true)
   expect(isReplayPanelId('strategy')).toBe(true)
   expect(isReplayPanelId('pit-loss-position')).toBe(true)
+  expect(isReplayPanelId(LOCAL_VIDEO_PANEL_ID)).toBe(true)
 })
 
 test('registers the analysis panels with their correct column widths', () => {
@@ -40,6 +42,33 @@ test('registers the analysis panels with their correct column widths', () => {
   expect(replayPanelColumns('lap-analysis')).toBe(1)
   expect(replayPanelColumns('strategy')).toBe(2)
   expect(replayPanelColumns('pit-loss-position')).toBe(1)
+})
+
+test('registers local video with a stable two-column default placement', () => {
+  expect(replayPanelColumns('local-video')).toBe(2)
+  expect(defaultReplayPanelColumn('local-video')).toBe(2)
+  expect(replayPanelColumns(LOCAL_VIDEO_PANEL_ID)).toBe(2)
+  expect(defaultReplayPanelColumn(LOCAL_VIDEO_PANEL_ID)).toBe(2)
+  expect(createDefaultReplayPanelLayout([LOCAL_VIDEO_PANEL_ID])).toEqual([
+    { id: LOCAL_VIDEO_PANEL_ID, pinned: false, desktopColumnStart: 2 },
+  ])
+})
+
+test('leaves local video unpinned by default while allowing it to be pinned', () => {
+  const defaultLayout = createDefaultReplayPanelLayout([
+    'race-control', 'weather', 'player', LOCAL_VIDEO_PANEL_ID,
+  ] as const)
+
+  expect(defaultLayout).toEqual([
+    { id: 'race-control', pinned: true, desktopColumnStart: 1 },
+    { id: 'weather', pinned: true, desktopColumnStart: 4 },
+    { id: 'player', pinned: true, desktopColumnStart: 4 },
+    { id: LOCAL_VIDEO_PANEL_ID, pinned: false, desktopColumnStart: 2 },
+  ])
+  expect(toggleReplayPanelPinning(defaultLayout, LOCAL_VIDEO_PANEL_ID)).toEqual([
+    ...defaultLayout.slice(0, -1),
+    { id: LOCAL_VIDEO_PANEL_ID, pinned: true, desktopColumnStart: 2 },
+  ])
 })
 
 test('registers the weather panel with a deterministic one-column desktop slot', () => {
@@ -56,7 +85,7 @@ test('updates the dragged panel column while retaining canonical sortable order'
 })
 
 test('uses semantic default desktop columns for the registered panels', () => {
-  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('weather'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy'), defaultReplayPanelColumn('pit-loss-position')]).toEqual([4, 2, 1, 1, 4, 4, 2, 4, 2, 4])
+  expect([defaultReplayPanelColumn('player'), defaultReplayPanelColumn('track-map'), defaultReplayPanelColumn('leaderboard'), defaultReplayPanelColumn('race-control'), defaultReplayPanelColumn('weather'), defaultReplayPanelColumn('driver'), defaultReplayPanelColumn('telemetry'), defaultReplayPanelColumn('lap-analysis'), defaultReplayPanelColumn('strategy'), defaultReplayPanelColumn('pit-loss-position'), defaultReplayPanelColumn('local-video')]).toEqual([4, 2, 1, 1, 4, 4, 2, 4, 2, 4, 2])
 })
 
 test('defines a stable default layout independently of panel registry order', () => {
@@ -66,7 +95,7 @@ test('defines a stable default layout independently of panel registry order', ()
     { id: 'strategy', pinned: true, desktopColumnStart: 2 },
   ])
   expect(REPLAY_PANEL_DEFAULT_LAYOUT.map(({ id }) => id)).toEqual([
-    'race-control', 'weather', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy', 'pit-loss-position',
+    'race-control', 'weather', 'track-map', 'player', 'leaderboard', 'driver', 'lap-analysis', 'telemetry', 'strategy', 'pit-loss-position', LOCAL_VIDEO_PANEL_ID,
   ])
 })
 
@@ -137,6 +166,29 @@ test('adds the weather panel to legacy layouts without changing saved choices', 
     { id: 'leaderboard', pinned: true, desktopColumnStart: 4 },
     { id: 'weather', pinned: true, desktopColumnStart: 4 },
   ])
+})
+
+test('reconciles stale registrations while preserving custom choices and adding local video', () => {
+  const customLayout = [
+    { id: 'player', pinned: false, desktopColumnStart: 3 },
+    { id: 'driver', pinned: true, desktopColumnStart: 4 },
+    { id: 'removed-panel', pinned: false, desktopColumnStart: 1 },
+  ] as unknown as readonly ReplayPanelLayoutItem[]
+
+  expect(reconcileReplayPanelLayout(['player', 'driver', LOCAL_VIDEO_PANEL_ID] as const, customLayout)).toEqual([
+    { id: 'player', pinned: false, desktopColumnStart: 3 },
+    { id: 'driver', pinned: true, desktopColumnStart: 4 },
+    { id: LOCAL_VIDEO_PANEL_ID, pinned: false, desktopColumnStart: 2 },
+  ])
+})
+
+test('retains a stored local-video pin choice during reconciliation', () => {
+  const storedLayout = [
+    { id: 'player', pinned: true, desktopColumnStart: 4 },
+    { id: LOCAL_VIDEO_PANEL_ID, pinned: true, desktopColumnStart: 2 },
+  ] as const
+
+  expect(reconcileReplayPanelLayout(['player', LOCAL_VIDEO_PANEL_ID] as const, storedLayout)).toEqual(storedLayout)
 })
 
 test('pins and unpins the weather panel without affecting other panels', () => {

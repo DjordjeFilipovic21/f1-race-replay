@@ -24,7 +24,7 @@ function replay(gapToLeaderMs: number): ReplaySnapshot {
 
 test('bounds playing table updates while publishing pause and explicit refresh immediately', () => {
   vi.useFakeTimers()
-  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(1_000), crossedEvents: [], error: null }
+  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(1_000), crossedEvents: [], error: null }
   const listeners = new Set<() => void>()
   const controller: ReplayController = {
     getSnapshot: () => snapshot,
@@ -73,7 +73,7 @@ test('threads penaltySidecar through to the leaderboard and renders the penalty 
       { driverId: 'NOR', sessionTimeMs: 50, penaltyType: 'time', reason: 'Collision', rawMessage: '10s penalty' },
     ],
   }
-  let controllerSnapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(1_000), crossedEvents: [], error: null }
+  let controllerSnapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(1_000), crossedEvents: [], error: null }
   const listeners = new Set<() => void>()
   const controller: ReplayController = {
     getSnapshot: () => controllerSnapshot,
