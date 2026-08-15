@@ -9,6 +9,8 @@ import type { ReplaySnapshot } from './types'
 export interface ReplayControllerOptions { readonly index: ReplayIndex; readonly scheduler?: PlaybackScheduler; readonly initialTimeMs?: number; readonly initialSpeed?: PlaybackSpeed; readonly coordinateInterpolation?: CoordinateInterpolationStrategy }
 export interface ReplayControllerSnapshot {
   readonly status: ChunkCacheStatus; readonly timeMs: number; readonly speed: PlaybackSpeed; readonly isPlaying: boolean
+  /** Monotonically identifies every public seek, including seeks to the current position. */
+  readonly committedSeekRevision: number
   readonly replay: ReplaySnapshot | null; readonly crossedEvents: readonly ReplayEvent[]; readonly error: unknown | null
 }
 export interface ReplayController {
@@ -34,9 +36,10 @@ export function createReplayController(options: ReplayControllerOptions): Replay
   let beginningTransition = false
   let pendingCrossings: readonly ReplayEvent[] = Object.freeze([])
   let ignoreClockChange = false
+  let committedSeekRevision = 0
 
   const publish = (status: ChunkCacheStatus, replay: ReplaySnapshot | null, crossedEvents: readonly ReplayEvent[], error: unknown | null): void => {
-    store.publish(createSnapshot(status, clock.getSnapshot(), replay, crossedEvents, error, requestedPlaying))
+    store.publish(createSnapshot(status, clock.getSnapshot(), replay, crossedEvents, error, requestedPlaying, committedSeekRevision))
   }
 
   const beginTransition = (timeMs: number, crossings: readonly ReplayEvent[], retry = false, crossingStartMs: number | null = null): Promise<void> => {
@@ -57,13 +60,13 @@ export function createReplayController(options: ReplayControllerOptions): Replay
           ? pendingCrossings
           : mergeCrossings(pendingCrossings, forwardEventCrossings(eventsInWindow(window), crossingStartMs, timeMs))
         pendingCrossings = Object.freeze([])
-        publish('ready', samplePreparedReplayAt(readySampler, timeMs), retainedCrossings, null)
         transition = null
         if (requestedPlaying && timeMs < bounds.endMs) {
           ignoreClockChange = true
           try { clock.start() }
           finally { ignoreClockChange = false }
         }
+        publish('ready', samplePreparedReplayAt(readySampler, timeMs), retainedCrossings, null)
       },
       (error: unknown) => {
         if (disposed || loadGeneration !== generation || clock.getSnapshot().timeMs !== timeMs) return
@@ -134,6 +137,7 @@ export function createReplayController(options: ReplayControllerOptions): Replay
       transition = null
       pendingCrossings = Object.freeze([])
       suppressNextCrossing = true
+      committedSeekRevision += 1
       ignoreClockChange = true
       clock.seek(nextTimeMs)
       ignoreClockChange = false
@@ -191,5 +195,5 @@ function mergeCrossings(existing: readonly ReplayEvent[], additional: readonly R
   const seen = new Set(existing)
   return Object.freeze([...existing, ...additional.filter((event) => !seen.has(event))])
 }
-function createSnapshot(status: ChunkCacheStatus, clock: { readonly timeMs: number; readonly speed: PlaybackSpeed; readonly isPlaying: boolean }, replay: ReplaySnapshot | null, crossedEvents: readonly ReplayEvent[], error: unknown | null, isPlaying = clock.isPlaying): ReplayControllerSnapshot { return Object.freeze({ status, timeMs: clock.timeMs, speed: clock.speed, isPlaying, replay, crossedEvents, error }) }
+function createSnapshot(status: ChunkCacheStatus, clock: { readonly timeMs: number; readonly speed: PlaybackSpeed; readonly isPlaying: boolean }, replay: ReplaySnapshot | null, crossedEvents: readonly ReplayEvent[], error: unknown | null, isPlaying = clock.isPlaying, committedSeekRevision = 0): ReplayControllerSnapshot { return Object.freeze({ status, timeMs: clock.timeMs, speed: clock.speed, isPlaying, committedSeekRevision, replay, crossedEvents, error }) }
 function clampTime(timeMs: number, bounds: { readonly startMs: number; readonly endMs: number }): number { if (!Number.isSafeInteger(timeMs)) throw new RangeError('Replay time must be an integer millisecond'); return Math.min(bounds.endMs, Math.max(bounds.startMs, timeMs)) }

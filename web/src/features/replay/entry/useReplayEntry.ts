@@ -4,6 +4,7 @@ import { createFetchSource } from '../../../data/replay/source'
 import type { DriverMetadata, LapSectorSidecar, LapStart, PenaltySidecar, PitLossEstimateSidecar, PitLossModel, QualifyingLapStatusSidecar, QualifyingSummary, QualifyingTimeline, ReplayIndex, SeasonMetadata, SessionMode, StintSummary, TelemetryCapabilities, TimelineSummary, TrackAssets, WeatherSidecar } from '../../../data/replay/types'
 import { createReplayController, type CoordinateInterpolationStrategy, type ReplayController } from '../../../engine/replay'
 import { isQualifyingSessionMode } from '../session-capabilities'
+import type { LocalVideoReplayIdentity } from '../local-video/local-video-persistence'
 
 export interface ReplayEntryOptions {
   readonly browserBaseUrl: string
@@ -15,6 +16,7 @@ export interface ReadyReplay {
   readonly controller: ReplayController
   readonly startMs: number
   readonly endMs: number
+  readonly replayIdentity: LocalVideoReplayIdentity
   readonly drivers: readonly DriverMetadata[]
   readonly sessionMode: SessionMode
   readonly lapStarts?: readonly LapStart[]
@@ -88,6 +90,7 @@ function createReadyReplay(index: ReplayIndex, controller: ReplayController, coo
     controller,
     startMs: selectReplayStartMs(index),
     endMs: lastChunk.endMs,
+    replayIdentity: index.manifest.fixtureId,
     drivers: index.manifest.drivers,
     lapStarts: index.manifest.lapStarts,
     ...(index.seasonMetadata === undefined ? {} : { seasonMetadata: index.seasonMetadata }),

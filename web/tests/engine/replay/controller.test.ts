@@ -48,9 +48,11 @@ describe('replay controller', () => {
     const controller = createReplayController({ index: await loadReplayIndex({ source: fixtureSource }), scheduler: createScheduler() })
     await waitForReady(controller)
     controller.seek(2_000)
+    const firstSeekRevision = controller.getSnapshot().committedSeekRevision
+    controller.seek(2_000)
     await waitForReady(controller)
 
-    expect([controller.getSnapshot().replay?.sessionTimeMs, controller.getSnapshot().crossedEvents]).toEqual([2_000, []])
+    expect([controller.getSnapshot().replay?.sessionTimeMs, controller.getSnapshot().crossedEvents, firstSeekRevision, controller.getSnapshot().committedSeekRevision]).toEqual([2_000, [], 1, 2])
   })
 
   test('keeps telemetry ready while handing off to a prefetched chunk', async () => {

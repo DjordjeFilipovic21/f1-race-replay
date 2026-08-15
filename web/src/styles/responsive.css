@@ -15,6 +15,8 @@
   .tyre-strategy-panel__layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .weather-panel__layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.45fr); }
   .weather-panel__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .local-video-panel__actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .local-video-panel__stage { min-height: 10rem; }
   .replay-workspace:fullscreen { padding: 1.5rem; }
 }
 
@@ -28,6 +30,7 @@
   .replay-panel-frame { grid-column-start: var(--replay-panel-desktop-column); }
   .replay-navigation { grid-template-columns: minmax(0, 1fr); justify-items: stretch; }
   .replay-controls { grid-template-columns: 1fr; }
+  .local-video-panel__actions { grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(0, 1fr)); }
 }
 
 @media (min-width: 1440px) {

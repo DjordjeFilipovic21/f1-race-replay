@@ -83,7 +83,7 @@ afterEach(() => {
 test('does not publish playing snapshot changes before 1 second', () => {
   vi.useFakeTimers()
   const pitLossModel = createPitLossModel()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -116,7 +116,7 @@ test('does not publish playing snapshot changes before 1 second', () => {
 test('publishes playing snapshot changes at 1 second', () => {
   vi.useFakeTimers()
   const pitLossModel = createPitLossModel()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -141,7 +141,7 @@ test('publishes playing snapshot changes at 1 second', () => {
 test('flushes immediately when refreshKey changes', () => {
   vi.useFakeTimers()
   const pitLossModel = createPitLossModel()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1), crossedEvents: [], error: null })
 
   const { rerender } = render(
     <LivePitLossPositionPanel
@@ -178,7 +178,7 @@ test('flushes immediately when refreshKey changes', () => {
 test('driver-selection changes render from the latest retained throttled snapshot', () => {
   vi.useFakeTimers()
   const pitLossModel = createPitLossModel()
-  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: true, replay: replay(60_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 60_000, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(60_000, 10), crossedEvents: [], error: null })
 
   const { rerender } = render(
     <LivePitLossPositionPanel
@@ -213,7 +213,7 @@ test('driver-selection changes render from the latest retained throttled snapsho
 
 test('renders after pit comparison when pit-loss data is available', () => {
   const pitLossModel = createPitLossModel()
-  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, replay: replay(120_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(120_000, 10), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -234,7 +234,7 @@ test('renders after pit comparison when pit-loss data is available', () => {
 })
 
 test('renders after pit comparison as unavailable when no pit-loss model', () => {
-  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, replay: replay(120_000, 10), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(120_000, 10), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -265,7 +265,7 @@ test('renders after pit comparison as unavailable when no pit-loss model', () =>
 })
 
 test('renders curated Green catalog value at replay start without a legacy model', () => {
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(0, 1, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -288,7 +288,7 @@ test('renders curated Green catalog value at replay start without a legacy model
 
 test('switches curated catalog values as the track status changes across the cursor', () => {
   vi.useFakeTimers()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -325,7 +325,7 @@ test('switches curated catalog values as the track status changes across the cur
 
 test('fails closed for an unknown status with a curated sidecar and no legacy model', () => {
   vi.useFakeTimers()
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: replay(0, 1, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -359,7 +359,7 @@ test('never renders catalog-only source status metadata', () => {
   const sidecar = createCuratedPitLossEstimateSidecar() as unknown as Record<string, unknown>
   sidecar.sourceStatus = 'official'
   ;(sidecar.race as Record<string, unknown>).sourceStatus = 'measured'
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(0, 1, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -381,7 +381,7 @@ test('never renders catalog-only source status metadata', () => {
 })
 
 test('renders only the selected curated value, never catalog audit metadata', () => {
-  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: replay(0, 1, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(0, 1, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel
@@ -412,7 +412,7 @@ test('labels legacy sidecar observations as current-race samples, never catalog 
     method: 'track-status-median-v1',
     race: { timeMs: [0, 100], estimatedLossMs: [22_000, 21_500], observedSampleCount: [0, 4] },
   }
-  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, replay: replay(120_000, 10, 1), crossedEvents: [], error: null })
+  const source = createController({ status: 'ready', timeMs: 120_000, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: replay(120_000, 10, 1), crossedEvents: [], error: null })
 
   render(
     <LivePitLossPositionPanel

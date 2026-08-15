@@ -335,8 +335,18 @@ def build_browser_delivery(
                 f"weather sidecar derivation failed closed: {error}",
                 classification=error.classification,
             ) from error
-        stint_summary = build_stint_summary(snapshot)
+        # Qualifying-like sessions publish qualifying artifacts instead of the
+        # race tyre-strategy summary; race, sprint, and practice retain it.
+        stint_summary = (
+            None
+            if session_mode in _QUALIFYING_SESSION_MODES
+            else build_stint_summary(snapshot)
+        )
         if race_semantics and assessment is not None:
+            if stint_summary is None:
+                raise BrowserDeliveryBuildError(
+                    "race-like delivery requires a non-null stint summary"
+                )
             observations = extract_eligible_pit_loss_observations(
                 stint_summary=stint_summary,
                 drivers=drivers,

@@ -3,7 +3,7 @@ import { createThrottledReplayStore } from '../../../../src/features/replay/stat
 import type { ReplayController, ReplayControllerSnapshot } from '../../../../src/engine/replay'
 
 const ready = (timeMs: number, isPlaying = true): ReplayControllerSnapshot => ({
-  status: 'ready', timeMs, speed: 1, isPlaying, replay: null, crossedEvents: [], error: null,
+  status: 'ready', timeMs, speed: 1, isPlaying, committedSeekRevision: 0, replay: null, crossedEvents: [], error: null,
 })
 
 function createController(initial: ReplayControllerSnapshot) {

@@ -42,6 +42,7 @@ const snapshotAt = (sessionTimeMs: number): ReplayControllerSnapshot => ({
   timeMs: sessionTimeMs,
   speed: 1,
   isPlaying: true,
+  committedSeekRevision: 0,
   crossedEvents: [],
   error: null,
   replay: {

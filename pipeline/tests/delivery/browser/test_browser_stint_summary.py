@@ -999,9 +999,8 @@ class TestBuildStintSummary:
         with pytest.raises(ValueError, match="lies outside canonical stint 1 range"):
             build_stint_summary(snapshot)
 
-    def test_rejects_multiple_pit_in_for_same_stint(self) -> None:
-        """❌ Negative: two laps mapping pit_in to the same stint raise
-        ValueError."""
+    def test_ambiguous_pit_in_publishes_both_transitions_as_null(self) -> None:
+        """✅ Multiple distinct pit-ins fail closed to a null transition pair."""
         snapshot = self._snapshot_with_stints(
             stint_rows=[self._stint_row("HAM", 1, start_lap_number=1, end_lap_number=20)],
             lap_rows=[
@@ -1010,22 +1009,65 @@ class TestBuildStintSummary:
             ],
         )
 
-        with pytest.raises(ValueError, match="multiple pit-in candidates"):
-            build_stint_summary(snapshot)
+        ham = build_stint_summary(snapshot).drivers["HAM"]
 
-    def test_rejects_multiple_pit_out_for_same_stint(self) -> None:
-        """❌ Negative: two laps mapping pit_out to the same stint raise
-        ValueError."""
+        assert ham.pit_in_time_ms == (None,)
+        assert ham.pit_out_time_ms == (None,)
+
+    def test_brazil_shaped_multiple_pit_outs_preserve_unique_pit_in(self) -> None:
+        """✅ Brazil 2024 ALB-shaped candidates preserve unique pit-in and
+        null ambiguous pit-out."""
+        # Arrange: one unique pit-in is accompanied by two distinct pit-outs.
         snapshot = self._snapshot_with_stints(
-            stint_rows=[self._stint_row("HAM", 1, start_lap_number=1, end_lap_number=20)],
+            stint_rows=[self._stint_row("ALB", 5, start_lap_number=1, end_lap_number=22)],
             lap_rows=[
-                self._lap_row("HAM", 1, stint_number=1, pit_out_time_ms=15_000),
-                self._lap_row("HAM", 2, stint_number=1, pit_out_time_ms=20_000),
+                self._lap_row("ALB", 18, stint_number=5, pit_out_time_ms=3_908_442),
+                self._lap_row("ALB", 21, stint_number=5, pit_in_time_ms=4_295_963),
+                self._lap_row("ALB", 22, stint_number=5, pit_out_time_ms=4_925_410),
+            ],
+            driver_ids=("ALB",),
+        )
+
+        # Act
+        alb = build_stint_summary(snapshot).drivers["ALB"]
+
+        # Assert: the unique transition survives; only ambiguous pit-out is null.
+        assert alb.pit_in_time_ms == (4_295_963,)
+        assert alb.pit_out_time_ms == (None,)
+
+    def test_ambiguous_pit_ins_preserve_unique_pit_out(self) -> None:
+        """✅ Multiple distinct pit-ins preserve a unique pit-out only."""
+        # Arrange: two distinct pit-ins accompany one unique pit-out.
+        snapshot = self._snapshot_with_stints(
+            stint_rows=[self._stint_row("HAM", 1, start_lap_number=1, end_lap_number=22)],
+            lap_rows=[
+                self._lap_row("HAM", 18, stint_number=1, pit_in_time_ms=3_000_000),
+                self._lap_row("HAM", 20, stint_number=1, pit_in_time_ms=3_500_000),
+                self._lap_row("HAM", 21, stint_number=1, pit_out_time_ms=3_908_442),
             ],
         )
 
-        with pytest.raises(ValueError, match="multiple pit-out candidates"):
-            build_stint_summary(snapshot)
+        # Act
+        ham = build_stint_summary(snapshot).drivers["HAM"]
+
+        # Assert: only the ambiguous pit-in is null.
+        assert ham.pit_in_time_ms == (None,)
+        assert ham.pit_out_time_ms == (3_908_442,)
+
+    def test_duplicate_identical_pit_candidates_collapse_to_unique_pair(self) -> None:
+        """✅ Repeated identical timestamps are one deterministic candidate."""
+        snapshot = self._snapshot_with_stints(
+            stint_rows=[self._stint_row("HAM", 1, start_lap_number=1, end_lap_number=20)],
+            lap_rows=[
+                self._lap_row("HAM", 10, stint_number=1, pit_in_time_ms=1_000_000, pit_out_time_ms=2_000_000),
+                self._lap_row("HAM", 11, stint_number=1, pit_in_time_ms=1_000_000, pit_out_time_ms=2_000_000),
+            ],
+        )
+
+        ham = build_stint_summary(snapshot).drivers["HAM"]
+
+        assert ham.pit_in_time_ms == (1_000_000,)
+        assert ham.pit_out_time_ms == (2_000_000,)
 
 
 # ===========================================================================

@@ -23,13 +23,13 @@ const trackAssets: TrackAssets = {
   innerBoundary: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 9, y: 9 }, { x: 1, y: 9 }],
   outerBoundary: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
 }
-const index = { manifest: { chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] }, trackAssets } as unknown as ReplayIndex
+const index = { manifest: { fixtureId: 'test-race', chunks: [{ startMs: 0, endMs: 3000 }], drivers: [] }, trackAssets } as unknown as ReplayIndex
 const telemetryCapabilities: TelemetryCapabilities = {
   drs: 'not-published', overtakeMode: 'not-published', activeAero: 'not-published', ersReplacement: 'not-published',
 }
 
 function createController(): ReplayController {
-  const snapshot: ReplayControllerSnapshot = { status: 'loading', timeMs: 0, speed: 1, isPlaying: false, replay: null, crossedEvents: [], error: null }
+  const snapshot: ReplayControllerSnapshot = { status: 'loading', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: null, crossedEvents: [], error: null }
   return { getSnapshot: () => snapshot, subscribe: () => () => undefined, start: vi.fn(), pause: vi.fn(), seek: vi.fn(), setSpeed: vi.fn(), retry: vi.fn(async () => undefined), dispose: vi.fn() }
 }
 
@@ -42,6 +42,7 @@ function ReplayEntryProbe({ browserBaseUrl, browserPointerPath }: { readonly bro
       <output data-testid="telemetry-capabilities">{replay?.telemetryCapabilities?.drs ?? 'absent'}</output>
       <output data-testid="qualifying-timeline">{replay?.qualifyingTimeline?.intervals.length ?? 'absent'}</output>
       <output data-testid="sidecar">{replay?.weatherSidecar?.fixtureId ?? 'none'}</output>
+      <output data-testid="replay-identity">{replay === null ? 'none' : typeof replay.replayIdentity === 'string' ? replay.replayIdentity : JSON.stringify(replay.replayIdentity)}</output>
       <button type="button" onClick={retry}>Retry</button>
     </>
   )
@@ -76,6 +77,7 @@ test('loads a nested browser pointer without creating a controller from stale St
   expect(screen.getByTestId('telemetry-capabilities').textContent).toBe('absent')
   expect(screen.getByTestId('qualifying-timeline').textContent).toBe('absent')
   expect(screen.getByTestId('sidecar').textContent).toBe('none')
+  expect(screen.getByTestId('replay-identity').textContent).toBe('test-race')
 
   unmount()
   expect(activeController.dispose).toHaveBeenCalledOnce()

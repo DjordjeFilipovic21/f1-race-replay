@@ -421,4 +421,82 @@ describe('qualifying live-state selectors', () => {
     expect(Object.isFrozen(states)).toBe(true)
     expect(current.drivers.HAM.status).toBe('OnTrack')
   })
+
+  test('retains an overlapping Brazil Q1 lap and withholds future phase results', () => {
+    // Arrange
+    const brazilDriverIds = ['NOR', ...Array.from({ length: 19 }, (_, index) => `D${String(index + 1).padStart(2, '0')}`)]
+    const brazilSummary: QualifyingSummary = {
+      contractVersion: 'v2',
+      fixtureId: 'brazil-2024-qualifying',
+      drivers: Object.fromEntries(brazilDriverIds.map((driverId, index) => {
+        const q1Duration = index === 0 ? 90_944 : index <= 14 ? 90_000 + index : 91_000 + index
+        const isNorris = driverId === 'NOR'
+        return [driverId, {
+          qualifyingPosition: [isNorris ? 1 : index + 2],
+          q1TimeMs: [q1Duration],
+          q2TimeMs: [isNorris ? 90_000 : null],
+          q3TimeMs: [isNorris ? 88_000 : null],
+          bestLapNumber: [isNorris ? 3 : 1],
+          bestLapTimeMs: [isNorris ? 88_000 : q1Duration],
+        }]
+      })),
+    }
+    const brazilSidecar: LapSectorSidecar = {
+      contractVersion: 'v2',
+      fixtureId: 'brazil-2024-qualifying',
+      phaseBoundaries: [
+        { phase: 'Q1', startMs: 901_903 },
+        { phase: 'Q2', startMs: 2_469_918 },
+        { phase: 'Q3', startMs: 4_921_708 },
+      ],
+      drivers: Object.fromEntries(brazilDriverIds.map((driverId, index) => {
+        const isNorris = driverId === 'NOR'
+        const lapNumber = isNorris ? [1, 2, 3] : [1]
+        const lapStartMs = isNorris ? [2_417_357, 3_000_000, 5_000_000] : [1_000_000 + index * 100]
+        const lapDurationMs = isNorris ? [90_944, 90_000, 88_000] : [index <= 14 ? 90_000 + index : 91_000 + index]
+        const lapEndMs = lapStartMs.map((startMs, lapIndex) => startMs + lapDurationMs[lapIndex])
+        const emptySectors = Array<null>(lapNumber.length).fill(null)
+        return [driverId, {
+          lapNumber,
+          lapStartMs,
+          lapEndMs,
+          lapDurationMs,
+          sector1DurationMs: emptySectors,
+          sector2DurationMs: emptySectors,
+          sector3DurationMs: emptySectors,
+          sector1SessionTimeMs: emptySectors,
+          sector2SessionTimeMs: emptySectors,
+          sector3SessionTimeMs: emptySectors,
+          qualifyingPhase: isNorris ? ['Q1', 'Q2', 'Q3'] as const : ['Q1'] as const,
+          lapKind: isNorris ? ['flying', 'flying', 'flying'] as const : ['flying'] as const,
+        }]
+      })),
+    }
+
+    // Act
+    const atQ2Start = selectQualifyingLiveState(
+      snapshot(2_469_918), 'NOR', brazilSummary, brazilSidecar, undefined, undefined, brazilDriverIds,
+    )
+    const beforeQ1LapEnds = selectQualifyingLiveState(
+      snapshot(2_508_300), 'NOR', brazilSummary, brazilSidecar, undefined, undefined, brazilDriverIds,
+    )
+    const afterQ1LapEnds = selectQualifyingLiveState(
+      snapshot(2_508_301), 'NOR', brazilSummary, brazilSidecar, undefined, undefined, brazilDriverIds,
+    )
+    const atQ3Start = selectQualifyingLiveState(
+      snapshot(4_921_708), 'NOR', brazilSummary, brazilSidecar, undefined, undefined, brazilDriverIds,
+    )
+
+    // Assert
+    expect(atQ2Start).toMatchObject({ activeQualifyingPhase: 'Q2', isOut: false, fastestCausalLapDurationMs: null, finishedLapDurationMs: null })
+    expect(atQ2Start.causalLapEvidence.find((lap) => lap.lapNumber === 1)).toMatchObject({ lapEndMs: null, lapDurationMs: null })
+    expect(beforeQ1LapEnds).toMatchObject({ activeQualifyingPhase: 'Q2', isOut: false, classification: 'classified' })
+    expect(beforeQ1LapEnds.causalLapEvidence.find((lap) => lap.lapNumber === 1)).toMatchObject({ lapEndMs: null, lapDurationMs: null })
+    expect(afterQ1LapEnds.causalLapEvidence.find((lap) => lap.lapNumber === 1)).toMatchObject({
+      lapStartMs: 2_417_357, lapEndMs: 2_508_301, lapDurationMs: 90_944,
+    })
+    expect(afterQ1LapEnds).toMatchObject({ activeQualifyingPhase: 'Q2', isOut: false, classification: 'classified' })
+    expect(atQ3Start).toMatchObject({ activeQualifyingPhase: 'Q3', isOut: false, classification: 'classified', fastestCausalLapDurationMs: null, finishedLapDurationMs: null })
+    expect(atQ3Start.causalLapEvidence.some((lap) => lap.lapNumber === 3)).toBe(false)
+  })
 })
