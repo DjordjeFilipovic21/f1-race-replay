@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620" role="img" aria-labelledby="title desc">
+  <!-- Diagram revision 2 -->
+  <title id="title">F1 Race Replay architecture workflow</title>
+  <desc id="desc">FastF1 sessions flow through the Python pipeline into a private canonical Parquet generation, then into validated browser-delivery-v2 JSON. Browser artifacts are consumed locally by the web app or optionally published to Cloudflare R2 for production delivery. Canonical Parquet is never uploaded.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#0d1217"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#171d23"/>
+      <stop offset="1" stop-color="#101419"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#d6ff00"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7fc8e8"/>
+    </marker>
+    <style>
+      .page-title { fill: #f4f1ea; font: 800 36px ui-sans-serif, system-ui, sans-serif; letter-spacing: -.5px; }
+      .subtitle { fill: #919ca7; font: 500 17px ui-sans-serif, system-ui, sans-serif; }
+      .step { fill: #d6ff00; font: 800 13px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 1.3px; }
+      .node-title { fill: #f4f1ea; font: 800 22px ui-sans-serif, system-ui, sans-serif; }
+      .copy { fill: #aeb7c0; font: 500 14px ui-sans-serif, system-ui, sans-serif; }
+      .copy-strong { fill: #f4f1ea; font: 700 14px ui-sans-serif, system-ui, sans-serif; }
+      .mono { fill: #c8d0d7; font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .small { fill: #919ca7; font: 500 12px ui-sans-serif, system-ui, sans-serif; }
+      .warning { fill: #ff8992; font: 700 12px ui-sans-serif, system-ui, sans-serif; }
+      .connector-label { fill: #d6ff00; font: 800 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .8px; }
+      .optional-label { fill: #9bd8f2; font: 800 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .5px; }
+      .panel { fill: url(#panel); stroke: #35404a; stroke-width: 2; }
+      .chip { fill: #080a0c; stroke: #3a454f; stroke-width: 1; }
+      .required { fill: none; stroke: #d6ff00; stroke-width: 4; marker-end: url(#arrow); }
+      .optional { fill: none; stroke: #7fc8e8; stroke-width: 3; stroke-dasharray: 9 8; marker-end: url(#arrow-blue); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="620" rx="28" fill="url(#background)"/>
+  <path d="M0 561 C260 500 398 612 687 547 S1150 511 1600 578" fill="none" stroke="#1a232a" stroke-width="42" opacity=".24"/>
+  <path d="M0 540 C260 479 398 591 687 526 S1150 490 1600 557" fill="none" stroke="#26313a" stroke-width="2" opacity=".45"/>
+
+  <text x="40" y="52" class="page-title">F1 Race Replay - architecture workflow</text>
+  <text x="40" y="82" class="subtitle">FastF1 telemetry becomes validated replay data consumed by a framework-independent browser engine.</text>
+
+  <!-- Main workflow connectors. Labels sit in the dedicated gaps between cards. -->
+  <path class="required" d="M260 397 H335"/>
+  <path class="required" d="M615 397 H690"/>
+  <path class="required" d="M960 397 H1035"/>
+  <path class="required" d="M1280 397 H1355"/>
+
+  <g transform="translate(270 365)">
+    <rect width="56" height="24" rx="12" fill="#11171c" stroke="#53616c"/>
+    <text x="28" y="16" text-anchor="middle" class="connector-label">LOAD</text>
+  </g>
+  <g transform="translate(623 365)">
+    <rect width="60" height="24" rx="12" fill="#11171c" stroke="#53616c"/>
+    <text x="30" y="16" text-anchor="middle" class="connector-label">WRITE</text>
+  </g>
+  <g transform="translate(965 365)">
+    <rect width="66" height="24" rx="12" fill="#11171c" stroke="#53616c"/>
+    <text x="33" y="16" text-anchor="middle" class="connector-label">DERIVE</text>
+  </g>
+  <g transform="translate(1287 365)">
+    <rect width="61" height="24" rx="12" fill="#11171c" stroke="#53616c"/>
+    <text x="30.5" y="16" text-anchor="middle" class="connector-label">LOCAL</text>
+  </g>
+
+  <!-- 01 FastF1 -->
+  <g transform="translate(40 260)">
+    <g filter="url(#shadow)">
+      <rect width="220" height="274" rx="18" class="panel"/>
+      <rect width="7" height="274" rx="3.5" fill="#ff5158"/>
+    </g>
+    <text x="24" y="38" class="step">01 · SOURCE</text>
+    <text x="24" y="76" class="node-title">FastF1 API</text>
+    <g transform="translate(25 102)">
+      <path d="M0 62 C22 15 54 107 79 53 S130 13 169 42" fill="none" stroke="#7fc8e8" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="0" cy="62" r="6" fill="#7fc8e8"/>
+      <circle cx="79" cy="53" r="6" fill="#d6ff00"/>
+      <circle cx="169" cy="42" r="6" fill="#ff5158"/>
+      <path d="M4 88 H170" stroke="#35404a" stroke-width="2"/>
+      <path d="M18 88 V73 M43 88 V59 M68 88 V76 M93 88 V47 M118 88 V67 M143 88 V38" stroke="#7fc8e8" stroke-width="5"/>
+    </g>
+    <text x="24" y="229" class="copy">Laps · Telemetry · Weather</text>
+    <text x="24" y="252" class="copy">Race-control messages</text>
+  </g>
+
+  <!-- 02 Pipeline -->
+  <g transform="translate(335 230)">
+    <g filter="url(#shadow)">
+      <rect width="280" height="334" rx="18" class="panel"/>
+      <rect width="7" height="334" rx="3.5" fill="#d6ff00"/>
+    </g>
+    <text x="24" y="38" class="step">02 · PYTHON PIPELINE</text>
+    <text x="24" y="76" class="node-title">Normalize</text>
+    <g transform="translate(24 102)">
+      <rect width="232" height="48" rx="9" class="chip"/>
+      <circle cx="23" cy="24" r="8" fill="none" stroke="#7fc8e8" stroke-width="3"/>
+      <path d="M23 10V4 M23 44V38 M9 24H3 M43 24H37" stroke="#7fc8e8" stroke-width="3"/>
+      <text x="46" y="29" class="mono">FastF1 adapters</text>
+    </g>
+    <g transform="translate(24 162)">
+      <rect width="232" height="48" rx="9" class="chip"/>
+      <path d="M14 15H34 M14 24H40 M14 33H29" stroke="#d6ff00" stroke-width="3" stroke-linecap="round"/>
+      <text x="46" y="29" class="mono">native-cadence tables</text>
+    </g>
+    <g transform="translate(24 222)">
+      <rect width="232" height="48" rx="9" class="chip"/>
+      <path d="M14 24l7 7 15-17" fill="none" stroke="#3dcc6b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="46" y="29" class="mono">schema + validation</text>
+    </g>
+    <text x="24" y="306" class="small">No canonical resampling</text>
+  </g>
+
+  <!-- 03 Canonical -->
+  <g transform="translate(690 245)">
+    <g filter="url(#shadow)">
+      <rect width="270" height="304" rx="18" class="panel"/>
+      <rect width="7" height="304" rx="3.5" fill="#f0bc53"/>
+    </g>
+    <text x="24" y="38" class="step">03 · PRIVATE SOURCE</text>
+    <text x="24" y="76" class="node-title">Canonical generation</text>
+    <g transform="translate(30 101)">
+      <rect x="16" width="188" height="44" rx="8" fill="#202a32" stroke="#65717c" stroke-width="2"/>
+      <rect x="8" y="11" width="188" height="44" rx="8" fill="#192128" stroke="#65717c" stroke-width="2"/>
+      <rect y="22" width="188" height="44" rx="8" fill="#11171c" stroke="#7c8994" stroke-width="2"/>
+      <path d="M18 42H61 M78 42H121 M138 42H170" stroke="#f0bc53" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <text x="24" y="198" class="copy-strong">10 canonical Parquet tables</text>
+    <text x="24" y="223" class="copy">Immutable generation + Manifest</text>
+    <text x="24" y="246" class="copy">selected by current.json</text>
+    <g transform="translate(24 263)">
+      <rect width="176" height="28" rx="14" fill="#281719" stroke="#6c3036"/>
+      <text x="12" y="19" class="warning">* never published to R2</text>
+    </g>
+  </g>
+
+  <!-- 04 Browser delivery -->
+  <g transform="translate(1035 230)">
+    <g filter="url(#shadow)">
+      <rect width="245" height="334" rx="18" class="panel"/>
+      <rect width="7" height="334" rx="3.5" fill="#7fc8e8"/>
+    </g>
+    <text x="24" y="38" class="step">04 · DELIVERY</text>
+    <text x="24" y="76" class="node-title">Browser artifacts</text>
+    <g transform="translate(31 101)">
+      <path d="M0 0H140L172 32V116H0Z" fill="#11171c" stroke="#7fc8e8" stroke-width="2"/>
+      <path d="M140 0V32H172" fill="none" stroke="#7fc8e8" stroke-width="2"/>
+      <path d="M22 42H134 M22 62H150 M22 82H117" stroke="#7fc8e8" stroke-width="4" stroke-linecap="round" opacity=".85"/>
+    </g>
+    <text x="24" y="246" class="copy-strong">browser-delivery-v2 JSON</text>
+    <text x="24" y="271" class="copy">Manifest · Chunks · Sidecars</text>
+    <g transform="translate(24 288)">
+      <rect width="154" height="28" rx="14" fill="#281719" stroke="#6c3036"/>
+      <text x="12" y="19" class="warning">* v1 payloads rejected</text>
+    </g>
+  </g>
+
+  <!-- 05 Web app -->
+  <g transform="translate(1355 245)">
+    <g filter="url(#shadow)">
+      <rect width="205" height="304" rx="18" class="panel"/>
+      <rect width="7" height="304" rx="3.5" fill="#d6ff00"/>
+    </g>
+    <text x="24" y="38" class="step">05 · CONSUMER</text>
+    <text x="24" y="76" class="node-title">Web app</text>
+    <g transform="translate(24 101)">
+      <rect width="157" height="96" rx="9" fill="#080a0c" stroke="#65717c" stroke-width="2"/>
+      <circle cx="14" cy="13" r="3" fill="#ff5158"/>
+      <circle cx="25" cy="13" r="3" fill="#f0bc53"/>
+      <circle cx="36" cy="13" r="3" fill="#3dcc6b"/>
+      <path d="M18 60 C34 32 61 75 81 46 S120 28 139 51" fill="none" stroke="#d6ff00" stroke-width="3"/>
+      <path d="M18 79H67 M78 79H139" stroke="#7fc8e8" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <text x="24" y="226" class="copy-strong">loader + guards</text>
+    <text x="24" y="251" class="copy">React replay engine</text>
+    <text x="24" y="274" class="copy">Panels · Layouts </text>
+  </g>
+
+  <!-- Optional production route: browser artifacts only -->
+  <path class="optional" d="M1158 230V158H1235"/>
+  <path class="optional" d="M1430 158H1458V245"/>
+  <g transform="translate(1080 122)">
+    <rect width="140" height="24" rx="12" fill="#10202a" stroke="#466b7c"/>
+    <text x="70" y="16" text-anchor="middle" class="optional-label">OPTIONAL PUBLISH</text>
+  </g>
+  <g transform="translate(1471 165)">
+    <rect width="112" height="42" rx="12" fill="#10202a" stroke="#466b7c"/>
+    <text x="56" y="16" text-anchor="middle" class="optional-label">PRODUCTION</text>
+    <text x="56" y="32" text-anchor="middle" class="optional-label">FETCH</text>
+  </g>
+  <g transform="translate(1235 109)" filter="url(#shadow)">
+    <rect width="195" height="98" rx="17" fill="#12202a" stroke="#7fc8e8" stroke-width="2" stroke-dasharray="7 6"/>
+    <path d="M37 55 C24 54 17 46 17 36 C17 24 27 16 39 17 C45 5 57-1 70 3 C80-7 99-5 106 8 C121 7 132 17 132 30 C132 44 121 55 107 55Z" transform="translate(22 8)" fill="none" stroke="#7fc8e8" stroke-width="3"/>
+    <text x="97.5" y="86" text-anchor="middle" class="copy-strong">Cloudflare R2</text>
+  </g>
+</svg>

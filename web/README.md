@@ -1,77 +1,98 @@
 # F1 Race Replay Web
 
-The web package is a Vite + React replay application. It provides a
-framework-independent browser-delivery-v2 loader, a replay engine for clocking,
-sampling, caching, and event delivery, and React feature modules for the
-workspace, playback controls, telemetry, leaderboard, and track map.
+The web package is a Vite + React browser application for browsing published
+Formula 1 replay sessions and viewing their telemetry, leaderboard, track, and
+playback panels. The browser data boundary and replay engine remain independent
+of React.
 
-The Vite bootstrap at `src/main.tsx` renders the application shell from
-`src/app/App.tsx`. Replay data, engine, and feature modules live in their
-respective `src/data/replay/`, `src/engine/replay/`, and `src/features/replay/`
-packages.
+## Requirements and local start
 
-## Setup
+- Node.js `>=22.12.0` (CI currently uses Node 24)
+- npm
+
+From the repository root:
 
 ```bash
 cd web
 npm ci
-npm run ci
+npm run dev
 ```
 
-## Replay-data boundary
+Open the local Vite URL printed by the development server. When
+`VITE_REPLAY_SEASONS_BASE_URL` is unset during `npm run dev`, Vite serves replay
+data from its `/@fs/.../artifacts/seasons/` URL rooted at the repository's
+`artifacts/seasons/` directory. Set the optional base URL when data is served
+from another location:
 
-`src/data/replay/` accepts an injected asynchronous byte source. Production
-builds read `VITE_REPLAY_SEASONS_BASE_URL`; the checked-in production default
-is `https://data.f1racereplay.app/seasons/`. Tests use the committed fixture
-under `../contracts/` directly. The loader validates V2 identities, safe
-relative paths, V2 schema identities, column alignment, chunk ownership and
-overlap, and SHA-256 digests whenever a pointer or artifact reference supplies
-one. The active reader rejects V1 or mixed-version artifacts; V1 schemas and
-fixtures remain frozen historical contract references only. Returned public
-values are read-only frozen values.
+```bash
+VITE_REPLAY_SEASONS_BASE_URL=https://data.example.test/seasons/ npm run dev
+```
 
-The public season catalog is browser-delivery only. A validated session needs
-an immutable browser generation and a `browser_pointer`; `canonical_pointer`
-is retained as a nullable catalog-v2 compatibility field and is `null` in
-public catalogs.
+`VITE_REPLAY_SEASON_YEARS` optionally adds a comma-separated list of years to
+the season selector, for example `2025,2026`.
 
-Generated replay artifacts must remain outside `web/src` and `web/public`.
-See [`../docs/r2-production-publishing.md`](../docs/r2-production-publishing.md)
-for the production object layout and safe publication order.
+## Available commands
 
-## Architecture and data flow
+Run these commands from `web/`:
 
-`src/main.tsx` mounts `src/app/App.tsx`, which composes replay data loading,
-the replay engine, playback controls, and the workspace panels. The injected
-replay-data source loads the pointer, generation manifest, track assets, and
-owned chunks; validated snapshots then flow through the engine into the React
-feature modules. Keep the data boundary and engine independent of React.
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Type-check application code and create a production build |
+| `npm run preview` | Serve the production build locally |
+| `npm run typecheck` | Type-check application and test code |
+| `npm test` | Run the Vitest unit suite |
+| `npm test -- path/to/test` | Run a focused Vitest test path |
+| `npm run test:watch` | Run Vitest in watch mode |
+| `npm run test:e2e` | Run Playwright browser tests |
+| `npm run ci` | Run typecheck, unit tests, and the production build |
 
-## Adding a workspace panel
+The web CI workflow runs `npm ci`, `npm run ci`, installs Playwright Chromium,
+and then runs `npm run test:e2e`.
 
-Register the panel in the replay workspace registry and layout types, provide a
-focused feature component, and wrap its rendered element in the existing panel
-frame/error-boundary conventions. Reuse the established dark panel surfaces,
-headers, spacing, and muted labels. Add behavior-focused unit coverage for
-new public behavior and keep generated data outside `src` and `public`.
+## Replay-data flow
 
-## Performance-sensitive subscriptions
+`src/main.tsx` mounts `src/app/App.tsx`. The application then:
 
-Subscribe only to the replay state needed by a panel and select stable,
-minimal slices. Avoid subscribing to the full snapshot when a derived value or
-driver-specific slice is sufficient; keep formatting and other transformations
-outside render-time hot paths where practical.
+1. Loads the season catalog from the configured seasons base URL.
+2. Lets the user choose a listed race and a session marked ready to replay.
+3. Resolves that session's `browser_pointer` to a browser generation and pointer.
+4. Loads the pointer, V2 manifest, track assets, optional sidecars, and owned
+   replay chunks through the injected source in `src/data/replay/`.
+5. Validates identities, safe relative paths, digests, column alignment, chunk
+   ownership, and overlap before passing snapshots to the replay engine and
+   React feature modules.
 
-## Stylesheet organization
+V2 is the sole supported browser/replay data contract. The loader rejects V1 or
+mixed-version replay payloads; a method name such as `track-status-median-v1`
+is an identifier within a V2 artifact, not a V1 replay contract.
 
-`src/styles.css` is the sole stylesheet entry point. It imports the ordered
-layers in `src/styles/`: tokens, base rules, workspace shell, playback,
-leaderboard, track map, panels, and responsive rules. Preserve this import
-order and keep selectors/declarations scoped to their existing visual role.
+## Local data and production delivery
 
-## Validation commands
+Local development uses Vite's `/@fs/.../artifacts/seasons/` URL rooted at the
+repository's `artifacts/seasons/` directory when
+`VITE_REPLAY_SEASONS_BASE_URL` is unset. The environment override remains
+available for another location. Production builds and previews fall back to
+`/replay-data/seasons/`, while production deployments can point the variable at
+separately published browser-delivery artifacts and cache them independently
+from the web bundle. Generated replay artifacts do not belong in `web/src` or
+`web/public`.
 
-Run focused unit tests with `npm test -- <path>` and the full web unit suite
-with `npm test`. Run production-like browser coverage with
-`npm run test:e2e`; Playwright builds the app and serves it through Vite
-preview on port 4173 using the deterministic `/replay-data/` override.
+See the canonical boundary and runtime documentation:
+
+- [`Replay data contract`](../docs/replay-data-contract.md)
+- [`Browser replay engine runtime semantics`](../docs/browser-replay-engine-runtime-semantics.md)
+- [`Browser delivery interface freeze`](../docs/browser-delivery-interface-freeze.md)
+- [`R2 production publishing`](../docs/r2-production-publishing.md)
+
+## Web contributor conventions
+
+- Keep `src/data/replay/` and `src/engine/replay/` framework-independent.
+- New workspace panels must use the established dark panel surfaces, borders,
+  headers, spacing, and muted labels described in [`AGENTS.md`](AGENTS.md).
+- `src/styles.css` is the stylesheet entry point; preserve its ordered imports
+  when adding styles.
+- Subscribe panels only to the replay state they need and keep expensive
+  formatting out of render-time hot paths where practical.
+- Add behavior-focused unit coverage for new public behavior. Keep generated
+  data outside `src` and `public`.

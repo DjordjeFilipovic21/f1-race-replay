@@ -1,9 +1,51 @@
 # R2 production publishing
 
-`data.f1racereplay.app` serves browser delivery only. Canonical Parquet is a
-private pipeline/recovery format and must not be copied into the public bucket.
+This document describes the production-only publication of browser delivery to
+Cloudflare R2. The public bucket contains replay-data **v2 browser artifacts**
+only. Canonical Parquet is a private pipeline/recovery format and is never
+copied to the public bucket.
 
-## Object layout
+For the local pipeline and its command selectors, see
+[`pipeline/README.md`](../pipeline/README.md). For the v2 delivery contract,
+see [the browser delivery interface freeze](browser-delivery-interface-freeze.md).
+
+## Local generation versus production publication
+
+Run these commands from the repository root. They are local and do not access
+R2:
+
+```bash
+.venv/bin/f1-replay-pipeline generate \
+  --year 2024 --round 3 --session R --resume
+
+.venv/bin/f1-replay-pipeline verify --year 2024
+```
+
+The generated season root is normally `artifacts/seasons/2024/`. Keep the same
+root for incremental runs so the local catalog retains previously validated
+records. `verify` performs deep local validation; a directory's existence is
+not evidence that a generation or browser delivery is publishable.
+
+Production publication is opt-in. Configure a dedicated AWS profile and the R2
+target, then run the local generation with `--publish-r2`:
+
+```bash
+aws configure --profile f1-r2
+chmod 600 ~/.aws/credentials ~/.aws/config
+
+export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
+export R2_BUCKET=f1-race-replay-data
+export AWS_PROFILE=f1-r2
+
+.venv/bin/f1-replay-pipeline generate \
+  --year 2024 --round 3 --session R --resume --publish-r2
+```
+
+Do not place access keys in the repository, local `.env` files, command
+arguments, or shell history. Use an R2 token with Object Read & Write access
+scoped to the publication bucket.
+
+## Public object layout
 
 The production base URL is:
 
@@ -22,37 +64,41 @@ seasons/{year}/browser/{race_id}/generations/{delivery_version}/chunks/*.json
 seasons/{year}/browser/{race_id}/generations/{delivery_version}/*.json
 ```
 
-The catalog is the only discovery boundary. Deprecated races and sessions must
-not appear in it, even if their immutable objects are retained temporarily for
-rollback.
+`catalog.json` is the only discovery boundary. Deprecated races and sessions
+must not be listed there, even when their immutable objects are retained for
+rollback. A corrected delivery receives a new `delivery_version`; an existing
+generation is never overwritten.
 
-For the initial 2024 release, the only public race IDs are:
+## Validation and commit order
 
-```text
-2024-round-01-bahrain-grand-prix
-2024-round-02-saudi-arabian-grand-prix
-```
+The `--publish-r2` uploader reads the final local season catalog, removes
+unvalidated sessions and races without a valid browser session, and deeply
+validates every retained browser pointer, manifest, and payload against the
+local v2 contract. It then:
 
-## Publication order
+1. uploads or reuses immutable generation objects;
+2. uploads referenced circuit visuals;
+3. uploads session `browser-current.json` pointers;
+4. uploads the filtered `catalog.json` last.
 
-Publish immutable objects before mutable discovery objects:
+An existing immutable key is reused only when both its bytes and HTTP metadata
+match. A collision or upload verification failure stops before later discovery
+objects are committed. The uploader never uploads canonical Parquet and never
+deletes remote objects.
 
-1. Upload each referenced `generations/{delivery_version}/` directory.
-2. Upload referenced `visuals/`.
-3. Upload each `sessions/{session_code}/browser-current.json`.
-4. Upload `catalog.json` last.
-5. Purge any cached `404` responses below `/seasons/{year}/`.
-6. Verify both production replay URLs through the web application.
+The catalog is the only discovery commit. It is uploaded after the session
+pointers, so a failure before catalog upload leaves the previous catalog in
+place, although a pointer upload may already have succeeded and require repair.
+For rollback, republish the previously validated session pointer and catalog
+from an unchanged local season root, then verify the public replay URL. Do not
+overwrite or delete the immutable generation being rolled back from.
 
-Never overwrite a generation. A corrected delivery gets a new
-`delivery_version`, then the session pointer and catalog are committed last.
+R2 validation and publication progress is written to stderr. Interactive
+terminals receive a live line; redirected logs are throttled to phase changes,
+10% increments, and phase completion. The final CLI output includes the catalog
+key and cumulative `uploaded` and `reused` counters.
 
-Weather is an optional artifact inside that same immutable generation; it is
-never uploaded or pointed to independently. See
-[Weather sidecar rollout](weather-sidecar-rollout.md) for the frontend-first
-rollout, backfill, and rollback checklist.
-
-## HTTP metadata
+## HTTP metadata and caching
 
 Generation objects:
 
@@ -75,86 +121,21 @@ Content-Type: application/json
 Cache-Control: public, max-age=86400, must-revalidate
 ```
 
-Cloudflare already compresses these JSON responses for supported browsers. Do
-not add a decompression Worker and do not upload `.br` side files.
-
-Configure an edge Cache Rule for:
-
-```text
-Hostname equals data.f1racereplay.app
-URI path contains /generations/
-```
-
-Keep `catalog.json` and `browser-current.json` outside that immutable cache
-rule. The R2 CORS policy must allow `GET` and `HEAD` from
+Configure an edge Cache Rule for `data.f1racereplay.app` paths containing
+`/generations/`. Keep `catalog.json` and `browser-current.json` outside that
+immutable rule. R2 CORS must allow `GET` and `HEAD` from
 `https://f1racereplay.app`.
 
-## Automated pipeline publication
+Cloudflare compresses supported JSON responses; do not add a decompression
+Worker or upload `.br` side files. Optional weather data is an artifact inside
+the same immutable v2 delivery and is not uploaded or pointed to independently.
 
-The recommended production path is the opt-in `generate --publish-r2` flag.
-Normal generation performs no R2 access.
+## Manual recovery upload
 
-Store the R2 S3 credentials in a dedicated AWS profile, then configure the
-target and profile:
+Use these production-only commands only when the automated publisher cannot
+run. They require the endpoint, bucket, and credentials configured above.
 
-```bash
-aws configure --profile f1-r2
-chmod 600 ~/.aws/credentials ~/.aws/config
-
-export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
-export R2_BUCKET=f1-race-replay-data
-export AWS_PROFILE=f1-r2
-```
-
-Do not put R2 access keys in the repository, local `.env` files, command
-arguments, or shell history. Use an R2 token with Object Read & Write access
-scoped only to `f1-race-replay-data`.
-
-Generate or resume selected rounds and publish all valid catalog references:
-
-```bash
-f1-replay-pipeline generate \
-  --year 2024 \
-  --round 3 \
-  --session R \
-  --resume \
-  --publish-r2
-```
-
-The uploader:
-
-1. Reads the final local `catalog.json` after batch generation.
-2. Removes unvalidated sessions and races with no valid browser session from
-   the public payload.
-3. Deep-validates every retained browser pointer, manifest, and payload.
-4. Uploads or reuses immutable generation objects.
-5. Uploads visuals and session pointers.
-6. Uploads the filtered public catalog last.
-
-The CLI reports validation and per-phase object counters on stderr, including
-the cumulative `uploaded` and `reused` counts. Interactive output refreshes in
-place; redirected logs are emitted at phase changes and 10% increments.
-
-An existing immutable key is reused only when its bytes and HTTP metadata
-agree. A collision or upload verification failure stops publication before
-later discovery objects are committed. The uploader never uploads canonical
-Parquet and never deletes remote objects.
-
-The local season catalog is authoritative. Incremental runs should reuse the
-same `artifacts/seasons/{year}` root so previously published valid races remain
-present. Use manual recovery only when the automated publication cannot run.
-
-## Manual S3-compatible upload
-
-The manual uploader needs the account endpoint and bucket name in addition to
-the existing R2 access key:
-
-```bash
-export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
-export R2_BUCKET=BUCKET_NAME
-```
-
-For each catalog-listed race, upload its generation with immutable metadata:
+Upload a catalog-listed immutable delivery with its production metadata:
 
 ```bash
 aws s3 sync \
@@ -165,7 +146,7 @@ aws s3 sync \
   --cache-control "public, max-age=31536000, immutable"
 ```
 
-Upload session pointers and the catalog with revalidation:
+Upload the session pointer and catalog last, with revalidation caching:
 
 ```bash
 aws s3 cp \
@@ -183,8 +164,9 @@ aws s3 cp \
   --cache-control "public, max-age=0, must-revalidate"
 ```
 
-Delete the obsolete single-race entrypoint only after the season catalog and
-both session pointers are live:
+Verify the catalog and session pointers before considering a recovery complete.
+Remove an obsolete root-level `browser-current.json` only after the season
+catalog and all replacement session pointers are live:
 
 ```bash
 aws s3 rm \

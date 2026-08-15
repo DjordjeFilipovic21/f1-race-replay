@@ -1,5 +1,9 @@
 # Insights Menu
 
+> **Scope:** Preserved legacy desktop developer workflow. This guide applies to
+> the PySide6 desktop insights menu only; it is not the current browser replay
+> implementation or a supported migration path.
+
 ## Overview
 
 The Insights Menu is a PySide6 window that launches automatically when the race replay starts. It provides quick access to telemetry analysis tools and insight windows. The menu stays open alongside the replay and allows you to launch multiple insight windows.
@@ -60,7 +64,6 @@ In `src/gui/insights_menu.py`, add a launch method for your insight:
 ```python
 def launch_my_custom_insight(self):
     """Launch my custom insight window."""
-    print("🚀 Launching: My Custom Insight")
     from src.gui.my_custom_insight import MyCustomInsight
     window = MyCustomInsight()
     window.show()
@@ -102,7 +105,9 @@ Run the menu standalone to test your new button:
 python -m src.gui.insights_menu
 ```
 
-This will open the Insights Menu without starting a replay. The window wouldn't be connected to telemetry unless you start a replay, but you can verify that the button launches your insight window correctly.s
+This opens the Insights Menu without starting a replay. The window is not
+connected to telemetry unless a replay is running, but you can verify that the
+button launches your insight window correctly.
 
 ## Architecture
 

@@ -6,9 +6,18 @@ cadence and unchanged; track distance, cumulative progress, position, dynamic
 order, and gaps are browser-derived fields.
 
 The web reader is **v2-only**: it loads `browser-delivery-v2` pointers and `v2`
-manifests (`contractVersion` `v2`) and rejects v1 pointers, manifests, and
-sidecars. V1 fixtures remain in the repository only as frozen historical
-baselines and are never loaded by the runtime.
+manifests (`contractVersion` `v2`). Frozen historical fixtures are reference
+material only; they are never loaded or adapted by the runtime.
+
+## Loading and optional artifacts
+
+The loader verifies the selected manifest and any provided referenced artifact
+digests,
+validates v2 identities and chunk ownership, and checks sidecar identities
+against the manifest and driver set. Referenced core sidecars fail the load when
+they are malformed or inconsistent. Optional artifacts that are absent remain
+unavailable; weather is additionally fail-closed, so an invalid weather
+reference or payload does not make an otherwise valid replay unusable.
 
 ## Timeline and ownership
 
@@ -48,20 +57,20 @@ when the lower value is in the final 10%, the upper value is in the initial
 circuit length for interpolation and wraps the result back into the circuit.
 An invalid large backward jump returns `null`; it is not silently smoothed.
 
-The same `geometric-wrap-v1` ratios govern production derivation. Projection is
-onto metre centerline segments with a 75 m maximum residual; adjacent segments
-are one local branch, while non-adjacent candidates within 5 m require prior
-continuity. At most one wrap is allowed per timing lap, and timing-lap and
-geometric-origin boundaries may differ.
+The same `geometric-wrap-v1` method-identifier ratios govern production
+derivation; the `-v1` suffix names the algorithm, not a replay contract.
+Projection is onto metre centerline segments with a 75 m maximum residual;
+adjacent segments are one local branch, while non-adjacent candidates within
+5 m require prior continuity. At most one wrap is allowed per timing lap, and
+timing-lap and geometric-origin boundaries may differ.
 
 ## Live semantics
 
 The production gate is per generation, source-lap-excluding, native-cadence,
 and bounded to 32 samples per holdout lap. It is fail-closed. Failed,
-insufficient, or malformed legacy geometry leaves derived arrays null and
-falls back to stable classified-results order; null-only v2 generations remain
-valid and replayable, and frozen v1 generations stay valid only as historical
-fixtures (the reader is v2-only).
+insufficient, or malformed geometry leaves derived arrays null and falls back
+to stable classified-results order; null-only v2 generations remain valid and
+replayable.
 
 Progress is monotonic through an envelope. Ranking ties resolve by prior order,
 then driver ID. Null progress is omitted, while pit and finished modes freeze
@@ -88,7 +97,7 @@ to zero when its sampled position is 1, including after continuous interpolation
 
 ## Pit-loss estimate semantics
 
-When the optional `pitLossEstimateSidecar` is loaded, pit-loss position
+When the optional v2 `pitLossEstimateSidecar` is loaded, pit-loss position
 prediction uses the replay snapshot's exact `trackStatusCode` and the static
 generation-time values resolved from the versioned, repository-local pit-loss
 baseline catalog:
@@ -126,12 +135,11 @@ unknown track never receives a fabricated 22 s value — generation emits no
 curated sidecar for tracks without a catalog entry, and the browser shows
 pit-loss data as unavailable unless a legacy model is present.
 
-Legacy `track-status-median-v1` sidecars remain readable: their
-status-specific timelines are emitted only when the status occurred, and
-unavailable or omitted statuses fall back to the race timeline. Older
-deliveries without the sidecar continue to use the legacy pit-loss model or
-show pit-loss data as unavailable; the replay sampler and controller remain
-unchanged.
+`curated-track-baseline-v1` and `track-status-median-v1` are method identifiers
+inside v2 pit-loss artifacts, not v1 contract identities. A v2 delivery without
+the optional estimate sidecar uses the legacy `pitLossModel` when present;
+otherwise pit-loss data is unavailable. No v1 or mixed-version payload is
+adapted by the reader.
 
 ## Deterministic control behavior
 

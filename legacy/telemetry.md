@@ -1,6 +1,11 @@
 # F1 Race Replay - Telemetry Stream Demo
 
-This document provides instructions on how to use the telemetry stream feature which is currently in early demo stage. This allows you to see the raw telemetry data being streamed from the replay process in real-time, and is intended for developers who want to build custom tools and interfaces on top of the replay data.
+> **Scope:** Preserved legacy desktop behavior. This historical developer demo
+> is not the current browser replay implementation and is not a supported
+> migration mechanism.
+
+This document describes the legacy desktop telemetry stream, which exposes raw
+replay data to developers building desktop tools and interfaces.
 
 ![Telemetry Stream Demo](./resources/telemetry-logger.png)
 
@@ -30,6 +35,10 @@ The goal of this project is to build a pit wall style tool to replay races and s
 We're no longer limited to fitting everything into the replay window - we can build custom dashboards, data analysis tools etc that can run alongside the replay and provide a much richer experience.
 
 ## Telemetry Data Format
+
+The example below documents the legacy desktop stream format. It is not the
+browser replay contract; use the repository root documentation for the current
+browser data flow.
 
 The stream provides this data structure:
 

@@ -1,26 +1,35 @@
 # F1 Replay Pipeline
 
-`f1-replay-pipeline` is an isolated Python foundation for transforming FastF1
-data into deterministic, canonical replay tables. It is separate from the
-legacy desktop application and its `legacy/src/` modules.
+`f1-replay-pipeline` is the isolated Python pipeline for turning FastF1 session
+data into deterministic canonical replay tables and validated browser delivery.
+It is separate from the preserved legacy desktop application in `legacy/`.
 
-## Installation
+The browser boundary is **replay-data v2 only**. Canonical Parquet remains a
+private pipeline/recovery representation; browser publication derives JSON
+artifacts from a validated canonical generation and does not modify or copy the
+canonical tables.
 
-From this directory:
+## Requirements and installation
+
+- Python 3.11, 3.12, or 3.13
+- FastF1 `>=3.8.1,<3.9` (installed by the package constraints)
+- A local virtual environment at the repository root, conventionally `.venv`
+
+Install from the repository root:
+
+```bash
+.venv/bin/python -m pip install --constraint pipeline/constraints.txt pipeline/
+```
+
+The same installation from inside `pipeline/` is:
 
 ```bash
 ../.venv/bin/python -m pip install --constraint constraints.txt .
 ```
 
-The package supports Python 3.11–3.13 and installs FastF1 3.8.x, Polars 1.x,
-the local browser-publication schema engine `jsonschema-rs` 0.48.x, and
-`boto3` for opt-in Cloudflare R2 publication. The install consumes the
-committed pip-tools constraints artifact `pipeline/constraints.txt`, which pins
-the exact resolver result for the lowest supported matrix member (Python 3.11)
-without changing the declared ranges in `pipeline/pyproject.toml`.
-
-Regenerate the constraints artifact with pip-tools whenever the declared
-dependency ranges or the supported matrix change (from the repository root):
+`pipeline/constraints.txt` is the committed pip-tools resolver output, not a
+replacement for `pipeline/pyproject.toml`. Regenerate it after changing the
+declared dependencies or supported Python matrix:
 
 ```bash
 .venv/bin/python -m pip install --upgrade pip-tools
@@ -28,523 +37,135 @@ dependency ranges or the supported matrix change (from the repository root):
   --output-file=pipeline/constraints.txt pipeline/pyproject.toml
 ```
 
-`pipeline/constraints.txt` is a constraints file, not a replacement for
-`pipeline/pyproject.toml`.
+## Pipeline boundaries
 
-## FastF1 2026 compatibility
+The adapters consume either an already loaded session or an injected
+zero-argument session factory. A preloaded session is not loaded again; a
+factory is called once with `laps`, `telemetry`, `weather`, and `messages`
+enabled. The factory path can use FastF1 cache/network behavior, so it is the
+only normal data-loading boundary.
 
-The package requires `fastf1>=3.8.1,<3.9`. Version 3.8.1 added the fallback for
-the raw DRS channel that is absent from 2026 timing data. FastF1 3.8.3 keeps
-`DRS` in `Session.car_data`, but 2026 output is all zero: this is a compatibility
-column, not a measured DRS-Off state.
+The canonical generation contains exactly these ten tables:
 
-No published FastF1 telemetry replacement exists for Overtake Mode, active
-aero, or ERS state. Keep `drs` in both the canonical `car_telemetry` table and
-browser driver fields so pre-2026 values and older payloads remain readable;
-do not derive or serialize a factual `overtakeMode` channel from unavailable
-data. For browser deliveries, the optional manifest fields
-`seasonMetadata.year` and `telemetryCapabilities` can identify the season and
-mark 2026 `drs`, `overtakeMode`, `activeAero`, and `ersReplacement` as
-`not-published`. Consumers should render an unavailable/not-published state,
-not `DRS: Off`; manifests without the optional metadata remain backward
-compatible.
+`session_metadata`, `drivers`, `car_telemetry`, `position_telemetry`, `laps`,
+`stints`, `weather`, `track_status_intervals`, `race_control_messages`, and
+`results`.
 
-Sources: [FastF1 documentation](https://docs.fastf1.dev/), [FastF1 3.8.1
-release](https://github.com/theOehrly/Fast-F1/releases/tag/v3.8.1), and the
-maintainer's [2026 telemetry discussion](https://github.com/theOehrly/Fast-F1/discussions/861).
+Car and position telemetry retain their native cadences. Canonical rows are not
+resampled or interpolated; browser-time alignment is a later delivery policy.
+See [the canonical schema](../docs/canonical-pipeline-schema.md) for columns,
+ordering, nulls, and deterministic deduplication.
 
-## Foundation scope
+## CLI quick start
 
-This initial boundary establishes independent packaging and a deliberately
-small top-level import surface. Importing `f1_replay_pipeline` does not load
-FastF1 or Polars and performs no network, GUI, or OpenGL work. Import the
-specific `domain.canonical_schema`, `domain.normalizers`, or `domain.validators`
-module when that capability is needed.
+Run these commands from the repository root through the virtual environment's
+installed console script. Using the explicit path is safe in a fresh shell and
+does not require the environment to be activated.
 
-The foundation now provides explicit canonical schemas, pure time/identifier/
-null normalizers, deterministic sort-and-deduplication, in-memory Polars
-validation, and synthetic offline fixtures. It keeps car and position streams
-at their separate native cadences; it neither resamples nor interpolates them.
+### Build one canonical generation
 
-## Normalize an injected session
-
-The adapters do not discover, load, cache, or fetch FastF1 sessions. They are
-I/O-free consumers of injected sessions. Inject either a pre-loaded session or
-a zero-argument factory into `load_session`. A supplied `session` is treated as
-already loaded and is never loaded again; a factory-created session is loaded
-once with all four FastF1 data groups enabled. The factory path may invoke
-FastF1 cache/network behavior.
-
-```python
-from f1_replay_pipeline.adapters.fastf1.session_loader import load_session
-from f1_replay_pipeline.adapters.fastf1.session_metadata import (
-    adapt_drivers, adapt_session_metadata,
-)
-from f1_replay_pipeline.adapters.fastf1.car_telemetry import adapt_car_telemetry
-from f1_replay_pipeline.adapters.fastf1.position_telemetry import adapt_position_telemetry
-
-session = load_session(session=my_preloaded_session)
-# Or: session = load_session(session_factory=lambda: fastf1.get_session(...))
-
-metadata = adapt_session_metadata(session)
-session_id = metadata.item(0, "session_id")
-drivers = adapt_drivers(session, session_id)
-driver_ids = dict(drivers.select("source_driver_key", "driver_id").iter_rows())
-cars = adapt_car_telemetry(session, session_id)
-positions = adapt_position_telemetry(session, session_id, driver_ids)
-```
-
-The implemented adapters are in-memory and duck-typed: metadata/drivers,
-native car and position telemetry, laps/stints, weather/track status, and
-race-control messages/results. They return typed Polars frames; they do not
-write output files.
-
-For offline tests, inject a small fake session with the required attributes and
-use `session=...`; its `load()` method is not called. To test the loading seam,
-inject a factory and assert the fake session receives
-`laps=True, telemetry=True, weather=True, messages=True`. Tests should use
-deterministic fake tables and never require a remote FastF1 response.
-
-## Canonical sources and boundaries
-
-| Canonical table | FastF1 source |
-| --- | --- |
-| `session_metadata` | `event`, `session_info`, session start metadata |
-| `drivers` | `drivers` / `get_driver()` |
-| `car_telemetry` | `Session.car_data` |
-| `position_telemetry` | `Session.pos_data` |
-| `laps` | `Session.laps` |
-| `stints` | Derived from canonical `laps` rows |
-| `weather` | `Session.weather_data` |
-| `track_status_intervals` | `Session.track_status` |
-| `race_control_messages` | `Session.race_control_messages` |
-| `results` | `Session.results` |
-
-`car_data` and `pos_data` remain separate native streams. Canonical rows are
-never interpolated or resampled; browser-time alignment is a later consumer
-concern. Missing and non-finite optional values become typed nulls. The original
-FastF1 driver-number mapping key is retained as `source_driver_key`; messages
-and results may use that key as an alias before resolving canonical `driver_id`.
-Source duplicate rows may be accepted, but duplicate canonical keys are reduced
-only under the documented deterministic policy; invalid duplicate keys are
-rejected. See [the canonical schema](../docs/canonical-pipeline-schema.md) for
-columns, nulls, ordering, and deduplication.
-
-This boundary explicitly excludes the `legacy/src/` application and
-network-backed CI or network-loading tests. Testing events
-retain FastF1 round zero; they are selected through the explicit `testing`
-command and testing-session API, never through ordinary round lookup.
-
-## Run the pipeline
-
-Install the package from `pipeline/` first:
+`race` requires a positive season year, session, output directory, and exactly
+one of `--round` or `--event`:
 
 ```bash
-../.venv/bin/python -m pip install --constraint constraints.txt .
+.venv/bin/f1-replay-pipeline race \
+  --year 2026 --round 3 --session R --output artifacts/canonical
 ```
 
-The installed console command and the module entry point accept the same
-non-interactive commands:
+Use `--event "Australian Grand Prix"` instead of `--round 3` when selecting by
+exact event name. Supported race backends are `fastf1`, `f1timing`, and
+`ergast`; the backend is optional.
+
+Testing sessions use the dedicated testing selector and positive numbers:
 
 ```bash
-f1-replay-pipeline race \
-  --year 2026 --round 3 --session R --output artifacts
-
-python -m f1_replay_pipeline race \
-  --year 2026 --event "Australian Grand Prix" --session R \
-  --backend fastf1 --generation-id 2026-aus-race --output artifacts
-
-f1-replay-pipeline testing \
+.venv/bin/f1-replay-pipeline testing \
   --year 2026 --test-number 1 --session-number 2 \
-  --backend f1timing --output artifacts
-
-f1-replay-pipeline browser \
-  --canonical artifacts/demo-bahrain-2024 \
-  --output artifacts/browser-bahrain-2024 \
-  --delivery-version 2024-bahrain-race-v2 \
-  --schema-root ../contracts/replay-data/v2/schemas
-
-f1-replay-pipeline generate \
-  --year 2024 --round 3 --session R --resume --publish-r2
+  --output artifacts/canonical --backend f1timing
 ```
 
-### Selectors and backends
+Both commands validate all ten canonical tables and publish one immutable
+generation below the requested output parent. `--generation-id` supplies a safe
+deterministic path component; otherwise the CLI creates a UTC timestamp ID.
+The resulting `current.json` is the canonical reader visibility boundary.
 
-- `race` requires `--year`, `--session`, `--output`, and exactly one of
-  `--round` or `--event`. `--round` must be a positive integer; `0` is not a
-  testing selector. `--event` is an exact event name.
-- Supported race session aliases are `fp1`, `fp2`, `fp3`, `q`, `s`, `ss`,
-  `sq`, `r`, plus `practice 1`, `practice 2`, `practice 3`, `qualifying`,
-  `sprint`, `sprint shootout`, `sprint qualifying`, and `race`.
-- `testing` requires positive `--test-number` and positive `--session-number`.
-  It has no race event or round selector and uses the dedicated testing API.
-- `--backend` is optional, case-insensitive, and normalized to lowercase. Race
-  accepts `fastf1`, `f1timing`, or `ergast`; testing accepts only `fastf1` or
-  `f1timing`.
-- `browser` requires a canonical parent selected by its validated `current.json`,
-  a separate output parent, one safe delivery version, and a local v2 schema
-  directory. It performs no FastF1 or network loading.
-- `generate` accepts one or more `--round` values or `--all`. It generates the
-  canonical and browser forms, atomically refreshes the local season catalog,
-  and remains local-only unless `--publish-r2` is supplied.
+### Derive browser delivery locally
 
-The default resolver imports FastF1 lazily, resolves one session, and loads it
-once with laps, telemetry, weather, and messages enabled. This is a real
-FastF1 path: its cache and network behavior still applies. The CLI has no
-offline or fixture mode. Offline tests inject fake resolvers, sessions, and
-publishers instead of using network, GUI, OpenGL, or real FastF1 loading.
-
-### Output and status
-
-The `race` and `testing` commands normalize and validate exactly the ten
-canonical tables, then publish one generation below `--output`. Supply
-`--generation-id` for a safe deterministic path component; otherwise the CLI
-generates a UTC timestamp ID. Successful stdout is intentionally stable:
-
-```text
-generation_id=2026-aus-race
-```
-
-The `browser` command validates the selected canonical generation, generates
-track assets, builds browser chunks, validates them against local schemas, and
-publishes them behind `browser-current.json`. Its stable stdout is:
-
-```text
-delivery_version=2024-bahrain-race-v2
-```
-
-Publication stages and validates the generation before atomically replacing
-`<output>/current.json`; that pointer is the reader visibility boundary. The
-pointer names the selected generation and manifest digest. A pre-commit
-failure leaves the previous valid pointer in place; a post-commit durability
-failure reports that the new generation may already be selected.
-
-This canonical-pointer behavior applies only to `race` and `testing`. Browser
-publication instead validates its derived artifacts before atomically replacing
-`<browser-output>/browser-current.json`; it never modifies canonical
-`current.json`.
-
-Exit behavior:
-
-- `0`: publication succeeded; generation or delivery version is printed.
-- `1`: expected application/resolution/normalization/validation/publication
-  failure; one `error: ...` line is printed to stderr, without a traceback.
-- `2`: argparse usage or validation failure (including missing, abbreviated, or
-  unknown options); argparse writes its error to stderr.
-
-The CLI remains non-interactive and does not provide GUI/legacy integration or
-a second command framework. R2 publication is an explicit post-validation
-boundary; normal generation and every other command remain network-independent
-apart from their documented data sources.
-
-### Publish validated browser data to R2
-
-Store the R2 S3 credentials in a dedicated AWS profile, then set the endpoint,
-bucket, and profile before using the opt-in flag:
+The browser command reads the generation selected by the canonical parent's
+validated `current.json`, validates it, and writes a separate browser parent:
 
 ```bash
-aws configure --profile f1-r2
-chmod 600 ~/.aws/credentials ~/.aws/config
+.venv/bin/f1-replay-pipeline browser \
+  --canonical artifacts/canonical \
+  --output artifacts/browser \
+  --delivery-version 2026-round-03-race-v2 \
+  --schema-root contracts/replay-data/v2/schemas
+```
 
+It prints `delivery_version=...` on success and atomically replaces only
+`artifacts/browser/browser-current.json`. It performs no FastF1 or network
+loading. The browser manifest records the source canonical generation and
+manifest digest, and all payloads are validated against the local v2 schemas.
+Standalone `artifacts/canonical` and `artifacts/browser` outputs do not create
+the season catalog required by the web landing flow; local web users should use
+the `generate` section below.
+
+### Generate a season batch
+
+`generate` creates canonical and browser forms locally. Select one or more
+rounds by repeating `--round`, or select all ordinary championship rounds with
+`--all`:
+
+```bash
+.venv/bin/f1-replay-pipeline generate \
+  --year 2024 --round 3 --session R --resume
+```
+
+By default the season root is `artifacts/seasons/<year>/`; use `--output` and
+`--browser-output` to override its canonical and browser parents. `--resume`
+skips only validated existing outputs, `--force` regenerates selected races, and
+`--continue-on-error` keeps processing while returning a nonzero final status if
+any race failed.
+
+Deep-verify all catalog-referenced local artifacts with:
+
+```bash
+.venv/bin/f1-replay-pipeline verify --year 2024
+```
+
+### Publish to R2 explicitly
+
+Normal generation is local-only. R2 access occurs only when `--publish-r2` is
+passed to `generate`, after local generation and validation:
+
+```bash
 export R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
 export R2_BUCKET=f1-race-replay-data
 export AWS_PROFILE=f1-r2
 
-f1-replay-pipeline generate \
+.venv/bin/f1-replay-pipeline generate \
   --year 2024 --round 3 --session R --resume --publish-r2
 ```
 
-Do not put R2 access keys in the repository, local `.env` files, command
-arguments, or shell history. Use an R2 token with Object Read & Write access
-scoped only to the publication bucket.
+Use a dedicated AWS profile and never put credentials in the repository, `.env`
+files, command arguments, or shell history. See
+[R2 production publishing](../docs/r2-production-publishing.md) for production
+object layout, validation, caching, and recovery guidance.
 
-The uploader rebuilds a browser-only public catalog from locally validated
-sessions. It deep-validates each referenced browser delivery, uploads immutable
-generation objects first, then visuals and session pointers, and commits
-`seasons/<year>/catalog.json` last. Existing immutable objects are reused only
-when their content and HTTP metadata agree. Upload errors return status `1`
-without changing local artifacts.
+## Output and exit status
 
-R2 validation and publication progress is written to stderr. Interactive
-terminals receive a live line; redirected logs are throttled to phase changes,
-10% increments, and phase completion:
+Successful canonical commands print `generation_id=...`; browser publication
+prints `delivery_version=...`; batch mode prints each race outcome and, when
+enabled, R2 upload/reuse counters. Expected failures print one `error: ...`
+line to stderr without a traceback.
 
-```text
-r2 040% | immutable 441/1101 | up=40 reuse=401 | 01:12
-r2 100% | completed 1106/1106 | up=5 reuse=1101 | 01:44
-```
+- `0`: requested publication or verification succeeded
+- `1`: application, resolution, normalization, validation, or publication
+  failure
+- `2`: command-line usage or argument validation failure
+- `130`: generation or browser publication was cancelled with `Ctrl-C`
 
-The local season catalog is authoritative. Keep existing production artifacts
-under the same season root so incremental runs retain their validated catalog
-records. See
-[`../docs/r2-production-publishing.md`](../docs/r2-production-publishing.md)
-for the object layout, caching policy, and manual recovery commands.
-
-## Publish a canonical generation
-
-The writer accepts exactly the ten already validated canonical Polars frames and
-publishes them as one versioned generation. It does not load FastF1 or perform
-network, GUI, OpenGL, resampling, or interpolation work.
-
-```python
-from pathlib import Path
-
-from f1_replay_pipeline.storage.canonical_writer import (
-    publish_canonical_generation,
-    resolve_published_canonical_generation,
-)
-
-# Build these with the adapters/validators first; this example stays offline.
-validated_frames = {
-    "session_metadata": session_metadata,
-    "drivers": drivers,
-    "car_telemetry": car_telemetry,
-    "position_telemetry": positions,
-    "laps": laps,
-    "stints": stints,
-    "weather": weather,
-    "track_status_intervals": track_status_intervals,
-    "race_control_messages": race_control_messages,
-    "results": results,
-}
-
-published = publish_canonical_generation(
-    frames=validated_frames,
-    target_parent=Path("artifacts"),
-    generation_id="2026-07-15T120000Z-example",
-)
-print(published.manifest_path, published.manifest_sha256)
-
-# Readers validate current.json, the manifest, every table schema/row count,
-# and both recorded hashes before returning this generation.
-current = resolve_published_canonical_generation(Path("artifacts"))
-```
-
-`PublishedCanonicalGeneration` is an immutable result containing
-`generation_id`, `generation_path`, `manifest_path`, `pointer_path`,
-`manifest_sha256`, `committed`, and the outcome of every attempted directory
-fsync. `current.json` replacement is the sole commit point. If a post-commit
-durability step fails, publication raises a committed-but-durability-uncertain
-error whose result identifies the selected generation rather than implying the
-old pointer remains current. `generation_id` must be one safe path component. The
-`filesystem`, `checkpoint`, and `publisher` arguments are optional injection
-seams for deterministic failure tests; normal callers do not need them.
-
-Publication refuses symlinked roots, ancestors, generation directories, and
-files. The pointer temp is created beside `current.json` with exclusive
-`O_CREAT|O_EXCL|O_NOFOLLOW` semantics. Publication and stale cleanup hold an
-exclusive lock/lease and fail closed when ownership cannot be verified.
-
-## On-disk layout
-
-```text
-artifacts/
-├── current.json
-└── generations/
-    └── <generation-id>/
-        ├── manifest.json
-        └── tables/
-            ├── session_metadata.parquet
-            ├── drivers.parquet
-            ├── car_telemetry.parquet
-            ├── position_telemetry.parquet
-            ├── laps.parquet
-            ├── stints.parquet
-            ├── weather.parquet
-            ├── track_status_intervals.parquet
-            ├── race_control_messages.parquet
-            └── results.parquet
-```
-
-`current.json` is the sole reader visibility boundary. It names the generation,
-manifest path, format version, and SHA-256 of the exact manifest bytes. A
-generation is never selected merely because its directory exists.
-
-## Logical identity and byte integrity
-
-The manifest records two different hashes for every table:
-
-- **`logical_sha256`** hashes the versioned canonical encoding of table name,
-  exact schema, declared column order, row order, typed nulls, and values. It is
-  independent of Parquet metadata, compression, and page layout.
-- **`byte_sha256`** hashes the exact published Parquet file bytes. It detects
-  corruption or unexpected changes to the artifact itself.
-
-The native Polars writer uses the documented canonical settings (`use_pyarrow=False`,
-Zstandard compression level 3, full statistics, and fixed row/page sizes). Those
-settings improve repeatability but do **not** promise identical Parquet bytes
-across Polars/Arrow versions, operating systems, filesystems, or other writer
-environments. Compare logical hashes for canonical data identity; use byte hashes
-for artifact integrity.
-
-## Verification and recovery
-
-Publication stages all tables and the manifest under a uniquely prefixed staging
-directory, fsyncs files, validates the complete generation with the same
-validator used by readers, renames it into `generations/`, and atomically
-replaces `current.json` last. That replacement is the commit point. A failure
-before it leaves the previous valid pointer and published generation untouched.
-If replacement succeeds but the post-commit parent fsync fails, the writer
-raises a committed-but-durability-uncertain error whose result identifies the
-new selected generation; it does not claim the old pointer remains current.
-
-`resolve_published_canonical_generation()` rejects malformed pointers, path or
-generation mismatches, missing files, manifest checksum mismatches, invalid
-schemas/row counts, and logical or byte hash mismatches. For startup cleanup,
-import `recover_stale_staging` from
-`f1_replay_pipeline.storage.generation_publication`; it removes only directories whose
-names begin with the writer’s known `.canonical-parquet-staging-` prefix, then
-revalidates the current pointer. It never treats arbitrary directories as
-staging and never deletes a published generation; cleanup failures are reported.
-
-Recovery never selects a directory merely because it exists. Pointer topology,
-manifest digest, table presence, schema, row count, logical hash, and byte hash
-must pass the shared complete validator. Cleanup and lease-release failures are
-aggregated with the primary publication error, or reported as a cleanup error
-when publication itself succeeded.
-
-## Durability and filesystem limits
-
-Staging and the destination must share a filesystem: same-filesystem rename can
-otherwise fail with `EXDEV`. Directory fsync attempts are recorded for parent
-creation (when needed), `generations` creation, staging creation, staged or
-selected generation, `generations`, and the target parent after commit; each is
-reported as succeeded, unsupported, or failed. File and directory fsync provide
-best-effort crash durability, not replication, signing, authorization, or a
-database transaction. NFS can make rename/lock failures ambiguous; overlay and
-network filesystems can weaken visibility or persistence. A crash can leave
-staging residue, pointer temps, or an unselected complete generation. The
-contract guarantees only one atomic `current.json` replacement where the
-filesystem supports it—not multi-path transactionality.
-
-## Derive browser delivery
-
-Browser artifacts are a derived view of one **fully validated, resolved** canonical
-generation. `read_validated_canonical_generation()` resolves `current.json`, runs
-the complete pointer/manifest/schema/row-count/logical-hash/byte-hash validation,
-and only then reads the ten Parquet tables. A directory name is never enough to
-select a generation. The reader is read-only: it never mutates or republishes
-canonical Parquet.
-
-Canonical tables retain their source timestamps and native cadence. Browser
-alignment is a delivery policy, not canonical resampling. `build_browser_delivery()`
-uses one immutable validated snapshot and the sorted, unique union of native
-driver, weather, track-status, and race-control timestamps. Exact telemetry is
-never filled; interval and previous-value fields are evaluated explicitly.
-
-### Field and time semantics
-
-- `x`/`y` come from position telemetry and are converted from FastF1 raw
-  decimetres to metres, matching track assets. `speed`, `throttle`, `gear`, and
-  `drs` come from car telemetry; `brake` is `0`/`1` and preserves `null`.
-- `status` comes from position telemetry. `lap` and `tyreCompound` use the
-  containing half-open lap interval. Pit state is `true` only in a known pit
-  interval, `false` for a known non-pit interval, otherwise `null`.
-- `trackDistanceMeters`, `gapToLeaderMs`, and `position` are populated when
-  source quality supports them; otherwise they remain `null`.
-- Leaderboard order comes from classified results, track status from its active
-  interval, weather from the latest native observation, and race-control
-  messages remain sparse events. Missing values remain `null`.
-- At render time only continuous fields (`x`, `y`, `speed`, `throttle`, `brake`,
-  `gapToLeaderMs`) may be linearly interpolated between two valid authoritative
-  bounds for the same driver. Discrete, categorical, and boolean fields use
-  previous-value semantics. Sparse `BrowserEvent` records remain point events
-  and are never interpolated.
-
-### Chunks and ownership
-
-`build_browser_chunks()` emits exact observations without resampling or
-interpolating. Production defaults are 10,000 ms chunks with a 1,000 ms handoff
-overlap. Coverage is half-open, `[startMs, endMs)`: the first sample at or after
-`startMs` owns the chunk, and earlier samples are overlap-only references.
-`authoritative_start_index` identifies that first owned sample;
-`overlap.authoritative_from_ms` equals `startMs`. Events belong only to the
-authoritative chunk containing their timestamp. Consumers resolve duplicate
-timestamps using the owning chunk, not the overlap copy.
-
-### Deterministic publication
-
-`publish_browser_delivery()` accepts only a `BrowserDeliveryBuild` already bound
-to one immutable canonical snapshot. It validates all manifest/chunk identities,
-hashes, alignment, ownership, overlap, and event invariants against direct
-immutable contract objects with reusable local `jsonschema-rs` Draft 2020-12
-validators. Format validation is enabled, unknown formats are rejected, and no
-schema retriever is configured; Python `jsonschema` remains the differential test
-oracle. It serializes and
-hashes each artifact once, then verifies staged descriptor size and streaming
-SHA-256 against the prepared digest without a second full-file byte copy. It
-validates every artifact against a caller-supplied local v2 `schema_root`
-registry without remote retrieval. It then writes a version under:
-
-```text
-<browser_parent>/
-├── browser-current.json
-└── generations/<delivery-version>/
-    ├── manifest.json
-    ├── track-assets.json
-    └── chunks/chunk-001.json ...
-```
-
-Publication rejects symlinked roots, ancestors, and generation directories and
-uses descriptor-relative no-follow writes and cleanup. The complete staged
-delivery is validated before `browser-current.json` is atomically replaced;
-that replacement is the only browser visibility point.
-The manifest records the exact source generation ID and manifest digest plus
-artifact digests. Repeating the build with the same validated source and inputs
-produces the same bytes and names. This boundary never edits canonical
-`current.json`, mutates canonical tables, or copies/republishes canonical
-Parquet. It does not perform network, GUI, or FastF1 loading.
-
-### Minimal offline API example
-
-The canonical and track-asset paths below are supplied explicitly. The track
-asset file must validate against the replay-data v2 track-assets schema. No
-network, GUI, FastF1 loading, or automatic canonical selection is implied.
-
-```python
-from pathlib import Path
-
-from f1_replay_pipeline.delivery.browser.browser_delivery_orchestration import build_browser_delivery
-from f1_replay_pipeline.delivery.browser.browser_delivery_publication import publish_browser_delivery
-from f1_replay_pipeline.delivery.browser.browser_delivery_reader import read_validated_canonical_generation
-from f1_replay_pipeline.app.track_assets_generator import generate_track_assets
-
-canonical_parent = Path("artifacts/canonical")
-browser_parent = Path("artifacts/browser")
-snapshot = read_validated_canonical_generation(canonical_parent)
-track_assets = generate_track_assets(snapshot)
-delivery = build_browser_delivery(snapshot, track_assets)
-published = publish_browser_delivery(
-    browser_parent=browser_parent,
-    delivery_version="example-v2",
-    delivery=delivery,
-    schema_root=Path("../contracts/replay-data/v2/schemas"),
-)
-print(published.manifest_path)
-```
-
-### Generated track assets
-
-`generate_track_assets()` selects the shortest accurate, non-deleted, non-pit
-lap with usable position telemetry. Raw FastF1 `X/Y` decimetres are converted to
-metres, cleaned, closed, and arc-length resampled to 600 centerline points.
-Synthetic inner and outer boundaries use a fixed 20 m visual width; they are not
-surveyed asphalt limits. Missing or degenerate geometry fails closed. Rotation
-defaults to zero because it is cosmetic and absent from canonical Parquet.
-
-### Bahrain 2024 sizing baseline
-
-The real Bahrain race generation contains 72,015 exact union timestamps over
-9,372,932 ms (about 7.7 Hz average). Exact-union browser publication produced
-935 chunks, including overlap, and 79,218 delivered points. Measured output:
-
-- 126.48 MB raw JSON total;
-- 7.61 MB for individually gzip-compressed chunks;
-- median chunk: 135.1 KB raw / 10.5 KB gzip;
-- p95 chunk: 147.8 KB raw / 11.5 KB gzip;
-- maximum chunk: 159.9 KB raw / 12.1 KB gzip.
-
-The baseline therefore keeps exact native timestamps for the MVP. A regular
-5/10/20 Hz cadence would respectively create about 46,865 / 93,730 / 187,459
-samples and would change delivery semantics without a material need. CDN and
-HTTP servers should enable gzip or Brotli content encoding for chunk JSON.
+The pipeline is non-interactive and has no GUI or legacy desktop integration.
+Offline tests inject fake sessions, resolvers, and publishers; they do not rely
+on remote FastF1 responses. See [testing guidance](../docs/Testing.md) and the
+[replay data contract](../docs/replay-data-contract.md) for adjacent contracts.

@@ -1,10 +1,10 @@
 # Canonical pipeline schema and policies
 
-This was the original Phase 1 foundation boundary for native-cadence tables produced from
-FastF1. It is separate from the [Phase 0 browser chunk
+This document defines the active v2 Phase 1 foundation boundary for native-cadence
+tables produced from FastF1. It is separate from the [Phase 0 browser chunk
 contract](replay-data-contract.md): canonical tables preserve source rows;
 browser chunks align data for delivery and may support render-time
-interpolation.
+interpolation. The v2 contract is the only supported canonical delivery target.
 
 ## Adapter boundary and FastF1 sources
 
@@ -37,10 +37,10 @@ The implemented in-memory adapters map these sources to the canonical tables:
 | `race_control_messages` | `Session.race_control_messages` | `adapt_race_control_messages` |
 | `results` | `Session.results` | `adapt_results` |
 
-Each adapter returns an in-memory typed Polars frame. At the time this
-foundation was written, it did not implement output writing. The current
-canonical output contract is [ADR-002](adr/002-canonical-parquet-writer.md) and
-the normative [canonical Parquet writer contract](canonical-parquet-writer-contract.md).
+Each adapter returns an in-memory typed Polars frame. The canonical output
+contract is [ADR-002](adr/002-canonical-parquet-writer.md) and the normative
+[canonical Parquet writer contract](canonical-parquet-writer-contract.md); both
+publish and validate the v2 generation format.
 
 ### Offline testing seam
 
@@ -53,8 +53,8 @@ with different timestamps to verify that their native streams stay independent.
 
 The boundary excludes the `legacy/src/` application, network-backed CI and
 network-loading tests, Parquet writing, checksum/logical-hash manifests,
-browser chunks, and CLI orchestration. Telemetry performance optimization is
-also deferred to a later PR; this phase prioritizes native-row correctness.
+browser chunks, and CLI orchestration. Telemetry performance optimization
+remains outside this foundation's scope; native-row correctness is the priority.
 
 ## Time policy
 
@@ -128,12 +128,14 @@ same time, null, identifier, ordering, and determinism policies.
 One row describes the loaded session. Its canonical key is `session_id`; a
 normalizer must reject zero or multiple rows for that key. The ordered schema
 is `session_id:String`, `year:Int16`, `round_number:Int16`, `event_name:String`,
-`session_name:String`, `session_type:String`, and
+`session_name:String`, `session_type:String`, `session_mode:String`, and
 `session_start_time_utc:Datetime(ms, UTC)`. `session_type` is the normalized
 session mode: `practice`, `qualifying`, `race`, `sprint`,
 `sprint-qualifying`, `sprint-shootout`, or `testing`. FastF1 aliases `FP1`/`FP2`/
 `FP3` map to `practice`; the session identity retains the practice number so
-those sessions do not collide. Only `session_id` is required;
+those sessions do not collide. `session_mode` carries the same normalized value
+as the explicit v2 mode identity used by generation validation and browser
+gating. Only `session_id` is required;
 all descriptive fields are nullable. Row order is `session_id` ascending.
 Testing events preserve `round_number = 0`; select them through FastF1's
 testing-event/session APIs rather than ordinary round lookup.
@@ -175,9 +177,11 @@ are `(session_id, driver_id, lap_number)`. The ordered schema is
 `deleted_reason:String`, `sector_1_duration_ms:Int64`,
 `sector_2_duration_ms:Int64`, `sector_3_duration_ms:Int64`,
 `sector_1_session_time_ms:Int64`, `sector_2_session_time_ms:Int64`, and
-`sector_3_session_time_ms:Int64`. The identity fields, `lap_number`, and
+`sector_3_session_time_ms:Int64`, `qualifying_phase:String`. The identity fields, `lap_number`, and
 `lap_start_time_ms` are required; all other fields are nullable. Duplicate
 keys are rejected because timing-lap rows are not measurement alternatives.
+`qualifying_phase` is `Q1`, `Q2`, or `Q3` for qualifying-like v2 sessions and
+null otherwise; it is assigned from the authoritative FastF1 phase partitions.
 
 #### Sector timing columns (v2.1)
 
@@ -415,7 +419,9 @@ current-race observations).
   provenance URLs, and the rule that derived/proxy statuses require a
   derivation while direct statuses forbid one. Discounts are not bounded by
   the legacy 5-10 s window; provenance justifies every value outside it.
-- **Compatibility.** Canonical tables, browser chunks, legacy `pitLossModel`,
-  and legacy `track-status-median-v1` sidecars remain unchanged and readable.
-  Current-race gap-difference estimates are diagnostic-only and never become
-  production values.
+- **V2 method identity.** `track-status-median-v1` is a method identifier inside
+  the v2 pit-loss estimate artifact, not a v1 replay-contract identity. It does
+  not authorize v1 artifacts, readers, or mixed-version payloads. Canonical
+  Parquet is never rewritten for this browser-delivery artifact. Current-race
+  gap-difference estimates are diagnostic-only and never become production
+  values.

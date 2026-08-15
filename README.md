@@ -1,81 +1,118 @@
 # F1 Race Replay
 
-This repository contains the modern browser replay and canonical data pipeline,
-alongside the preserved desktop application migrated from upstream.
+F1 Race Replay combines a modern browser replay application with a deterministic
+FastF1 data pipeline. The preserved Python desktop application remains available
+as a separate, historical workflow.
 
-## Repository layout
+**Live app:** [f1racereplay.app](https://f1racereplay.app/)
 
-- [`web/`](web/) — TypeScript browser replay and replay UI.
-- [`pipeline/`](pipeline/) — packaged canonical FastF1-to-replay pipeline.
-- [`contracts/`](contracts/) — versioned replay-data schemas and fixtures.
-- [`docs/`](docs/) — modern architecture, contract, and delivery documentation.
-- [`legacy/`](legacy/) — the upstream Python desktop application, its assets,
-  dependencies, documentation, and tests.
+![F1 Race Replay locked and unlocked layouts](docs/assets/f1-race-replay-preview.webp)
 
-### Modern source layout
+<p align="center"><sub>F1 Race Replay Workspace - Custom layouts with lockable and unlockable panels.</sub></p>
 
-- `pipeline/src/f1_replay_pipeline/app/` — CLI, orchestration, batch generation,
-  and track-asset generation.
-- `pipeline/src/f1_replay_pipeline/domain/` — canonical schemas, validation,
-  normalization, manifests, and generation identity.
-- `pipeline/src/f1_replay_pipeline/adapters/fastf1/` — FastF1 loading and
-  source-data adapters.
-- `pipeline/src/f1_replay_pipeline/storage/` — Parquet I/O, canonical writing,
-  validation, and publication.
-- `pipeline/src/f1_replay_pipeline/delivery/browser/` — browser manifests,
-  chunks, publication, reading, and delivery services.
-- `pipeline/src/f1_replay_pipeline/analysis/live_position/` — live-position
-  progress, quality, projection, ranking, and calibration.
-- `web/src/app/` — application shell and bootstrap.
-- `web/src/data/replay/` — replay artifact loading and validation.
-- `web/src/engine/replay/` — replay clock, sampling, cache, events, and state.
-- `web/src/features/replay/` — playback controls, workspace, panels, and
-  feature state.
+## What is here
 
-Pipeline and web tests mirror these boundaries beneath `pipeline/tests/` and
-`web/tests/`.
+- **Web replay** - browse published sessions with playback, telemetry,
+  leaderboard, track, tyre, and session-specific panels.
+- **Canonical pipeline** - normalize FastF1 sessions into validated,
+  native-cadence tables, then derive browser delivery artifacts.
+- **Replay contracts** - versioned schemas, offline fixtures, loaders, and
+  validation for the browser boundary.
+- **Preserved desktop app** - the legacy Arcade application and its tests;
+  it is not a migration or compatibility path for the browser replay.
 
-## Setup and validation
+## Prerequisites
+- Node.js `>=22.12.0` for the web package (CI uses Node 24)
+- npm
 
-The supported Python matrix is 3.11–3.13. Python installs consume the committed
-pip-tools constraints artifacts (`pipeline/constraints.txt` and
-`legacy/constraints.txt`), which are intentionally committed generated
-reproducibility artifacts pinning the resolved dependency set for the lowest
-supported matrix member (Python 3.11); the canonical install, test, and
-constraint regeneration commands are in [`docs/Testing.md`](docs/Testing.md).
+Create the project environment and install the modern pipeline from the
+repository root:
 
-- Modern Python checks and test commands: [`docs/Testing.md`](docs/Testing.md).
-- Production browser-delivery publication:
-  [`docs/r2-production-publishing.md`](docs/r2-production-publishing.md).
-- Legacy desktop setup and usage: [`legacy/README.md`](legacy/README.md).
-- Launch the legacy application from the repository root with:
-  `.venv/bin/python legacy/main.py`.
-- Install the pipeline from [`pipeline/`](pipeline/) and use its README for
-  canonical generation commands.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --constraint pipeline/constraints.txt pipeline/
+```
 
-v2 is the sole supported browser/replay delivery contract; canonical Parquet
-remains unchanged and is never rewritten at the delivery boundary.
+## Run the full workflow locally
 
-The lightweight modern suite is offline and covers `tests/contracts` and
-`pipeline/tests`. Legacy tests are run separately with
-`.venv/bin/python -m pytest legacy/tests`.
+From the repository root, generate the canonical and browser artifacts together
+with the local season catalog:
 
-## FastF1 2026 compatibility
+```bash
+.venv/bin/f1-replay-pipeline generate --year 2026 --round 3 --session R
+```
 
-The modern pipeline requires `fastf1>=3.8.1,<3.9`. FastF1 3.8.1 is the first
-supported release that tolerates the missing raw DRS channel in 2026 timing
-data; FastF1 3.8.3 still exposes `DRS`, but its 2026 values are all zero for
-backward compatibility. Those zeros are not measured DRS-Off samples.
+Then start the web application:
 
-F1 does not publish Overtake Mode, active-aero, or ERS replacement telemetry to
-FastF1. The canonical and browser `drs` field is therefore retained for
-pre-2026 data and schema compatibility, but no factual `overtakeMode` channel
-is synthesized. Browser manifests may optionally include `seasonMetadata` and
-`telemetryCapabilities`; for 2026, the relevant capabilities should be marked
-`not-published`. The UI should say that DRS/Overtake Mode telemetry is
-unavailable or not published, rather than displaying `DRS: Off`. Older
-manifests without this metadata remain readable with their existing behavior.
+```bash
+cd web
+npm ci
+npm run dev
+```
+That's it, you are good to go.
 
-Sources: [FastF1 documentation](https://docs.fastf1.dev/), [FastF1 3.8.1
-release](https://github.com/theOehrly/Fast-F1/releases/tag/v3.8.1), and the
-maintainer's [2026 telemetry discussion](https://github.com/theOehrly/Fast-F1/discussions/861).
+No replay-data
+configuration is required for local development: `generate` writes to
+`artifacts/seasons/<year>/` by default, and Vite exposes that directory through
+its `/@fs/.../artifacts/seasons/` URL. Set `VITE_REPLAY_SEASONS_BASE_URL` only
+when the artifacts are hosted elsewhere, such as object storage, a CDN, or a
+custom server:
+
+```bash
+VITE_REPLAY_SEASONS_BASE_URL=https://data.example.test/seasons/ npm run dev
+```
+
+For production, `web/.env.production` configures the frontend to load season
+data from `https://data.f1racereplay.app/seasons/`, backed by Cloudflare R2.
+
+## Architecture
+
+![F1 Race Replay architecture workflow](docs/assets/architecture-workflow-v2.svg)
+
+### Repository structure
+
+```text
+.
+├── web/                         # Vite + React replay application
+├── pipeline/                    # FastF1 ingestion and replay-data generation
+├── contracts/replay-data/v2/   # Active browser contract, schemas, and fixtures
+├── docs/                        # Architecture, runtime, testing, and operations
+├── tests/contracts/             # Cross-boundary replay contract tests
+├── artifacts/                   # Generated local data; not committed
+│   └── seasons/<year>/
+│       ├── canonical/           # Private canonical Parquet generations
+│       ├── browser/             # Derived browser-delivery-v2 artifacts
+│       └── catalog.json         # Season catalog loaded by the web app
+└── legacy/                      # Preserved historical desktop application
+```
+
+## Known limitations
+
+- Position, gap, finish, and pit-loss quality depends on available telemetry and
+  leader history; calibration remains provisional pending a multi-circuit corpus.
+- Missing optional evidence is unavailable, not inferred. Non-race sessions do
+  not expose race-order, gap, finish, DNF, or pit-loss claims.
+- F1 does not publish 2026 Overtake Mode, active-aero, or ERS-replacement
+  telemetry to FastF1; the UI must not present unavailable DRS-related data as
+  measured `DRS: Off`.
+
+## Documentation map
+
+- [Web setup and replay flow](web/README.md)
+- [Pipeline installation and commands](pipeline/README.md)
+- [Active replay-data v2 contract](docs/replay-data-contract.md)
+- [Browser boundary and publication invariants](docs/browser-delivery-interface-freeze.md)
+- [Browser runtime semantics](docs/browser-replay-engine-runtime-semantics.md)
+- [Canonical schema](docs/canonical-pipeline-schema.md) · [Parquet writer contract](docs/canonical-parquet-writer-contract.md)
+- [Testing and CI commands](docs/Testing.md)
+- [R2 production publishing](docs/r2-production-publishing.md)
+- [Generated state and repository hygiene](docs/repository-hygiene.md)
+- [Preserved legacy desktop application](legacy/README.md)
+
+## License
+
+Original F1 Race Replay project code outside `legacy/` is available under the
+[MIT License](LICENSE). Preserved material under `legacy/` is excluded from that
+grant pending verified upstream rights; see [legacy/UPSTREAM.md](legacy/UPSTREAM.md)
+for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
+dependency notices.
