@@ -43,6 +43,11 @@ _NON_TIMED_LAP_DELETED_ADVISORY = re.compile(
     r"\s*-\s+.+?\bLAP\s+[0-9]+\b.+\Z",
     re.IGNORECASE,
 )
+_NON_TIMED_DOUBLE_YELLOW_ADVISORY = re.compile(
+    r"\A\s*CAR\s*#?\s*[0-9]+(?:\s*\([A-Za-z]{3}\))?\s+LAP\s+DELETED\b"
+    r"\s*-\s+DOUBLE\s+YELLOW\s+AT\s+TURN\s+[0-9]+\s*\Z",
+    re.IGNORECASE,
+)
 _STATUS_WORD = re.compile(r"\b(?:DELETED|REINSTATED)\b", re.IGNORECASE)
 _TIME_WORD = re.compile(r"\bTIME\b", re.IGNORECASE)
 _MESSAGE_KEYS = ("message", "Message", "raw_message", "rawMessage")
@@ -184,7 +189,10 @@ def _parse_record(
 def _is_non_timed_lap_deleted_advisory(message: str) -> bool:
     """Identify FastF1's non-timed ``LAP DELETED`` notification form only."""
     return (
-        _NON_TIMED_LAP_DELETED_ADVISORY.fullmatch(message) is not None
+        (
+            _NON_TIMED_LAP_DELETED_ADVISORY.fullmatch(message) is not None
+            or _NON_TIMED_DOUBLE_YELLOW_ADVISORY.fullmatch(message) is not None
+        )
         and len(_STATUS_WORD.findall(message)) == 1
         and _TIME_WORD.search(message) is None
     )
