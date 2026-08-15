@@ -5,6 +5,10 @@
 - **Scope:** Phase 1 canonical-data pipeline
 - **Related:** [ADR-001](001-canonical-pipeline-foundation.md)
 
+This is the accepted v2-only publication boundary for canonical Parquet. It
+does not alter the browser replay contract or provide a compatibility path for
+older canonical generations.
+
 ## Context
 
 ADR-001 defines the ten native-cadence canonical tables and deliberately leaves
@@ -79,10 +83,11 @@ making readers observe a partially written set.
 
 ## Reconciliation with ADR-001
 
-This ADR implements the serialization and publication policies explicitly
+This ADR implements the serialization and publication policies originally
 deferred by ADR-001. It preserves ADR-001's schema, column order, normalized
 nulls, native cadence, row order, and separation from Phase 0 browser chunks.
-It does not alter ADR-001 or reuse the Phase 0 browser manifest schema.
+It resolves those historical deferrals without altering ADR-001 and does not
+reuse the Phase 0 browser manifest schema.
 
 ## References
 

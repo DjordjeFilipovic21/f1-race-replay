@@ -1,20 +1,17 @@
 # Canonical Parquet writer contract
 
-This is the normative v2 contract for writing the ten validated canonical
+This is the normative v2-only contract for writing the ten validated canonical
 tables from [ADR-001](adr/001-canonical-pipeline-foundation.md). It is separate
-from the Phase 0 browser manifest and browser chunks.
-
-The v1 canonical contract (`canonical-parquet-v1`) is a deprecated historical
-reference: the active writer publishes only v2 generations, and active readers
-reject v1 pointers and manifests.
+from the Phase 0 browser manifest and browser chunks. No v1 publication, reader
+fallback, or mixed-version generation is supported.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative.
 
 ## 1. Input boundary
 
 The writer MUST receive a mapping of these tables, each as an already validated
-Polars `DataFrame`, with the exact schema, column order, null policy, and row
-order defined by the canonical schema:
+Polars `DataFrame`, with the exact active-v2 schema, column order, null policy,
+and row order defined by the canonical schema:
 
 ```text
 session_metadata, drivers, car_telemetry, position_telemetry, laps,

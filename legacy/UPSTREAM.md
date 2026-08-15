@@ -1,5 +1,14 @@
 # Legacy upstream workflow
 
+> **Status:** Explicitly maintained legacy workflow for updating the preserved
+> desktop source only. It is not a browser-replay migration mechanism and must
+> not be used to classify or overwrite modern browser, pipeline, or contract
+> files.
+>
+> **Source and date qualification:** Upstream identity comes from the source
+> repository URL below. This workflow was reviewed on 2026-08-15; verify the
+> remote and branch before every update.
+
 The desktop application in this directory is based on the upstream project:
 
 <https://github.com/IAmTomShaw/f1-race-replay>

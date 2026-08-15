@@ -20,7 +20,7 @@ Describe how you tested the change.
 
 Example command:
 
-    python -m pytest
+    .venv/bin/python -m pytest tests/contracts pipeline/tests
 
 ## Checklist
 

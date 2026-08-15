@@ -1,6 +1,15 @@
 # Contributors
 
-This project started with my own efforts, but it's feature list has grown thanks to the contributions of others. I want to make sure to acknowledge those who have helped improve and expand this project over time.
+> **Status:** Historical acknowledgements for the preserved legacy desktop
+> application. They do not describe current browser-replay ownership or a
+> current contribution policy.
+>
+> **Source and date qualification:** This list is retained from the original
+> repository documentation; contribution dates were not recorded. It was
+> reviewed on 2026-08-15.
+
+This project started with the original author's efforts, and the legacy desktop
+feature set also reflects the contributions listed below.
 
 Thanks to the people who have helped build this project:
 

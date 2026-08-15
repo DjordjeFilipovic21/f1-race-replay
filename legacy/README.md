@@ -3,11 +3,16 @@
 > This is the preserved legacy desktop application. See the repository root
 > [`README.md`](../README.md) for the modern browser replay and data pipeline.
 
+> **Scope:** This page documents preserved desktop behavior and its historical
+> Python workflow. It is not the current browser replay implementation or a
+> supported migration path. Use the repository root documentation for current
+> development.
+
 A Python application for visualizing Formula 1 race telemetry and replaying race events with interactive controls and a graphical interface.
 
 ![Race Replay Preview](./resources/preview.png)
 
-> **HUGE NEWS:** The telemetry stream feature is now in a usable state. See the [telemetry demo documentation](./telemetry.md) for access instructions, data format details, and usage ideas.
+The legacy telemetry stream is documented in the [telemetry demo guide](./telemetry.md).
 
 ## Features
 
@@ -71,9 +76,11 @@ The SC position computation happens in `_compute_safety_car_positions()` in `src
 
 > **Note:** If you have existing cached `.pkl` files from previous runs, you must re-run with `--refresh-data` to generate SC position data. Older cached files will simply show no Safety Car.
 
-## Qualifying Session Support (in development)
+## Qualifying Session Support (legacy)
 
-Recently added support for Qualifying session replays with telemetry visualization including speed, gear, throttle, and brake over the lap distance. This feature is still being refined.
+The preserved desktop application includes Qualifying session replay and
+telemetry visualization. This documentation does not describe the current
+browser replay.
 
 ## Requirements
 
@@ -82,27 +89,12 @@ Recently added support for Qualifying session replays with telemetry visualizati
 - [Arcade](https://api.arcade.academy/en/latest/)
 - numpy
 
-## Replay Data Contract (Phase 0)
+## Current replay documentation
 
-Phase 0 added committed replay contract artifacts under
-`../contracts/replay-data/v1/`. These v1 fixtures are **frozen historical
-reference material only**: they document the Phase 0 contract history and are
-not loaded by any runtime reader. There are no v1 runtime readers, fallbacks,
-adapters, publishers, or mixed-version payloads; the active browser/replay
-data contract is v2 (see
-[`../docs/replay-data-contract.md`](../docs/replay-data-contract.md)). Contract
-tests reference the frozen v1 fixture read-only to assert that v1
-identities are rejected.
-
-- `fixtures/deterministic-race/manifest.json`
-- `fixtures/deterministic-race/track-assets.json`
-- `fixtures/deterministic-race/chunks/chunk-001.json`
-- `fixtures/deterministic-race/chunks/chunk-002.json`
-- `fixtures/deterministic-race/golden-snapshots.json`
-
-See [`../docs/replay-data-contract.md`](../docs/replay-data-contract.md) for the exact timing, interpolation, and
-boundary semantics. These artifacts document the contract history; they do not
-imply any runtime replay behavior change.
+The browser replay uses the V2 contract described in
+[`../docs/replay-data-contract.md`](../docs/replay-data-contract.md). The
+desktop application documented here is preserved separately and is not a
+reader, adapter, publisher, or migration mechanism for that browser path.
 
 Install dependencies with the committed pip-tools constraints artifact:
 ```bash
@@ -130,7 +122,7 @@ root):
 `legacy/requirements*.txt`.
 
 FastF1 cache folder will be created automatically on first run. If it is not created, you can manually create a folder named `.fastf1-cache` in the `legacy/` directory.
-> **First Run Notice:** Loading a session for the first time may take noticeably longer because telemetry data must be downloaded, processed, and cached locally. Subsequent launches of the same session are significantly faster..
+> **First Run Notice:** Loading a session for the first time may take noticeably longer because telemetry data must be downloaded, processed, and cached locally. Subsequent launches of the same session are significantly faster.
 
 ## Environment Setup
 
@@ -177,7 +169,8 @@ directory instead, use `python main.py` in place of
 
 ![GUI Menu Preview](./resources/gui-menu.png)
 
-This will open a graphical interface where you can select the year and round of the race weekend you want to replay. This is still a new feature, so please report any issues you encounter.
+This opens a graphical interface for selecting the year and round of a race
+weekend in the preserved desktop workflow.
 
 **OPTIONAL CLI MENU:** To use the CLI menu system, you can simply run:
 ```bash
@@ -292,7 +285,7 @@ If you would like to contribute, feel free to:
 - Open pull requests for UI improvements or new features.
 - Report issues on GitHub.
 
-Please see [roadmap.md](./roadmap.md) for planned features and project vision.
+See [roadmap.md](./roadmap.md) for the historical project vision and roadmap.
 
 # Known Issues
 
@@ -307,9 +300,11 @@ $ conda install -c conda-forge libstdcxx-ng
 Thanks to @el-mandaloriano for showing how to resolve this issue: #12
 - The leaderboard appears to be inaccurate for the first few corners of the race. The leaderboard is also temporarily affected by a driver going in the pits. At the end of the race, the leaderboard is sometimes affected by the drivers' final x,y positions being further ahead than other drivers. These are known issues caused by inaccuracies in the telemetry and are being worked on for future releases. It's likely that these issues will be fixed in stages as improving the leaderboard accuracy is a complex task.
 
-## 📝 License
+## Licensing
 
-This project is licensed under the MIT License.
+The root [MIT License](../LICENSE) excludes preserved legacy material. Its
+provenance is documented in [`UPSTREAM.md`](UPSTREAM.md); this page does not
+assert an upstream license or rights for that material.
 
 ## ⚠️ Disclaimer
 

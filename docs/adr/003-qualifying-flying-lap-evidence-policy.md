@@ -77,26 +77,24 @@ timestamps (`laps_stints.py`) — but no lap-type column exists.
    driver progressing to Q2/Q3 still receives finish for their last flying lap
    in Q1/Q2 respectively.
 
-6. **Keep canonical Parquet unchanged and delivery backward-compatible.**
+6. **Keep canonical Parquet unchanged and make the v2 delivery field optional.**
    Optional delivery fields/artifacts (for example `lapKind` arrays in the
-   lap/sector sidecar) are backward-compatible: old deliveries without the
-   field remain valid and loadable, strict parsers allow its absence, and
-   absent or unknown evidence is never treated as flying. The field is aligned
-   so a missing value means "not flying", never a guess.
+   lap/sector sidecar) preserve the existing v2 delivery shape: deliveries
+   without the field remain valid and loadable, strict parsers allow its
+   absence, and absent or unknown evidence is never treated as flying. The
+   field is aligned so a missing value means "not flying", never a guess.
 
 ## Rationale
 
 - FastF1's parser is the authoritative source for lap purpose, and its own
   definition is pit-based: "if `PitInTime` is not NaT the lap is an inlap;
-  if `PitOutTime` is not NaT the lap is an outlap" ([FastF1 laps-row-fields
-  evidence](../.tmp/external-context/fastf1/laps-row-fields.md)). There is no
-  cooldown concept anywhere in the library, so pit evidence is the only
-  truth-preserving excluder.
+  if `PitOutTime` is not NaT the lap is an outlap" (FastF1 3.8.3 source
+  evidence). There is no cooldown concept anywhere in the library, so pit
+  evidence is the only truth-preserving excluder.
 - `IsAccurate` already bundles the integrity gates we need — no pit signals,
   no `FastF1Generated`, green/yellow track status, all sector times present,
   sector sum ≈ `LapTime` within 3 ms, and lap-to-lap time delta consistency
-  ([FastF1 flying-vs-outlap-detection
-  evidence](../.tmp/external-context/fastf1/flying-vs-outlap-detection.md)).
+  (FastF1 3.8.3 source evidence).
   Requiring it plus non-null `LapTime` and non-deleted is exactly FastF1's own
   qualifying-results recipe.
 - The parser ignores `LastLapTime` values ≥ 150 s between Q phases, so very
@@ -109,10 +107,9 @@ timestamps (`laps_stints.py`) — but no lap-type column exists.
   fabricated.
 - `split_qualifying_sessions()` partitions by `LapStartTime` and only
   re-assigns boundary-crossing laps to the next phase when they carry a
-  `PitOutTime` ([FastF1 split-qualifying-sessions
-  evidence](../.tmp/external-context/fastf1/split-qualifying-sessions.md)),
-  which is why phase-local finish must be computed from laps already assigned
-  to that phase rather than from session-row order.
+  `PitOutTime` (FastF1 3.8.3 source evidence), which is why phase-local finish
+  must be computed from laps already assigned to that phase rather than from
+  session-row order.
 - The existing v2 sidecar already exposes `qualifyingPhase` per lap and
   top-level `phaseBoundaries`, so phase locality is available today; the gap is
   a truthful `lapKind`, which this ADR grounds in canonical fields the adapter
@@ -133,8 +130,8 @@ timestamps (`laps_stints.py`) — but no lap-type column exists.
   phase has completed shows finish even while Q-time remains, and a subsequent
   cooldown/pit-in lap cannot displace the displayed qualifying time.
 - The lap/sector sidecar model, JSON Schema, guards, types, and loader need
-  optional, backward-compatible `lapKind` support; canonical Parquet, v1
-  baseline, and core v2 chunks remain untouched.
+  optional `lapKind` support; canonical Parquet and core v2 chunks remain
+  untouched.
 - Delivering without `lapKind` remains valid; consumers must treat absence as
   non-flying (fail-closed), never as a signal that every lap is flying.
 
@@ -162,13 +159,18 @@ timestamps (`laps_stints.py`) — but no lap-type column exists.
   mode gating already rejects that artifact for qualifying-like modes. The
   qualifying-safe `qualifyingTimeline` artifact (yellow/red `intervals` plus
   visibility-only `race-control-car-event` `incidentMarkers`) is a separate,
-  backward-compatible surface specified in the [replay data
+  optional v2 surface specified in the [replay data
   contract](../replay-data-contract.md#optional-qualifying-timeline-and-incident-markers)
   and the [runtime semantics](../browser-replay-engine-runtime-semantics.md);
   this ADR governs flying-lap evidence only, and incident markers never change
   classification.
 
-## Implementation/validation implications
+## Historical implementation/validation implications
+
+> **Historical planning note (implementation complete):** The following
+> bullets preserve the pre-implementation plan for provenance. Their imperative
+> language and approval blocker are no longer current instructions. The
+> decision above is unchanged.
 
 - **Pipeline.** Derive `lapKind` per driver/lap in the lap/sector sidecar
   builder (`delivery/browser/browser_lap_sector_sidecar.py`) from canonical
@@ -190,21 +192,27 @@ timestamps (`laps_stints.py`) — but no lap-type column exists.
   `flying` laps in the active phase with causal `lapEndMs <= replayTimeMs`.
   Update `QualifyingLiveLapPhase` to `'flying' | 'outlap' | 'inlap' |
   'unknown'`.
-- **Validation.** Run the qualifying selector/panel test suite, web typecheck,
-  web test, and web build as listed in the session bundle, plus pipeline
-  contract tests and the task-cli dependency check for downstream subtask 05.
-  If validation fails, stop and report rather than auto-fixing.
+- **Validation.** Qualifying selector/panel tests, web typecheck, web tests,
+  web build, and pipeline contract tests should cover this policy. If
+  validation fails, stop and report rather than auto-fixing.
 - **Approval needed to unblock implementation.** Downstream tasks adopt this
   fail-closed policy as-is: no classifier beyond the documented deterministic
   rules may be invented for non-pit cooldown laps, and any new qualifying
-  timeline/incident artifact must remain backward-compatible and separate from
+  timeline/incident artifact must remain optional within v2 and separate from
   race DNF semantics.
+
+## Current implementation status
+
+As of 2026-08-15, the policy is implemented. The pipeline derives the aligned
+optional `lapKind` column for qualifying-like deliveries, the v2 model/schema
+and browser guards serialize and validate it, and the web selectors use it for
+causal flying-lap timing and finish state. Qualifying-like sidecars without the
+column fail closed; the legacy sector-completion fallback remains only for
+non-qualifying sidecars. Pipeline and web tests cover derivation, alignment,
+serialization, parsing, and selector behavior. No approval blocker remains.
 
 ## References
 
-- [FastF1 laps-row-fields evidence](../.tmp/external-context/fastf1/laps-row-fields.md)
-- [FastF1 flying-vs-outlap-detection evidence](../.tmp/external-context/fastf1/flying-vs-outlap-detection.md)
-- [FastF1 split-qualifying-sessions evidence](../.tmp/external-context/fastf1/split-qualifying-sessions.md)
 - [Replay data contract](../replay-data-contract.md)
 - [Replay data contract — Optional qualifying timeline and incident markers](../replay-data-contract.md#optional-qualifying-timeline-and-incident-markers)
 - [Browser replay-engine runtime semantics](../browser-replay-engine-runtime-semantics.md)

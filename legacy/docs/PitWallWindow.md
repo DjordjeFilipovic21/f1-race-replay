@@ -1,5 +1,9 @@
 # PitWallWindow Developer Guide
 
+> **Scope:** Preserved legacy desktop developer workflow. This guide applies to
+> the PySide6 desktop telemetry windows only; it is not the current browser
+> replay API or a supported migration path.
+
 ## Overview
 
 `PitWallWindow` is a base class that simplifies creating custom telemetry-enabled windows in the F1 Race Replay project. It handles all the complexity of connecting to the telemetry stream, allowing developers to focus solely on building their window's functionality.

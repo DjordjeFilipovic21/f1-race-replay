@@ -1,133 +1,73 @@
 # Live-position projection calibration and generation quality gate
 
-**Status:** implemented in the production browser-delivery pipeline and selected
-for the Bahrain v4 derived generation. The calibration thresholds remain
-provisional pending a representative multi-circuit corpus. Canonical rows remain
-unchanged; projection, quality assessment, ranking, and gaps are browser-derived.
+**Implementation status (2026-08-15):** The browser-delivery pipeline contains
+the `projection-quality-gate-v1` and `geometric-wrap-v1` policies. They are
+versioned algorithm identifiers, not replay-contract versions. Canonical rows
+remain unchanged; projection, quality assessment, ranking, and gaps are
+browser-delivery fields.
+
+**Evidence status (2026-08-15):** This checkout does not contain the historical
+Bahrain input or browser track-asset files referenced by the offline calibration
+spike. Consequently, the numeric Bahrain measurements and delivery statistics
+previously recorded in this document are not treated as verified evidence or as
+production calibration facts. The thresholds below describe the implemented
+policy; they are still provisional until independently measured on a
+representative multi-circuit corpus.
 
 ## Per-generation process
 
-Every generated race, regardless of circuit, uses the same
-`projection-quality-gate-v1` process:
+Every generated race uses the same quality-gate process:
 
 1. Select one deterministic source lap: the shortest accurate, non-deleted,
    non-pit lap with at least four finite native position points, ordered by
-   duration, driver, lap number, and start time. Generate the existing track
-   asset centerline from that lap.
-2. Exclude that source lap from all quality metrics. It is necessarily
-   self-referential, not independent evidence.
-3. Project a deterministic bounded sample from every other accurate,
-   non-deleted, non-pit lap onto that centerline. Convert FastF1 decimetres to
-   metres once, order by native session timestamp, and exclude null/non-finite
-   coordinates and later duplicate timestamps. Retain every valid point when a
-   lap has 32 or fewer; otherwise retain exactly 32 evenly stratified points at
-   indices `floor(i * (n - 1) / 31)`, for `i = 0..31`. This includes both valid
-   endpoints and preserves timestamp order. No telemetry merge, resampling, or
-   interpolation is used.
+   duration, driver, lap number, and start time. Generate the track centerline
+   from that lap.
+2. Exclude that source lap from all quality metrics because it is
+   self-referential rather than independent evidence.
+3. Project a bounded sample from every other accurate, non-deleted, non-pit lap
+   onto the centerline. Convert FastF1 decimetres to metres once, retain native
+   session order, discard null/non-finite coordinates, and remove later duplicate
+   timestamps. Retain every valid point for laps with 32 or fewer points;
+   otherwise retain exactly 32 endpoint-inclusive stratified points using
+   `floor(i * (n - 1) / 31)` for `i = 0..31`. There is no telemetry merge,
+   resampling, or interpolation.
 4. Require at least 20 independent laps and 500 independent samples. Calculate
    nearest-segment residual p95 and maximum, then apply the versioned
-   `geometric-wrap-v1` per-timing-lap continuity analysis. Pit laps are measured
-   in a separate population and never enter clean-track thresholds.
-5. Publish derived fields only when all evidence gates pass. Insufficient or
-   poor evidence fails closed: `trackDistanceMeters`, race progress, position,
-   leaderboard order, and gap remain `null`/unpublished rather than guessed.
+   `geometric-wrap-v1` continuity analysis per timing lap. Pit laps are measured
+   separately and do not enter clean-track thresholds.
+5. Publish derived fields only when every evidence gate passes. Insufficient or
+   poor evidence fails closed: track distance, race progress, leaderboard order,
+   and gaps remain null or unpublished rather than guessed.
 
-This runs automatically for every generation; no circuit-specific source edit
-or manual code change is required. A changed layout receives a new `trackId`
-and a fresh gate result. Thresholds are versioned global algorithm policy, not
-Bahrain constants. They remain provisional until a representative multi-circuit
-corpus covers wet conditions, pit layouts, close parallel geometry, and
-grade-separated crossings.
+This is a per-generation gate; it does not require a circuit-specific source
+edit. A changed layout receives a new `trackId` and a fresh result. The global
+thresholds remain provisional until a multi-circuit corpus covers wet
+conditions, pit layouts, close parallel geometry, and grade-separated crossings.
 
-## Bahrain 2024 evidence and reproduction
+## Evidence and reproduction
 
-Inputs are the validated local canonical generation
-`artifacts/demo-bahrain-2024` and the existing immutable browser track asset
-`artifacts/browser-bahrain-cli/generations/2024-bahrain-race-cli-v2/track-assets.json`.
-The deterministic source is VER lap 39, whose official duration is 92,608 ms.
-Its 32-point sampled self-fit yields p95 residual **0.301 m** and maximum
-**0.502 m**. Those values prove only that the generated centerline reproduces
-its own input; they are explicitly excluded from the gate.
+The repository test at
+`pipeline/tests/analysis/live_position/test_live_position_calibration.py` is an
+offline calibration spike, not production projection code. In the current
+checkout its registered test covers the synthetic wrap, ambiguity, stale
+fallback, and sampling contract. Its artifact-backed measurement helper expects
+these local inputs, which are absent here:
 
-The pre-unwrap discovery run took about 48 seconds and measured 1,004 holdout
-laps / 32,128 samples, holdout p95 **0.445 m**, maximum **5.291 m**, and 851
-raw projected backward transitions over 200 m. It separately measured 2,752
-pit-affected samples (p95 **15.386 m**, maximum **16.582 m**). Those raw
-backward transitions are approximately one centerline-origin crossing per
-timing lap: timing-lap boundaries and geometric centerline zero differ by a few
-native samples. The corrected unwrap accepted all **851** geometric wraps,
-found **0** laps with invalid or multiple wraps, and left **0** backward jumps
-over 200 m after unwrapping.
+```text
+artifacts/demo-bahrain-2024
+artifacts/browser-bahrain-cli/generations/2024-bahrain-race-cli-v2/track-assets.json
+```
 
-The checked-in offline test indexes position rows by driver once, then uses
-timestamp binary-search bounds for each lap. It computes and asserts the
-independent Bahrain holdout selection count, bounded sample count, residual
-p95/max, backward-jump count, and separate pit-affected-lap population. Run it
-with output enabled to record the exact values from these repository inputs:
+Run the registered synthetic contract with:
 
 ```bash
 .venv/bin/python -m pytest -s pipeline/tests/analysis/live_position/test_live_position_calibration.py
 ```
 
-It skips only the artifact-backed case, with an explicit reason, if these local
-artifacts are not checked out; its synthetic wrap/ambiguity/staleness contract
-test always runs and needs no network. The test validates the canonical pointer
-and manifest before reading tables. Clean and pit-affected laps use the same
-32-point cap and endpoint-inclusive stratification after per-lap timestamp
-de-duplication. Clean sampled points are pooled for p95, which is the sorted
-value at `round((n - 1) * 0.95)`. Bounding each lap keeps analysis runtime
-predictable for future races while retaining coverage across every included lap.
-
-Pit-lap rows are deliberately reported separately. Their larger residuals are
-expected because the centerline represents the racing circuit rather than pit
-road. A pit residual must not itself demote a driver; later ranking logic must
-retain explicit pit/status semantics independently of this geometry gate.
-
-## Timing and distance provenance
-
-Official lap timing is timing truth for selecting and checking laps, not spatial
-ground truth. FastF1 `Distance` is speed/time integration and is also not
-measured ground truth. This spike does not use an integrated-distance comparator
-for fitting, validation, or X/Y projection.
-
-## Published Bahrain derived-delivery evidence
-
-The selected local browser pointer now resolves to the immutable generation
-`2024-bahrain-race-cli-v4-derived`, built from canonical generation
-`2024-bahrain-race`:
-
-```text
-artifacts/browser-bahrain-cli/
-├── browser-current.json
-└── generations/2024-bahrain-race-cli-v4-derived/
-```
-
-Reproduction uses the project virtual environment explicitly:
-
-```bash
-.venv/bin/python -m f1_replay_pipeline browser \
-  --canonical artifacts/demo-bahrain-2024 \
-  --output artifacts/browser-bahrain-cli \
-  --delivery-version 2024-bahrain-race-cli-v4-derived \
-  --schema-root contracts/replay-data/v2/schemas
-```
-
-The production quality gate passed the same 1,004 independent laps and 32,128
-samples recorded above. The delivery contains 575 chunks and 44,747
-authoritative timestamps over `[3,599,911, 9,374,320)`. Across 894,940
-authoritative driver cells, position and track distance are available for
-865,370 cells (96.70%); a dynamic leaderboard is available at 43,709 timestamps
-(97.68%). Validation found 361 order changes, zero position/order disagreements,
-and zero non-zero leader gaps. Remaining nulls are the intended fail-closed
-result of unavailable, stale, pit, or terminal source state.
-
-The selected manifest SHA-256 is
-`3a89b32849b1361bbb52f5ae86a86677b4e9eba1d3d3f7af69972361f00b2c96`.
-Chunk plus track-asset payloads total 100.53 MB as raw JSON and 18.18 MB with
-per-file gzip. A pre-publication profile reduced the first 2,000-timestamp
-derived pass from 76.4 seconds to 6.1 seconds by indexing centerline segments
-once and using a batch ranking history; this is a performance implementation
-change only and does not alter the approved projection, ranking, or gap rules.
+This command does not establish Bahrain measurements or production readiness
+without the missing inputs and an explicitly executed artifact-backed
+measurement. Do not copy historical metric values into a production claim
+without recording the input paths, run date, and output.
 
 ## Provisional global policy (`projection-quality-gate-v1`)
 
@@ -140,71 +80,63 @@ change only and does not alter the approved projection, ranking, or gap rules.
 | Laps with invalid/multiple geometric wraps | 0 | Fail closed. |
 | Implausible backward jump after geometric unwrap | 0 over 200 m | Fail closed. |
 | Ambiguous candidate residual difference | <= 5 m | Require continuity; otherwise unknown. |
-| Accepted-coordinate freshness | < 1,000 ms | Freeze last valid progress; at 1,000 ms return `null`. |
+| Accepted-coordinate freshness | < 1,000 ms | Freeze last valid progress; at 1,000 ms return null. |
 
-The residual limits are conservative relative to the observed self-fit only and
-must be confirmed or revised from independent holdouts across the future
-multi-circuit corpus. They are separate from the per-generation pass/fail
-result: a generation with too little evidence never passes merely because it
-does not exceed a residual limit.
+Residual limits are policy values, not Bahrain constants. They must be confirmed
+or revised from independent holdouts across the multi-circuit corpus. A
+generation with too little evidence does not pass merely because it stays below
+a residual limit.
 
 ### Geometric wrap policy (`geometric-wrap-v1`)
 
-The test reads `circuitLengthMeters` from the validated track-assets payload;
-it does not recompute a conflicting length from the centerline. A raw projected
-decrease is an accepted geometric wrap only when all three ratio-based checks
-pass: the preceding projection is in the final **10%** of that asset length
-(`>= 0.90 * length`), the following projection is in the initial **10%**
-(`<= 0.10 * length`), and the decrease is at least **80%** of the length
-(`>= 0.80 * length`). It then adds exactly one asset circuit length to all
-following samples in that timing lap. Ratios, rather than Bahrain metre values,
-make this policy portable across layouts.
+Read `circuitLengthMeters` from the validated track-assets payload; do not
+recompute a conflicting length from the centerline. A raw projected decrease is
+an accepted geometric wrap only when the preceding projection is in the final
+10% of that length, the following projection is in the initial 10%, and the
+decrease is at least 80% of the length. Add exactly one asset circuit length to
+following samples in that timing lap. Ratios make this portable across layouts.
 
 At most one accepted geometric wrap is allowed per timing lap. A backward jump
-over 200 m outside those regions, a decrease that fails any ratio check, or a
-second otherwise-valid wrap marks that timing lap invalid. The gate fails
-closed if any such lap exists or if any backward jump over 200 m remains after
-unwrapping. This continuity rule does not require simultaneous official
-lap-number advancement because a timing-lap boundary and centerline origin can
-be several native samples apart. Future circuits therefore receive the same
-asset-length-based gate and fail closed rather than silently accepting an
-unfamiliar discontinuity.
+over 200 m outside those regions, a decrease that fails a ratio check, or a
+second otherwise-valid wrap invalidates that lap. The gate fails closed if any
+such lap exists or if any backward jump over 200 m remains after unwrapping.
+Timing-lap boundaries and the geometric centerline origin may differ by several
+native samples, so official lap-number advancement is not itself the unwrap
+trigger.
 
 At a self-intersection or nearby parallel segment, candidates within 5 m
 residual require continuity with the prior accepted progress; without it the
-result is unknown. Invalid means null/non-finite coordinates, no acceptable
-candidate, or unresolved ambiguity. Invalid coordinates freeze the last derived
-progress only inside the freshness limit; stale coordinates become `null`.
-Retired/out state remains explicit future status logic and cannot turn stale
-geometry into a live observation.
+result is unknown. Invalid coordinates freeze the last derived progress only
+inside the freshness limit; stale coordinates become null. Retired or out state
+remains explicit status logic and cannot turn stale geometry into a live
+observation.
 
-### Live ranking epoch and asynchronous timing streams
+## Live ranking semantics
 
 Browser ranking does not add a circuit length when the official lap counter
-changes. FastF1 lap and position streams can reach the same browser timestamp in
-either order, so doing that would temporarily advance a driver by a full lap
-and the monotonic progress guard would preserve the false lead. Instead, live
-progress unwraps projected distance at a deterministic ranking cut half a
-circuit from the visual start/finish. That cut is deliberately independent of
-the official timing line and works identically for clockwise and
-counter-clockwise centerlines.
+changes. Lap and position streams can reach the same browser timestamp in either
+order. Live progress instead unwraps projected distance at a deterministic
+ranking cut half a circuit from the visual start/finish, independent of the
+official timing line and valid for either direction of travel.
 
-All grid starters are seeded into one shared cut-crossing epoch at the first
-synchronized frame. A driver first observed from the pit lane is assigned one
-of the two lap-compatible cut epochs by choosing the candidate nearest to the
-established field's median progress; pit starts therefore do not receive a
-fabricated circuit. Official lap changes remain validation evidence, while the
-projected geometric cut is the sole source of live spatial unwrapping.
+All grid starters share one cut-crossing epoch at the first synchronized frame.
+A driver first observed from the pit lane receives the lap-compatible cut epoch
+nearest the established field's median progress; no circuit is fabricated.
+Official lap changes remain validation evidence, while the projected geometric
+cut supplies live spatial unwrapping. The cut affects only derived progress and
+leaderboard order; published track distance, geometry, and start/finish
+coordinates retain their visual coordinate system.
 
-The ranking cut affects only derived race progress and leaderboard order.
-Published `trackDistanceMeters`, track geometry, and start/finish coordinates
-retain their original visual coordinate system. Per-event display rotation is
-also presentation-only and cannot affect progress or ranking.
+Ranking progress is monotonic. Finished and pit modes freeze progress rather
+than receiving an artificial penalty, and null progress is omitted. Ties resolve
+by prior order and then driver ID. Gap values use the leader's equivalent-
+progress history, not a constant-speed heuristic; insufficient history yields
+null.
 
 ## Limitations
 
-The test helper is intentionally scoped to this calibration spike and is not a
-production projection module. Nearest-segment residual is geometry consistency,
-not surveyed position truth. The current one-race evidence cannot validate all
-layouts or racing conditions, and passing the gate does not establish ranking or
-gap correctness.
+The calibration test helper is intentionally scoped to this offline spike and
+is not a production projection module. Nearest-segment residual measures
+geometry consistency, not surveyed position truth. The currently available
+repository evidence cannot validate all layouts or racing conditions, and a
+passing gate alone does not establish ranking or gap correctness.

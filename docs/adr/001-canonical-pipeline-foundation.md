@@ -4,6 +4,11 @@
 - **Date:** 2026-07-14
 - **Scope:** Phase 1 canonical-data pipeline
 
+This ADR records the accepted normalization and schema foundation. Its original
+artifact deferrals were resolved by [ADR-002](002-canonical-parquet-writer.md)
+and the [canonical Parquet writer contract](../canonical-parquet-writer-contract.md).
+The active implementation and publication target is v2.
+
 ## Context
 
 Phase 0 defines browser-oriented JSON chunks: one shared timeline, aligned
@@ -53,9 +58,10 @@ introduce resampling and interpolated values.
    available as source provenance.
 7. **Separate logical and byte determinism.** This foundation fixes the schema,
    column order, row order, and scalar normalization needed for deterministic
-   logical table content. It deliberately defers the logical hash encoding and
-   implementation to the writer PR, and does not promise identical Parquet file
-   bytes across writer versions or environments.
+   logical table content. It deliberately leaves the logical hash encoding to
+   the writer boundary in [ADR-002](002-canonical-parquet-writer.md), and does
+   not promise identical Parquet file bytes across writer versions or
+   environments.
 8. **Keep loading separate from adaptation.** Adapters are I/O-free: they
    consume an injected, already-loaded FastF1-compatible session. An injected
    factory passed to `load_session` performs the one session creation/load and
@@ -69,16 +75,16 @@ introduce resampling and interpolated values.
 - The canonical tables may have different row counts and timestamp sets.
 - Consumers must handle nulls and must choose any later alignment or
   interpolation policy explicitly.
-- The writer PR will define and test deterministic logical hashes before it
-  publishes artifacts.
+- [ADR-002](002-canonical-parquet-writer.md) defines deterministic logical
+  hashes and publication of the validated artifacts.
 - Browser chunks remain a derived delivery format; they are not canonical
   tables and must not be used to redefine source cadence.
 - FastF1 `car_data` and `pos_data` remain separate native streams. They are not
   joined, resampled, or interpolated by this foundation.
 
-## Deferred to the next PR
+## Historical scope exclusions resolved by ADR-002
 
-This foundation does **not** implement or promise:
+This foundation intentionally did not define or implement:
 
 - Parquet writing settings, including codec, row groups, metadata, or writer
   implementation;
@@ -86,14 +92,16 @@ This foundation does **not** implement or promise:
 - a checksum manifest or byte-level Parquet hashes.
 - logical hash scalar/null encoding, hash algorithm, or implementation.
 - telemetry performance optimization; preserving correctness and native rows
-  takes priority, and performance work is deferred to a later PR.
+  takes priority, and performance work remains outside this ADR's scope.
 
-The next writer PR will define those artifact, transport, and logical-hash
-policies. Its byte hashes must not be confused with logical-table identity.
+Those artifact, transport, and logical-hash policies are now defined by
+ADR-002 and the writer contract. Their byte hashes must not be confused with
+logical-table identity.
 
 ## References
 
 - [Canonical pipeline schema and policies](../canonical-pipeline-schema.md)
+- [Canonical Parquet writer contract](../canonical-parquet-writer-contract.md)
 - [Phase 0 replay data contract](../replay-data-contract.md)
 - FastF1 compatibility target: `fastf1>=3.8.1,<3.9`
 - Polars compatibility target: `polars>=1.40,<2`

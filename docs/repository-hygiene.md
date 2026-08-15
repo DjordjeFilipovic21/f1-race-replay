@@ -28,6 +28,20 @@ The `.gitignore` file is the executable expression of the ownership rules below.
 If a path is not listed here, the ignore rules, not this document, are
 authoritative.
 
+The ignore file also excludes the following local state; these paths are not
+repository inputs and must not be added to commits:
+
+| Path | Purpose |
+| --- | --- |
+| `__pycache__/`, `*.py[cod]`, `*.egg-info/` | Python interpreter and package-build state |
+| `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/` | Python test, type-check, and lint caches |
+| `.codegraph/`, `.tmp/` | Local code index, session, and task-management state |
+| `.DS_Store`, `.idea/`, `.vscode/` | OS and IDE metadata |
+
+There is no separate repository-hygiene CI job. The Python and web workflows
+provide the current automated checks; review `.gitignore` whenever a new
+generated path, cache, or local tool is introduced.
+
 ---
 
 ## 1. Committed reference material (never delete)
