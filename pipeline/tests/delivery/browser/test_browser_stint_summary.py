@@ -1014,8 +1014,10 @@ class TestBuildStintSummary:
         assert ham.pit_in_time_ms == (None,)
         assert ham.pit_out_time_ms == (None,)
 
-    def test_brazil_shaped_multiple_pit_outs_and_pit_in_publish_null_pair(self) -> None:
-        """✅ Brazil 2024 ALB-shaped cross-phase candidates remain fail-closed."""
+    def test_brazil_shaped_multiple_pit_outs_preserve_unique_pit_in(self) -> None:
+        """✅ Brazil 2024 ALB-shaped candidates preserve unique pit-in and
+        null ambiguous pit-out."""
+        # Arrange: one unique pit-in is accompanied by two distinct pit-outs.
         snapshot = self._snapshot_with_stints(
             stint_rows=[self._stint_row("ALB", 5, start_lap_number=1, end_lap_number=22)],
             lap_rows=[
@@ -1026,10 +1028,31 @@ class TestBuildStintSummary:
             driver_ids=("ALB",),
         )
 
+        # Act
         alb = build_stint_summary(snapshot).drivers["ALB"]
 
-        assert alb.pit_in_time_ms == (None,)
+        # Assert: the unique transition survives; only ambiguous pit-out is null.
+        assert alb.pit_in_time_ms == (4_295_963,)
         assert alb.pit_out_time_ms == (None,)
+
+    def test_ambiguous_pit_ins_preserve_unique_pit_out(self) -> None:
+        """✅ Multiple distinct pit-ins preserve a unique pit-out only."""
+        # Arrange: two distinct pit-ins accompany one unique pit-out.
+        snapshot = self._snapshot_with_stints(
+            stint_rows=[self._stint_row("HAM", 1, start_lap_number=1, end_lap_number=22)],
+            lap_rows=[
+                self._lap_row("HAM", 18, stint_number=1, pit_in_time_ms=3_000_000),
+                self._lap_row("HAM", 20, stint_number=1, pit_in_time_ms=3_500_000),
+                self._lap_row("HAM", 21, stint_number=1, pit_out_time_ms=3_908_442),
+            ],
+        )
+
+        # Act
+        ham = build_stint_summary(snapshot).drivers["HAM"]
+
+        # Assert: only the ambiguous pit-in is null.
+        assert ham.pit_in_time_ms == (None,)
+        assert ham.pit_out_time_ms == (3_908_442,)
 
     def test_duplicate_identical_pit_candidates_collapse_to_unique_pair(self) -> None:
         """✅ Repeated identical timestamps are one deterministic candidate."""

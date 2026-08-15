@@ -116,14 +116,17 @@ def _map_pit_events(
         if pit_out_time_ms is not None:
             pit_out_candidates.add(pit_out_time_ms)
     return {
-        key: (None, None)
-        if len(pit_in_candidates) > 1 or len(pit_out_candidates) > 1
-        else (
-            next(iter(pit_in_candidates), None),
-            next(iter(pit_out_candidates), None),
+        key: (
+            _unique_pit_time(pit_in_candidates),
+            _unique_pit_time(pit_out_candidates),
         )
         for key, (pit_in_candidates, pit_out_candidates) in candidates.items()
     }
+
+
+def _unique_pit_time(candidates: set[int]) -> int | None:
+    """Return a timestamp only when that field has one unambiguous candidate."""
+    return next(iter(candidates), None) if len(candidates) <= 1 else None
 
 
 def _pit_time(value: object, label: str) -> int | None:

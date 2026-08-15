@@ -697,7 +697,10 @@ def test_non_race_browser_delivery_uses_native_boundary_without_race_artifacts(
     assert delivery.pit_loss_model is None
     assert delivery.manifest.lap_starts == ()
     assert delivery.lap_sector_sidecar is not None
-    assert delivery.stint_summary is not None
+    if session_mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}:
+        assert delivery.stint_summary is None
+    else:
+        assert delivery.stint_summary is not None
 
     published_browser = publish_browser_delivery(
         browser_parent=tmp_path / "browser-v2",
@@ -711,10 +714,16 @@ def test_non_race_browser_delivery_uses_native_boundary_without_race_artifacts(
     assert "timelineSummary" not in manifest
     assert "pitLossModel" not in manifest
     assert manifest["lapSectorSidecar"]["schemaId"].endswith(":v2:browser-lap-sector-sidecar")
-    assert manifest["stintSummary"]["schemaId"].endswith(":v2:stint-summary")
     if session_mode in {"qualifying", "sprint-qualifying", "sprint-shootout"}:
+        assert "stintSummary" not in manifest
+        assert "stintSummary" not in manifest["schemas"]
+        assert published_browser.stint_summary_path is None
+        assert not (published_browser.generation_path / "stint-summary.json").exists()
         assert manifest["qualifyingSummary"]["schemaId"].endswith(":v2:qualifying-summary")
     else:
+        assert manifest["stintSummary"]["schemaId"].endswith(":v2:stint-summary")
+        assert published_browser.stint_summary_path is not None
+        assert published_browser.stint_summary_path.exists()
         assert "qualifyingSummary" not in manifest
     # Assert: every v2 reference is safe, digest-bound, and every chunk column aligns.
     assert manifest["trackAssets"]["path"] == "track-assets.json"
@@ -795,8 +804,13 @@ def test_race_like_browser_delivery_keeps_race_semantics_without_qualifying_arti
     assert delivery.chunks[0].leaderboard_order[0] == ("HAM", "RUS")
     assert delivery.manifest.lap_starts != ()
     assert delivery.timeline_summary is not None
+    assert delivery.stint_summary is not None
     manifest = _load_json(published.manifest_path)
     assert manifest["sessionMode"] == session_mode
+    assert manifest["stintSummary"]["path"] == "stint-summary.json"
+    assert manifest["schemas"]["stintSummary"].endswith(":v2:stint-summary")
+    assert published.stint_summary_path is not None
+    assert published.stint_summary_path.exists()
     assert manifest["penaltySidecar"]["path"] == "penalty-sidecar.json"
     assert "qualifyingSummary" not in manifest
     assert "qualifyingLapStatus" not in manifest
@@ -888,6 +902,11 @@ def test_qualifying_summary_publishes_q1_q2_q3_and_best_lap_data(tmp_path: Path)
     # Assert: the summary carries aligned segment and best-lap columns in order.
     manifest = _load_json(published.manifest_path)
     qualifying = _load_json(published.qualifying_summary_path)
+    assert delivery.stint_summary is None
+    assert "stintSummary" not in manifest
+    assert "stintSummary" not in manifest["schemas"]
+    assert published.stint_summary_path is None
+    assert not (published.generation_path / "stint-summary.json").exists()
     assert manifest["qualifyingSummary"]["path"] == "qualifying-summary.json"
     assert manifest["qualifyingSummary"]["schemaId"].endswith(":v2:qualifying-summary")
     assert qualifying["drivers"]["HAM"] == {

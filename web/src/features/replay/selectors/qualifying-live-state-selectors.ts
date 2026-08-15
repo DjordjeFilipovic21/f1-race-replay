@@ -184,12 +184,12 @@ function selectQualifyingPhaseModel(
 
   for (const phase of completedPhases) {
     const phaseParticipants = driverIds.filter((id) => !eliminated.has(id))
-    const completionBoundary = selectQualifyingPhaseCompletionBoundary(sidecar, phase, replayEndMs)
-    const phaseEvidenceByDriver = completionBoundary === null
+    const phaseEvidenceBoundary = selectQualifyingPhaseCompletionBoundary(sidecar, phase, replayEndMs)
+    const phaseEvidenceByDriver = phaseEvidenceBoundary === sessionTimeMs
       ? evidenceByDriver
       : new Map(driverIds.map((id) => [
         id,
-        selectCausalEvidence(sidecar, qualifyingLapStatus, id, completionBoundary),
+        selectCausalEvidence(sidecar, qualifyingLapStatus, id, phaseEvidenceBoundary),
       ]))
     const result = rankPhaseDrivers(phaseParticipants, phase, phaseEvidenceByDriver, summary, true)
     for (const id of phaseParticipants) {
@@ -198,7 +198,9 @@ function selectQualifyingPhaseModel(
       phaseTimesByDriver.set(id, driverTimes)
     }
     const advancingCount = phase === 'Q1' ? q1AdvancerLimit(driverIds.length) : phase === 'Q2' ? Math.min(Q2_ADVANCER_LIMIT, phaseParticipants.length) : phaseParticipants.length
-    const phaseEliminated = phase === 'Q3' ? result.rankedIds.filter((id) => !hasPhaseTime(result.times.get(id))) : result.rankedIds.slice(advancingCount)
+    const phaseEliminated = phase === 'Q3'
+      ? result.rankedIds.filter((id) => !hasPhaseTime(result.times.get(id)))
+      : result.rankedIds.slice(advancingCount)
     setTimedPositions(positions, result)
     for (const id of phaseEliminated) {
       eliminated.add(id)
@@ -284,6 +286,7 @@ function phaseTime(
 ): number | null {
   const causal = selectFastestCausalLapDuration(evidence, phase)
   if (causal !== null || !allowSummaryFallback) return causal
+  if (evidence.some((lap) => lap.qualifyingPhase === phase)) return null
   const columns = summary?.drivers[driverId]
   if (columns === undefined) return null
   if (phase === 'Q1') return readFinite(columns.q1TimeMs[0])
@@ -305,8 +308,19 @@ function selectQualifyingPhaseCompletionBoundary(
   const boundaryIndex = sidecar.phaseBoundaries.findIndex((boundary) => boundary.phase === phase)
   if (boundaryIndex < 0) return null
   const nextBoundary = sidecar.phaseBoundaries[boundaryIndex + 1]
-  if (nextBoundary !== undefined) return nextBoundary.startMs
-  return phase === 'Q3' && replayEndMs !== null && replayEndMs !== undefined && Number.isFinite(replayEndMs) ? replayEndMs : null
+  if (nextBoundary === undefined) {
+    return phase === 'Q3' && replayEndMs !== null && replayEndMs !== undefined && Number.isFinite(replayEndMs) ? replayEndMs : null
+  }
+  return Math.max(nextBoundary.startMs, selectLatestPhaseLapEndMs(sidecar, phase) ?? nextBoundary.startMs)
+}
+
+function selectLatestPhaseLapEndMs(sidecar: LapSectorSidecar, phase: QualifyingPhase): number | null {
+  return Object.values(sidecar.drivers).reduce<number | null>((latest, columns) => (
+    columns.lapEndMs.reduce<number | null>((driverLatest, lapEndMs, index) => {
+      if (columns.qualifyingPhase[index] !== phase || typeof lapEndMs !== 'number' || !Number.isFinite(lapEndMs)) return driverLatest
+      return driverLatest === null ? lapEndMs : Math.max(driverLatest, lapEndMs)
+    }, latest)
+  ), null)
 }
 
 function collectDriverIds(driverId: string, driverIds: readonly string[] | undefined, summary: QualifyingSummary | null | undefined, sidecar: LapSectorSidecar | null | undefined): readonly string[] {
