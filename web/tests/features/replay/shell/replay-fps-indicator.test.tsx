@@ -10,7 +10,7 @@ afterEach(cleanup)
 
 test('reports controller update cadence while playing and resets when paused', () => {
   let frameAt = 0
-  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: true, replay: null, crossedEvents: [], error: null }
+  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: true, committedSeekRevision: 0, replay: null, crossedEvents: [], error: null }
   const listeners = new Set<() => void>()
   const controller: ReplayController = {
     getSnapshot: () => snapshot,
@@ -37,7 +37,7 @@ test('reports controller update cadence while playing and resets when paused', (
 
 test('does not count the play transition as a rendered frame', () => {
   let frameAt = 0
-  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, replay: null, crossedEvents: [], error: null }
+  let snapshot: ReplayControllerSnapshot = { status: 'ready', timeMs: 0, speed: 1, isPlaying: false, committedSeekRevision: 0, replay: null, crossedEvents: [], error: null }
   const listeners = new Set<() => void>()
   const controller: ReplayController = {
     getSnapshot: () => snapshot,

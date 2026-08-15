@@ -1,4 +1,5 @@
-export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'weather' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy' | 'pit-loss-position'
+export type ReplayPanelId = 'player' | 'track-map' | 'leaderboard' | 'race-control' | 'weather' | 'driver' | 'telemetry' | 'lap-analysis' | 'strategy' | 'pit-loss-position' | 'local-video'
+export const LOCAL_VIDEO_PANEL_ID: ReplayPanelId = 'local-video'
 
 const DESKTOP_WORKSPACE_COLUMNS = 4
 
@@ -13,6 +14,7 @@ const REPLAY_PANEL_COLUMNS: Readonly<Record<ReplayPanelId, 1 | 2>> = {
   'lap-analysis': 1,
   strategy: 2,
   'pit-loss-position': 1,
+  'local-video': 2,
 }
 
 const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
@@ -26,6 +28,7 @@ const REPLAY_PANEL_DEFAULT_COLUMNS: Readonly<Record<ReplayPanelId, number>> = {
   'lap-analysis': 4,
   strategy: 2,
   'pit-loss-position': 4,
+  'local-video': 2,
 }
 
 export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Object.freeze([
@@ -39,10 +42,11 @@ export const REPLAY_PANEL_DEFAULT_LAYOUT: readonly ReplayPanelLayoutItem[] = Obj
   { id: 'telemetry', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.telemetry },
   { id: 'strategy', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS.strategy },
   { id: 'pit-loss-position', pinned: true, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['pit-loss-position'] },
+  { id: LOCAL_VIDEO_PANEL_ID, pinned: false, desktopColumnStart: REPLAY_PANEL_DEFAULT_COLUMNS['local-video'] },
 ])
 
 export function isReplayPanelId(value: unknown): value is ReplayPanelId {
-  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'weather' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy' || value === 'pit-loss-position'
+  return value === 'player' || value === 'track-map' || value === 'leaderboard' || value === 'race-control' || value === 'weather' || value === 'driver' || value === 'telemetry' || value === 'lap-analysis' || value === 'strategy' || value === 'pit-loss-position' || value === LOCAL_VIDEO_PANEL_ID
 }
 
 export interface ReplayPanelLayoutItem {

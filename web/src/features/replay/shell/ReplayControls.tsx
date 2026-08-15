@@ -11,10 +11,13 @@ import { RaceControlPanel, RACE_CONTROL_MESSAGE_DURATION_MS, RACE_CONTROL_MESSAG
 import { WeatherPanel } from '../panels/WeatherPanel'
 import { LiveTyreStrategyPanel } from '../panels/LiveTyreStrategyPanel'
 import { LivePitLossPositionPanel } from '../panels/LivePitLossPositionPanel'
+import { LocalVideoPanel } from '../local-video/LocalVideoPanel'
+import type { LocalVideoReplayIdentity } from '../local-video/local-video-persistence'
 import { selectLapSectorData } from '../selectors/lap-sector-selectors'
 import { selectSectorColours } from '../selectors/sector-colour-selectors'
 import { PlaybackControls } from '../playback/PlaybackControls'
 import { ReplayWorkspace, type ReplayWorkspacePanel } from '../workspace/ReplayWorkspace'
+import { LOCAL_VIDEO_PANEL_ID } from '../workspace/replay-panel-layout'
 import { ReplayHeaderMetrics } from './ReplayHeaderMetrics'
 
 export { parseElapsedParts } from '../playback/ExactTimeEditor'
@@ -40,10 +43,12 @@ export interface ReplayControlsProps {
   readonly qualifyingLapStatus?: QualifyingLapStatusSidecar
   readonly qualifyingTimeline?: QualifyingTimeline
   readonly weatherSidecar?: WeatherSidecar | null
+  /** Stable browser-only identity used for local-video alignment preferences. */
+  readonly replayIdentity?: LocalVideoReplayIdentity
 }
 
 /** A presentational adapter over the controller's cached external store. */
-export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, pitLossEstimateSidecar, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar }: ReplayControlsProps) {
+export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts, seasonMetadata, telemetryCapabilities, timelineSummary, trackAssets, lapSectorSidecar, stintSummary, pitLossModel, pitLossEstimateSidecar, penaltySidecar, sessionMode = 'race', qualifyingSummary, qualifyingLapStatus, qualifyingTimeline, weatherSidecar, replayIdentity }: ReplayControlsProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [seekPreviewMs, setSeekPreviewMs] = useState<number | null>(null)
   const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0)
@@ -72,6 +77,10 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
     [lapSectorSidecar, qualifyingStatusForSelectors, snapshot.timeMs, selectedDriverId],
   )
   const totalLaps = useMemo(() => deriveTotalLaps(lapStarts), [lapStarts])
+  const localVideoPanels: readonly ReplayWorkspacePanel[] = replayIdentity === undefined ? [] : [{
+    id: LOCAL_VIDEO_PANEL_ID, label: 'Local video', columns: 2,
+    element: <LocalVideoPanel controller={controller} endMs={endMs} replayIdentity={replayIdentity} startMs={startMs} />,
+  }]
 
   useEffect(() => {
     const previousTimeMs = raceControlTimeRef.current
@@ -105,7 +114,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isSpaceKey(event) || event.repeat || isEditableTarget(event.target) || snapshot.status !== 'ready') return
+      if (!isSpaceKey(event) || event.repeat || isNativeInteractiveTarget(event.target) || snapshot.status !== 'ready') return
       event.preventDefault()
       if (snapshot.isPlaying) controller.pause()
       else controller.start()
@@ -166,6 +175,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
         id: 'lap-analysis', label: 'Lap analysis', columns: 1,
         element: <LapAnalysisPanel drivers={drivers} selectedDriverId={selectedDriverId} lapSector={lapSectorSelection} sectorColours={sectorColourSelection} />,
       },
+      ...localVideoPanels,
     ]
 
     const modePanels: ReplayWorkspacePanel[] = sessionCapabilities.isRaceLike
@@ -205,7 +215,7 @@ export function ReplayControls({ controller, startMs, endMs, drivers, lapStarts,
           element: <LiveLeaderboardPanel controller={controller} drivers={drivers} refreshKey={leaderboardRefreshKey} selectedDriverId={selectedDriverId} onDriverSelect={setExplicitSelectedDriverId} lapSectorSidecar={lapSectorSidecar} sessionMode={sessionMode} replayEndMs={endMs} qualifyingSummary={qualifyingSummary} qualifyingLapStatus={qualifyingLapStatus} />,
       },
     ]
-  }, [activeRaceControlMessage, commitSeek, controller, currentLap, displayedTimeMs, drivers, durationMs, elapsedMs, handleSeekPreview, isReady, isRaceControlMessageExiting, lapSectorSelection, lapSectorSidecar, lapStarts, leaderboardRefreshKey, penaltySidecar, pitLossEstimateSidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, seasonMetadata, sectorColourSelection, sessionCapabilities, sessionMode, snapshot, startMs, seek, stintSummary, telemetryCapabilities, timelineSummary, totalLaps, trackAssets, weatherSidecar])
+  }, [activeRaceControlMessage, commitSeek, controller, currentLap, displayedTimeMs, drivers, durationMs, elapsedMs, handleSeekPreview, isReady, isRaceControlMessageExiting, lapSectorSelection, lapSectorSidecar, lapStarts, leaderboardRefreshKey, localVideoPanels, penaltySidecar, pitLossEstimateSidecar, pitLossModel, qualifyingLapStatus, qualifyingSummary, qualifyingTimeline, replayIdentity, seasonMetadata, sectorColourSelection, sessionCapabilities, sessionMode, snapshot, startMs, seek, stintSummary, telemetryCapabilities, timelineSummary, totalLaps, trackAssets, weatherSidecar])
 
   return (
     <section className="replay-panel" aria-labelledby="replay-panel-title">
@@ -236,8 +246,10 @@ function isSpaceKey(event: KeyboardEvent): boolean {
   return event.key === ' ' || event.code === 'Space'
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')
+function isNativeInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  if (target instanceof HTMLElement && target.isContentEditable) return true
+  return target.closest('button, a[href], input, textarea, select, video, [contenteditable]:not([contenteditable="false"])') !== null
 }
 
 export function selectDriverId(explicitSelectedDriverId: string | null, replay: ReturnType<ReplayController['getSnapshot']>['replay'], drivers: readonly DriverMetadata[], sessionMode: SessionMode = 'race', _qualifyingSummary?: QualifyingSummary): string | null {

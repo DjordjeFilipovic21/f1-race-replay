@@ -42,7 +42,7 @@ function createController(snapshot: ReplayControllerSnapshot) {
 }
 
 const readySnapshot: ReplayControllerSnapshot = {
-  status: 'ready', timeMs: 1500, speed: 1, isPlaying: false, crossedEvents: [], error: null,
+  status: 'ready', timeMs: 1500, speed: 1, isPlaying: false, committedSeekRevision: 0, crossedEvents: [], error: null,
   replay: { sessionTimeMs: 1500, leaderboardOrder: null, trackStatusCode: null, weatherState: null, events: [], drivers: { VER: { x: null, y: null, trackDistanceMeters: null, speed: 246.4, throttle: null, brake: null, gapToLeaderMs: null, lap: null, position: 1, gear: 7, drs: null, tyreCompound: null, status: null, isInPitLane: null } } },
 }
 
@@ -177,22 +177,24 @@ test('renders qualifying phase markers without fabricating flags or incidents wh
   expect(screen.getByLabelText('Q1 boundary at 0:00:00.000')).toBeTruthy()
 })
 
-test('toggles replay playback with Space outside editable controls', () => {
+test('toggles replay playback with Space only for noninteractive page targets', () => {
   const { controller, setSnapshot } = createController(readySnapshot)
-  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} />)
+  render(<><ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} /><button type="button" aria-label="native button">Native button</button><video aria-label="test video" /></>)
 
-  fireEvent.keyDown(window, { code: 'Space', key: ' ' })
+  fireEvent.keyDown(document.body, { code: 'Space', key: ' ' })
   expect(controller.start).toHaveBeenCalledOnce()
 
   act(() => setSnapshot({ ...readySnapshot, isPlaying: true }))
-  fireEvent.keyDown(window, { code: 'Space', key: ' ' })
+  fireEvent.keyDown(document.body, { code: 'Space', key: ' ' })
   expect(controller.pause).toHaveBeenCalledOnce()
 
-  fireEvent.keyDown(screen.getByRole('button', { name: 'Edit current lap' }), { code: 'Space', key: ' ' })
-  expect(controller.pause).toHaveBeenCalledTimes(2)
+  fireEvent.keyDown(screen.getByRole('button', { name: 'native button' }), { code: 'Space', key: ' ' })
+  expect(controller.pause).toHaveBeenCalledOnce()
+  fireEvent.keyDown(screen.getByLabelText('test video'), { code: 'Space', key: ' ' })
+  expect(controller.pause).toHaveBeenCalledOnce()
   fireEvent.click(screen.getByRole('button', { name: 'Edit Seconds' }))
   fireEvent.keyDown(screen.getByLabelText('Seconds'), { code: 'Space', key: ' ' })
-  expect(controller.pause).toHaveBeenCalledTimes(2)
+  expect(controller.pause).toHaveBeenCalledOnce()
 })
 
 test('rewinds and forwards by ten seconds within replay bounds', async () => {
@@ -237,9 +239,9 @@ test('renders persistent workspace headers in canonical order with definition-dr
   render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} stintSummary={minimalStintSummary} pitLossModel={minimalPitLossModel} />)
 
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => element.getAttribute('class'))).toEqual([
-     'replay-panel-frame',
-     'replay-panel-frame',
-     'replay-panel-frame',
+    'replay-panel-frame',
+    'replay-panel-frame',
+    'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
     'replay-panel-frame',
@@ -257,6 +259,23 @@ test('renders persistent workspace headers in canonical order with definition-dr
   expect(screen.getByRole('button', { name: 'Move Track map panel' }).textContent).toContain('Track map')
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-columns'))).toEqual(['1', '1', '2', '1', '1', '1', '1', '1', '2', '1'])
   expect(Array.from(document.querySelector('.replay-workspace')?.children ?? []).map((element) => (element as HTMLElement).style.getPropertyValue('--replay-panel-desktop-column'))).toEqual(['1', '4', '2', '4', '1', '4', '4', '2', '2', '4'])
+})
+
+test('registers local video as available and unpinned when a replay identity is available', () => {
+  const { controller } = createController(readySnapshot)
+
+  render(<ReplayControls controller={controller} startMs={0} endMs={3000} drivers={drivers} trackAssets={trackAssets} replayIdentity="test-grand-prix" />)
+
+  expect(screen.queryByRole('region', { name: 'Local video' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Panel Manager' }))
+  const manager = screen.getByRole('dialog', { name: 'Panel Manager' })
+  const pinLocalVideo = within(manager).getByRole('button', { name: 'Pin Local video panel' })
+  expect(pinLocalVideo.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(pinLocalVideo)
+
+  expect(screen.getByRole('region', { name: 'Local video' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Local video replay' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /upload/i })).toBeNull()
 })
 
 test('unpins and restores timestamp and lap navigation with the Player panel', () => {
